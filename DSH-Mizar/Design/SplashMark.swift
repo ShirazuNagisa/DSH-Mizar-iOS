@@ -28,10 +28,28 @@ import UIKit
 /// front layer clockwise, the back layer the same amount the other way, which is
 /// the same motion the app's running indicator makes.
 enum SplashMark {
-    /// The front layer, alone.
-    static let front: UIImage = layer(fill: MizarStarPalette.brand.front)
-    /// The layer behind it, alone.
-    static let back: UIImage = layer(fill: MizarStarPalette.brand.back)
+    /// The front layer, in the light appearance's ink.
+    static let frontLight: UIImage = layer(fill: MizarStarPalette.brand.front)
+    /// The layer behind it, in the light appearance's ink.
+    static let backLight: UIImage = layer(fill: MizarStarPalette.brand.back)
+    /// The front layer, in the dark appearance's ink.
+    static let frontDark: UIImage = layer(fill: .white)
+    /// The layer behind it, in the dark appearance's ink.
+    static let backDark: UIImage = layer(fill: Color(white: 1, opacity: 0.55))
+
+    /// The pair for an appearance.
+    ///
+    /// Two sets, drawn once each, because the ink is part of the drawing: the
+    /// icon is the blue pair on a light screen and the white pair on a dark one,
+    /// and a single baked image cannot be both.
+    ///
+    /// - Parameter scheme: the appearance the splash is being drawn in.
+    /// - Returns: the front and back layers.
+    static func layers(for scheme: ColorScheme) -> (front: UIImage, back: UIImage) {
+        scheme == .dark
+            ? (frontDark, backDark)
+            : (frontLight, backLight)
+    }
 
     private static func layer(fill colour: Color) -> UIImage {
         let side: CGFloat = 1024

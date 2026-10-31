@@ -31,6 +31,8 @@ struct SplashView: View {
     var onFinished: () -> Void = {}
 
     @Environment(AppModel.self) private var model
+    /// Which appearance the mark is drawn in.
+    @Environment(\.colorScheme) private var colorScheme
 
     /// How far the mark has come towards the camera. 1 is the resting size.
     /// How visible the page is, so it can leave rather than cut.
@@ -57,22 +59,20 @@ struct SplashView: View {
     /// control within a few seconds; a splash that covers the screen while the
     /// first read is in flight is a splash those tests race. The app the
     /// operator opens has it; the app the tests drive does not.
-    /// The mark, drawn from its two baked layers.
+    /// The mark, drawn from its two baked layers for this appearance.
     ///
-    /// - Parameters:
-    ///   - size: the box's edge, in points.
-    ///   - turn: whether the two layers turn against each other. The icon at the
-    ///     top is still; the indicator under it is the app's running mark.
-    private func mark(size: CGFloat, turn: Bool) -> some View {
-        ZStack {
-            Image(uiImage: SplashMark.back)
+    /// - Parameter size: the box's edge, in points.
+    private func mark(size: CGFloat) -> some View {
+        let layers = SplashMark.layers(for: colorScheme)
+        return ZStack {
+            Image(uiImage: layers.back)
                 .resizable()
                 .interpolation(.high)
-                .rotationEffect(.degrees(turn ? -angle : 0))
-            Image(uiImage: SplashMark.front)
+                .rotationEffect(.degrees(-angle))
+            Image(uiImage: layers.front)
                 .resizable()
                 .interpolation(.high)
-                .rotationEffect(.degrees(turn ? angle : 0))
+                .rotationEffect(.degrees(angle))
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -86,21 +86,11 @@ struct SplashView: View {
         ZStack {
             Theme.paneBackground
                 .ignoresSafeArea()
-            VStack(spacing: 26) {
-                // The icon, as the operator knows it from their home screen:
-                // the mark, still, above the words that say what is happening.
-                mark(size: 108, turn: false)
-                VStack(spacing: 14) {
-                    // The running indicator the app uses everywhere: the two
-                    // layers turning against each other, at one constant speed.
-                    mark(size: 34, turn: true)
-                    Text("Loading…")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("splash.loading")
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // One mark, turning: the icon, at the size the icon would be if it
+            // were the whole screen. The two layers are the appearance's own --
+            // the blue pair on a light screen, the white pair on a dark one --
+            // which is why they are drawn per appearance rather than tinted.
+            mark(size: 108)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.paneBackground)
