@@ -145,6 +145,13 @@
 /* Which half of the trip failed: the relay itself could not be reached. */
 "Could not reach the server." = "未能连接到服务器";
 "This device has no network connection." = "本机没有网络连接。";
+/* The sidebar's link bar, in VoiceOver's words. Short on purpose: the bar is a status. */
+"Link OK, direct" = "连接正常，直连";
+"Link OK, through the relay server" = "连接正常，经由中继服务器";
+"Connecting" = "正在连接";
+"Could not reach the relay server" = "无法连接到中继服务器";
+"Could not reach this computer" = "无法连接到电脑";
+"The computer refused the connection" = "电脑拒绝了连接";
 "Could not load the conversation" = "无法加载对话";
 "Could not switch model" = "无法切换模型";
 "Thinking: %@" = "思考等级：%@";

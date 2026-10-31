@@ -16,16 +16,24 @@
 import SwiftUI
 import UIKit
 
-/// The mark the splash shows, drawn once.
+/// The mark the splash shows, drawn once per layer.
+///
+/// `MizarStar` is a live SwiftUI view: two shapes, a keyframe animator, and an
+/// environment it reads the appearance from. In the splash it draws nothing at
+/// all -- a plain `Circle` in the same stack draws, the mark does not. So the
+/// splash uses the mark's own geometry drawn into images: the same path the icon
+/// is cut from, the same two flat colours, and no SwiftUI shapes to fail.
+///
+/// Two images, not one, because the splash turns them against each other: the
+/// front layer clockwise, the back layer the same amount the other way, which is
+/// the same motion the app's running indicator makes.
 enum SplashMark {
-    /// The image, drawn on first use.
-    ///
-    /// Two layers, exactly as ``MizarStarPose`` stacks them: the back layer
-    /// offset along its own axis, the front layer on top. Both are flat fills --
-    /// the depth is the second tone, never a gradient.
-    static let image: UIImage = draw()
+    /// The front layer, alone.
+    static let front: UIImage = layer(fill: MizarStarPalette.brand.front)
+    /// The layer behind it, alone.
+    static let back: UIImage = layer(fill: MizarStarPalette.brand.back)
 
-    private static func draw() -> UIImage {
+    private static func layer(fill colour: Color) -> UIImage {
         let side: CGFloat = 1024
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -33,23 +41,10 @@ enum SplashMark {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
         return renderer.image { context in
             let cg = context.cgContext
-            let base = StarGeometry.path().cgPath
-            // The geometry is normalised to a unit square; the two layers are
-            // the same path, the back one slid by the design's own offset.
             var scale = CGAffineTransform(scaleX: side, y: side)
-            let back = base.copy(using: &scale) ?? base
-            let front = base.copy(using: &scale) ?? base
-
-            let offset = CGFloat(StarGeometry.backOffset) / 1024 * side
-            cg.saveGState()
-            cg.translateBy(x: -offset * 0.5, y: offset * 0.5)
-            cg.addPath(back)
-            cg.setFillColor(UIColor(MizarStarPalette.brand.back).cgColor)
-            cg.fillPath()
-            cg.restoreGState()
-
-            cg.addPath(front)
-            cg.setFillColor(UIColor(MizarStarPalette.brand.front).cgColor)
+            guard let path = StarGeometry.path().cgPath.copy(using: &scale) else { return }
+            cg.addPath(path)
+            cg.setFillColor(UIColor(colour).cgColor)
             cg.fillPath()
         }
     }

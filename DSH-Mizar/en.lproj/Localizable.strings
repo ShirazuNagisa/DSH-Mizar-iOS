@@ -145,6 +145,13 @@
 /* Which half of the trip failed: the relay itself could not be reached. */
 "Could not reach the server." = "Could not reach the server.";
 "This device has no network connection." = "This device has no network connection.";
+/* The sidebar's link bar, in VoiceOver's words. Short on purpose: the bar is a status. */
+"Link OK, direct" = "Link OK, direct";
+"Link OK, through the relay server" = "Link OK, through the relay server";
+"Connecting" = "Connecting";
+"Could not reach the relay server" = "Could not reach the relay server";
+"Could not reach this computer" = "Could not reach this computer";
+"The computer refused the connection" = "The computer refused the connection";
 "Could not load the conversation" = "Could not load the conversation";
 "Could not switch model" = "Could not switch model";
 "Thinking: %@" = "Thinking: %@";

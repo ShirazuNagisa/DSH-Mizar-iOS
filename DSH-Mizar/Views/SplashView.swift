@@ -33,16 +33,12 @@ struct SplashView: View {
     @Environment(AppModel.self) private var model
 
     /// How far the mark has come towards the camera. 1 is the resting size.
-    /// How large the transparent hole is, as a multiple of the mark's own size.
-    /// 1 is "exactly under the mark"; 30 is past the edges of any screen.
-    @State private var hole: CGFloat = 1
-    /// The opaque mark's opacity. It is what makes the icon opaque; the moment
-    /// it reaches zero the icon is a hole.
-    @State private var mark: Double = 1
-    /// The wind-up before the push.
-    @State private var windUp: CGFloat = 1
-    /// Whether the turn has stopped, so the push is a still shape.
-    @State private var leaving = false
+    /// How visible the page is, so it can leave rather than cut.
+    @State private var fade: Double = 1
+    /// How far the two layers have turned, in degrees. One revolution takes the
+    /// same nine seconds the app's running mark takes, so the splash and the
+    /// rows behind it are the same motion at two sizes.
+    @State private var angle: Double = 0
     /// How long the wait for the app is allowed to last.
     private static let patience = Duration.seconds(6)
     /// How long the mark is held before the camera starts, whatever the app is
@@ -54,8 +50,6 @@ struct SplashView: View {
     /// saw was a single frame of a star that had not turned yet, and the launch
     /// read as "there is no splash". X holds its mark long enough to be read.
     private static let hold = Duration.milliseconds(1100)
-    /// How long the camera takes to reach the mark's arms.
-    private static let push = Duration.milliseconds(760)
 
     /// Whether a launch asked for no splash at all.
     ///
@@ -63,34 +57,62 @@ struct SplashView: View {
     /// control within a few seconds; a splash that covers the screen while the
     /// first read is in flight is a splash those tests race. The app the
     /// operator opens has it; the app the tests drive does not.
+    /// The mark, drawn from its two baked layers.
+    ///
+    /// - Parameters:
+    ///   - size: the box's edge, in points.
+    ///   - turn: whether the two layers turn against each other. The icon at the
+    ///     top is still; the indicator under it is the app's running mark.
+    private func mark(size: CGFloat, turn: Bool) -> some View {
+        ZStack {
+            Image(uiImage: SplashMark.back)
+                .resizable()
+                .interpolation(.high)
+                .rotationEffect(.degrees(turn ? -angle : 0))
+            Image(uiImage: SplashMark.front)
+                .resizable()
+                .interpolation(.high)
+                .rotationEffect(.degrees(turn ? angle : 0))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+
     private static var skipped: Bool {
         ProcessInfo.processInfo.arguments.contains("-mizarSkipSplash")
     }
 
     var body: some View {
         ZStack {
-            // The page. It is drawn full-screen and behind everything the app
-            // puts up, so what the operator sees during the hold is this and
-            // nothing else.
-            // The page, as a background rather than a sibling: a full-screen
-            // opaque sibling in a ZStack sits above the mark when the stack is
-            // laid out over the whole window, which is how a splash ended up
-            // being a blank page with a mark hidden behind it.
-            Color.clear
-            // The mark. It spins while the app is getting ready, and it is what
-            // the camera travels through.
-            // The mark, as pixels: see ``SplashMark`` for why it is not the
-            // live view here.
-            Image(uiImage: SplashMark.image)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 120, height: 120)
-                .scaleEffect(hole)
-                .opacity(mark)
+            Theme.paneBackground
+                .ignoresSafeArea()
+            VStack(spacing: 26) {
+                // The icon, as the operator knows it from their home screen:
+                // the mark, still, above the words that say what is happening.
+                mark(size: 108, turn: false)
+                VStack(spacing: 14) {
+                    // The running indicator the app uses everywhere: the two
+                    // layers turning against each other, at one constant speed.
+                    mark(size: 34, turn: true)
+                    Text("Loading…")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("splash.loading")
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.paneBackground)
+        .opacity(fade)
         .ignoresSafeArea()
+        // Constant speed, not eased: the mark is a clock, and a clock that
+        // accelerates is a clock that looks broken.
+        .onAppear {
+            withAnimation(.linear(duration: StarMetrics.revolution).repeatForever(autoreverses: false)) {
+                angle = 360
+            }
+        }
         .task {
             if Self.skipped {
                 onFinished()
@@ -107,26 +129,14 @@ struct SplashView: View {
                 }
                 try? await Task.sleep(for: .milliseconds(80))
             }
-            // And then the hold, counted from the first frame rather than from
-            // the answer: a fast launch must not make the mark invisible.
+            // A beat, counted from the first frame rather than from the answer,
+            // so a fast launch does not make the mark a flicker.
             let earliest = started + Self.hold
             if ContinuousClock.now < earliest {
                 try? await Task.sleep(until: earliest, clock: .continuous)
             }
-            // 1. The icon becomes transparent: the mark leaves, the hole stays
-            //    exactly where it was, so nothing moves and nothing blinks.
-            leaving = true
-            withAnimation(.easeOut(duration: 0.18)) { mark = 0 }
-            try? await Task.sleep(for: .milliseconds(190))
-            // 2. The wind-up: a small pull back, which is what makes the push
-            //    read as acceleration rather than as a zoom that was already
-            //    running.
-            withAnimation(.easeIn(duration: 0.16)) { windUp = 0.92 }
-            try? await Task.sleep(for: .milliseconds(170))
-            // 3. Through it. The hole opens past the edges of the frame on an
-            //    accelerating curve -- a camera, not a growing shape.
-            withAnimation(.easeIn(duration: 0.62)) { hole = 30 }
-            try? await Task.sleep(for: .milliseconds(640))
+            withAnimation(.easeOut(duration: 0.28)) { fade = 0 }
+            try? await Task.sleep(for: .milliseconds(300))
             onFinished()
         }
         .accessibilityHidden(true)

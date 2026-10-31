@@ -104,8 +104,7 @@ struct SidebarView: View {
             header
                 .padding(.horizontal, 8)
                 .padding(.top, 6)
-            agentLine
-            problemLine
+            agentRow
             search
                 .padding(.top, 12)
                 .padding(.bottom, 10)
@@ -165,45 +164,95 @@ struct SidebarView: View {
         }
     }
 
-    /// Which agent this list belongs to, when the computer serves more than one.
+    /// Who is on this list, and how the phone is reaching them.
     ///
-    /// The reported confusion, in one control: a desktop runs DSH, Claude Code
-    /// and Codex at once, they share no sessions and no folders, and a phone that
-    /// draws one merged list under the computer's name is a phone nobody can
-    /// plan in. The capsule says whose list is on screen and opens the choice;
-    /// a computer with one agent draws nothing at all, because there is nothing
-    /// to tell apart.
+    /// One row because the two facts are read together: whose work this is, and
+    /// whether it is arriving. The capsule is the answer to the first question
+    /// and the bar to the second; a computer with one agent still names it,
+    /// because "which agent" is a fact about the list even when there is only
+    /// one answer.
+    ///
+    /// Nothing is drawn for the on-device agent: its frames never leave the
+    /// process, so there is no link to draw, and there is no second agent to
+    /// choose between. An unpaired phone has neither fact.
     @ViewBuilder
-    private var agentLine: some View {
-        if !model.isLocalAgentMode, model.engineChoices.count > 1 {
-            let current = model.engineScope
-            Button {
-                showingAgentPicker = true
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "square.stack.3d.up")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text(current?.shortTitle ?? String(localized: "All agents"))
-                        .font(.caption2.weight(.semibold))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                        .opacity(0.7)
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(.fill.tertiary, in: Capsule())
-                .contentShape(.rect)
+    private var agentRow: some View {
+        if !model.isLocalAgentMode, let link = model.linkStatus {
+            HStack(spacing: 8) {
+                agentCapsule
+                // The bar sits at the row's trailing edge, not against the
+                // capsule: the capsule is about the list, the bar is about the
+                // link, and the gap says they are two readings rather than one
+                // control with a badge.
+                Spacer(minLength: 0)
+                LinkStatusBar(status: link)
             }
-            .buttonStyle(.pressable(scale: 0.96))
             .padding(.horizontal, 8)
             .padding(.top, 4)
-            .accessibilityIdentifier("sessions.agent")
-            .accessibilityValue(Text(current?.title ?? String(localized: "All agents")))
-            .mizarPopover(isPresented: $showingAgentPicker) {
-                AgentSwitcher()
+        }
+    }
+
+    /// The agent this list belongs to.
+    ///
+    /// Tappable only when there is a choice to make. With one agent the capsule
+    /// still says which one, but it is a label rather than a control -- a
+    /// chevron and a press animation on something that cannot open is a button
+    /// that lies.
+    @ViewBuilder
+    private var agentCapsule: some View {
+        if let title = agentTitle {
+            if model.engineChoices.count > 1 {
+                Button {
+                    showingAgentPicker = true
+                } label: {
+                    agentCapsuleLabel(title, showsChevron: true)
+                }
+                .buttonStyle(.pressable(scale: 0.96))
+                .accessibilityIdentifier("sessions.agent")
+                .accessibilityValue(Text(model.engineScope?.title ?? String(localized: "All agents")))
+                .mizarPopover(isPresented: $showingAgentPicker) {
+                    AgentSwitcher()
+                }
+            } else {
+                agentCapsuleLabel(title, showsChevron: false)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(title))
+                    .accessibilityIdentifier("sessions.agent")
             }
         }
+    }
+
+    /// What the agent capsule says.
+    ///
+    /// `nil` when this build cannot name the agent: an older host that has not
+    /// reported which engines it serves. Showing "All agents" there would be a
+    /// sentence about having several, on a computer that may have one.
+    private var agentTitle: String? {
+        if model.engineChoices.count > 1 {
+            return model.engineScope?.shortTitle ?? String(localized: "All agents")
+        }
+        guard let engines = model.host?.knownEngines?.compactMap(AgentEngine.init(rawValue:)),
+              engines.count == 1 else { return nil }
+        return (model.engineScope ?? engines[0]).shortTitle
+    }
+
+    private func agentCapsuleLabel(_ title: String, showsChevron: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "square.stack.3d.up")
+                .font(.system(size: 10, weight: .semibold))
+            Text(title)
+                .font(.caption2.weight(.semibold))
+            if showsChevron {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .opacity(0.7)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(.fill.tertiary, in: Capsule())
+        .contentShape(.rect)
     }
 
     /// Whether the refresh button should draw itself as working.
@@ -297,30 +346,6 @@ struct SidebarView: View {
     private var wantsNamingHere: Bool {
         model.pendingNameHostId != nil && !shell.isSettling && !shell.isDragging
             && (shell.settledOpen || sizeClass == .regular)
-    }
-
-    /// A refresh that failed says so and stays out of the way: one quiet line,
-    /// not a panel with a Retry button -- the retry already happens on pull, on
-    /// the refresh button and by itself.
-    @ViewBuilder private var problemLine: some View {
-        if let error = model.problem {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    // On the text, not the row: an identifier on a container
-                    // does not reach the accessibility tree.
-                    .accessibilityIdentifier("sessions.error")
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 8)
-            .transition(.rise)
-        }
     }
 
     // MARK: - Search

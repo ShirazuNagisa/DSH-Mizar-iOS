@@ -221,6 +221,15 @@ final class AppModel {
     /// Cleared the moment a socket opens, so it cannot outlive its cause.
     private(set) var connectionError: String?
 
+    /// The same failure as ``connectionError``, shaped for the sidebar's link
+    /// bar: which devices to draw and which segment carries the cross.
+    ///
+    /// A second slot rather than parsing the sentence back: the sentence is
+    /// written for a person and its wording is free to change, while the cross
+    /// has to stay on the hop that actually failed. Both are written from the
+    /// same ranked route, at the same moment, so they cannot disagree.
+    private(set) var linkFailure: LinkStatus?
+
     /// Whether the relay said this account has spent its daily traffic.
     ///
     /// Set from the socket's close reason, because that is where the relay puts
@@ -424,13 +433,40 @@ final class AppModel {
     /// The thing that is currently wrong, if anything.
     ///
     /// One accessor for two sources -- a failure of the connection itself and a
-    /// request that did not land -- because the screen shows one banner and does
-    /// not care which of them it is describing. The connection comes first:
-    /// when the socket is down, the request that noticed is a symptom.
+    /// request that did not land. It no longer has a banner of its own: the
+    /// sidebar draws the connection as a picture (``linkStatus``) and lets
+    /// request failures go to the log, so this is read where a sentence is still
+    /// the right shape -- the failure screen, and a picker that has nothing else
+    /// to say.
     var problem: String? {
         if let connectionError { return connectionError }
         if case .failed(let message) = phase { return lastError ?? message }
         return lastError
+    }
+
+    /// The sidebar's link bar, or `nil` when there is nothing to draw.
+    ///
+    /// Three facts, in this order: a dial that failed says which segment broke
+    /// and which devices to draw; a live socket says which route it is on and
+    /// that it is breathing; anything else is a dial in progress, drawn in the
+    /// shape the pairing is most likely to land in.
+    ///
+    /// `nil` for the on-device agent (the frames never leave the process, so
+    /// there is no link to draw) and for an unpaired phone (no devices at all).
+    var linkStatus: LinkStatus? {
+        guard !isLocalAgentMode, host != nil else { return nil }
+        if let linkFailure { return linkFailure }
+        let topology = activeEndpoint.map(Self.topology(of:))
+            ?? LinkStatus.plannedTopology(for: host)
+        if isConnected {
+            return LinkStatus(
+                topology: topology,
+                connected: true,
+                broken: nil,
+                label: topology == .relay ? .connectedRelay : .connectedDirect,
+            )
+        }
+        return LinkStatus(topology: topology, connected: false, broken: nil, label: .connecting)
     }
 
     /// Whether this pairing's first download is running.
@@ -1681,6 +1717,9 @@ final class AppModel {
         engineScope = nil
         if let closing { Task { await closing.disconnect() } }
         welcome = nil
+        // The cross belonged to the link that was just closed. A redial, or a
+        // different computer, is a new picture.
+        linkFailure = nil
         sessions = []
         sessionsAreKnown = false
         selectedSessionId = nil
@@ -3747,6 +3786,15 @@ final class AppModel {
                     localized: "No route is allowed: the local network and the direct connection are both off, and this pairing has no relay address. Turn one back on to reconnect.",
                 )
                 connectionError = message
+                // A switch, not a network: the phone is what refuses to dial,
+                // so the cross sits on the phone's own side.
+                let topology = LinkStatus.plannedTopology(for: host)
+                linkFailure = LinkStatus(
+                    topology: topology,
+                    connected: false,
+                    broken: topology == .relay ? .phoneToRelay : .phoneToComputer,
+                    label: .computerUnreachable,
+                )
                 phase = .failed(message)
                 return
             }
@@ -4411,6 +4459,7 @@ final class AppModel {
                 connectionEpoch = nextConnectionEpoch
                 lastError = nil
                 connectionError = nil
+                linkFailure = nil
                 log.add(.connection, "reconnected after \(attempt + 1) attempt(s)")
                 startInteractionPoll()
                 // `phase` decides which screen is on. This never touched it, so
@@ -4447,6 +4496,11 @@ final class AppModel {
                 let reported = shown.map { Self.describe($0) } ?? message
                 connectionError = reported.isEmpty ? nil : reported
                 lastError = reported.isEmpty ? nil : reported
+                // The bar ranks the same way the sentence does: the most
+                // informative attempt decides which segment carries the cross.
+                linkFailure = shown.map {
+                    LinkStatus.failure($0.error, authority: $0.address, isRelay: $0.isRelay)
+                }
                 // Keep the screen's text current. A retry that fails for a new
                 // reason -- no internet rather than the computer being unreachable --
                 // should say so instead of repeating the line from before.
@@ -5552,7 +5606,57 @@ final class AppModel {
     private func failConnection(_ error: any Error, authority: String? = nil) {
         let message = Self.describe(error, authority: authority)
         connectionError = message.isEmpty ? nil : message
+        linkFailure = linkStatus(for: error, authority: authority)
         phase = .failed(message)
+    }
+
+    /// The link bar's reading of a dial that failed.
+    ///
+    /// The same ranking the sentence uses: a plan of routes is represented by
+    /// the attempt that proves the most, so the cross and the words agree about
+    /// which half of the trip is being described.
+    ///
+    /// - Parameters:
+    ///   - error: what the dial threw.
+    ///   - authority: the address it was dialling, when known.
+    /// - Returns: the bar's status, or `nil` when the error says nothing about a
+    ///   link (a cancelled task, for one).
+    private func linkStatus(for error: any Error, authority: String?) -> LinkStatus? {
+        if let failure = error as? LaunchFailure {
+            let attempts = failure.attempts.map {
+                RouteFailure(
+                    isRelay: ReconnectPlan.isRelay($0.route),
+                    address: Self.routeDescription($0.route).address,
+                    error: $0.error,
+                )
+            }
+            guard let best = Self.best(of: attempts) else { return nil }
+            return LinkStatus.failure(best.error, authority: best.address, isRelay: best.isRelay)
+        }
+        if error is MizarError {
+            // The guard inside ``connect(using:preferring:)``: no address to
+            // dial, or every route the pairing has is switched off. Nothing was
+            // dialled, so the cross sits on the phone's own side of the picture.
+            let topology = LinkStatus.plannedTopology(for: host)
+            return LinkStatus(
+                topology: topology,
+                connected: false,
+                broken: topology == .relay ? .phoneToRelay : .phoneToComputer,
+                label: .computerUnreachable,
+            )
+        }
+        guard let authority else { return nil }
+        return LinkStatus.failure(error, authority: authority, isRelay: false)
+    }
+
+    /// Which picture a live route draws.
+    ///
+    /// Only the relay adds a device: a LAN address, a tailnet one and a punched
+    /// path all end at the computer itself, and drawing the relay beside them
+    /// would claim a hop the frames do not take.
+    private static func topology(of endpoint: PairedHost.Endpoint) -> LinkStatus.Topology {
+        if case .relay = endpoint { return .relay }
+        return .direct
     }
 
     /// Open the socket and load the first screen's data.
@@ -5589,6 +5693,9 @@ final class AppModel {
         preferring preferred: PairedHost.Endpoint? = nil,
     ) async throws {
         phase = .connecting
+        // A new dial is not the last one: the bar goes back to "connecting"
+        // rather than keeping the cross from the attempt before it.
+        linkFailure = nil
         // The agent this connection is for, before anything reads a list. Every
         // dial comes through here -- a launch, a tap on the computer list, a
         // reconnect after the relay moved -- and the choice belongs to the
@@ -5663,6 +5770,7 @@ final class AppModel {
             // each reason came from.
             let message = Self.describe(failure)
             connectionError = message.isEmpty ? nil : message
+            linkFailure = linkStatus(for: failure, authority: nil)
             phase = .failed(message)
             throw failure
         }
@@ -5817,6 +5925,7 @@ final class AppModel {
         // A link is open, so whatever the last dial failed with is no longer
         // what is wrong.
         connectionError = nil
+        linkFailure = nil
         phase = .ready
         // A launch's first read, and a reconnect's -- both automatic. The button
         // that a person would have tapped instead shows itself working; see
@@ -6170,12 +6279,25 @@ final class AppModel {
     /// - Parameter attempts: every route's failure.
     /// - Returns: the sentence for the most informative one.
     private static func describe(failure attempts: [RouteFailure]) -> String {
+        guard let best = best(of: attempts) else { return "" }
+        return describe(best.error, authority: best.address, throughServer: best.isRelay)
+    }
+
+    /// The failure worth showing, out of a plan that all failed.
+    ///
+    /// Split out of ``describe(failure:)`` because the link bar ranks the same
+    /// way: the sentence and the cross have to be about the same attempt, or the
+    /// words would say the relay was unreachable while the cross sat on the
+    /// computer.
+    ///
+    /// - Parameter attempts: every route's failure.
+    /// - Returns: the most informative one, or `nil` for an empty plan.
+    private static func best(of attempts: [RouteFailure]) -> RouteFailure? {
         var best: RouteFailure?
         for attempt in attempts {
             if best == nil || weight(attempt) >= weight(best!) { best = attempt }
         }
-        guard let best else { return "" }
-        return describe(best.error, authority: best.address, throughServer: best.isRelay)
+        return best
     }
 
     /// How much a failure says about what is wrong.
