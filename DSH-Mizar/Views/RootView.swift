@@ -23,13 +23,6 @@ struct RootView: View {
     /// notice is up. Asked once per install: see `LocalAgentController`.
     @State private var showingLocalAgentNotice = false
 
-    /// Whether the cold-launch splash is still covering the app.
-    @State private var splashDone = false
-    /// The window the mark is drawn in.
-    @State private var splashWindow = SplashWindow()
-    /// Whether the launch splash is shown at all. See the note in the task.
-    private static let splashEnabled = false
-
     var body: some View {
         Group {
             // Nothing is decided until the stored session has been read: the
@@ -40,12 +33,6 @@ struct RootView: View {
                 WelcomeGateView()
             } else {
                 phaseContent
-                // The app is *under* the splash, not hidden by it: the splash
-                // is a page with a hole in it, and the hole is what the camera
-                // travels through. So the content is fully drawn from the first
-                // frame, and only settles by a hair as the splash leaves.
-                .scaleEffect(splashDone ? 1 : 1.03)
-                .animation(.easeOut(duration: 0.4), value: splashDone)
             }
         }
         .animation(.mizarSmooth, value: phaseKey)
@@ -53,22 +40,8 @@ struct RootView: View {
         // The splash lives in its own window, above the app's: an overlay and a
         // cover both draw under the hosted shell, which is why the mark was
         // rendered and never seen. See ``SplashWindow``.
-        .task {
-            // Off until the mark draws in a window of its own. The window works
-            // (its page and a plain circle both appear, and it covers the whole
-            // screen), but `MizarStar` renders nothing inside it -- tested with
-            // an explicit ink, an explicit display scale, and both motions. A
-            // splash that is a blank page for a second is worse than the launch
-            // we have, so it stays off rather than shipping the blank one.
-            guard !splashDone, Self.splashEnabled else {
-                splashDone = true
-                return
-            }
-            splashWindow.show(model: model) {
-                splashWindow.hide()
-                splashDone = true
-            }
-        }
+        // The mark is drawn by the shell, which is the only place it can be
+        // above the hosted controllers. Nothing to do here.
         // The first connect waits for a signed-in account. Connecting behind the
         // gate would put bytes on the relay as a `guest:` identity, which is the
         // one thing the gate exists to prevent.

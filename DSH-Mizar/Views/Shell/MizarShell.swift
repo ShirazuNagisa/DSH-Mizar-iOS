@@ -57,6 +57,9 @@ struct MizarShell: View {
     @State private var debugOpenTrailingWanted = false
     #endif
 
+    /// Whether the launch mark has left.
+    @State private var launchFinished = false
+
     var body: some View {
         GeometryReader { geometry in
             let compact = sizeClass != .regular
@@ -87,6 +90,17 @@ struct MizarShell: View {
                 .onChange(of: trailing, initial: true) { _, width in shell.trailingWidth = width }
                 .onChange(of: size.width, initial: true) { _, width in shell.containerWidth = width }
                 .onChange(of: compact, initial: true) { _, compact in layers.compact = compact }
+                // The launch mark covers the shell, and only the shell: an
+                // overlay on the root draws *under* this container's hosted
+                // controllers, which is why the mark was rendered and never
+                // seen. Inside the shell it is above everything the app shows
+                // once it has something to show.
+                .overlay {
+                    if !launchFinished {
+                        SplashView { launchFinished = true }
+                            .transition(.opacity)
+                    }
+                }
         }
         .environment(shell)
         .environment(turnIndex)

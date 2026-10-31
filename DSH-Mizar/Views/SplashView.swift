@@ -72,11 +72,19 @@ struct SplashView: View {
             // The page. It is drawn full-screen and behind everything the app
             // puts up, so what the operator sees during the hold is this and
             // nothing else.
-            Theme.paneBackground
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The page, as a background rather than a sibling: a full-screen
+            // opaque sibling in a ZStack sits above the mark when the stack is
+            // laid out over the whole window, which is how a splash ended up
+            // being a blank page with a mark hidden behind it.
+            Color.clear
             // The mark. It spins while the app is getting ready, and it is what
             // the camera travels through.
-            MizarStar(motion: leaving ? .still : .running, size: 96)
+            // The mark, as pixels: see ``SplashMark`` for why it is not the
+            // live view here.
+            Image(uiImage: SplashMark.image)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 120, height: 120)
                 .scaleEffect(hole)
                 .opacity(mark)
         }
