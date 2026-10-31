@@ -38,7 +38,7 @@ struct HomeView: View {
             // Right under the year, not pinned to the bottom of the screen: the
             // page reads top to bottom, and a list floating at the bottom of an
             // empty screen reads as a mistake.
-            Spacer(minLength: 24)
+            .padding(.bottom, 22)
             // The conversations that were last on screen, under a title that
             // says what they are.
             VStack(alignment: .leading, spacing: 6) {
@@ -58,6 +58,9 @@ struct HomeView: View {
             }
             .padding(.horizontal, 18)
             .padding(.bottom, 8)
+            // Whatever room is left stays at the bottom, so the page is filled
+            // from the top rather than spread out.
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
         .navigationTitle("")

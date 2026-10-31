@@ -114,6 +114,10 @@ struct UsageHeatmap: View {
         }
         .padding(16)
         .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+        // As tall as a year of weeks needs, and no taller: the card was
+        // stretching to whatever the column had left, which is the empty half
+        // of the picture the operator was looking at.
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Work in the last year"))
         .accessibilityValue(Text("\(totalMessages) messages, \(totalTokens) tokens"))
