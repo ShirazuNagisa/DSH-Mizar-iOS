@@ -57,9 +57,6 @@ struct MizarShell: View {
     @State private var debugOpenTrailingWanted = false
     #endif
 
-    /// Whether the launch mark has left.
-    @State private var launchFinished = false
-
     var body: some View {
         GeometryReader { geometry in
             let compact = sizeClass != .regular
@@ -96,8 +93,8 @@ struct MizarShell: View {
                 // seen. Inside the shell it is above everything the app shows
                 // once it has something to show.
                 .overlay {
-                    if !launchFinished {
-                        SplashView { launchFinished = true }
+                    if !model.launchMarkDone {
+                        SplashView { model.launchMarkDone = true }
                             .transition(.opacity)
                     }
                 }

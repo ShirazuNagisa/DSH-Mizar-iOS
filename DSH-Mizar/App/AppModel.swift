@@ -1138,6 +1138,14 @@ final class AppModel {
     /// Whether that read is on the socket.
     private(set) var usageLoading = false
 
+    /// Whether the launch mark has left, for this run of the app.
+    ///
+    /// Held here rather than in the shell because the shell is rebuilt: the
+    /// drawer container replaces its roots when the first read lands, and a
+    /// `@State` inside it starts over -- which is why the mark appeared a second
+    /// time, as a second animation, after the app had already loaded.
+    var launchMarkDone = false
+
     /// Read the usage history for the home page, from every computer the
     /// account knows.
     ///

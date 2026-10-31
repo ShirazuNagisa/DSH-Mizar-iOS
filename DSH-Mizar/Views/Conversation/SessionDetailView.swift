@@ -1012,8 +1012,17 @@ struct SessionDetailView: View {
         }
         try? await Task.sleep(for: .milliseconds(220))
         jumping = false
-        // The rows whose heights settled while the page was arriving.
-        holdAtBottom(proxy: proxy)
+        // The rows whose heights settled while the page was arriving. Not
+        // through `holdAtBottom`: that one refuses when the page is far from the
+        // bottom, and far from the bottom is exactly where a bad landing leaves
+        // it -- so the correction that exists for this case was the one that
+        // never ran, and the page stayed in the empty space below the rows.
+        bottomSeek &+= 1
+        let seek = bottomSeek
+        await settleLayout()
+        await seekBottom(proxy: proxy, attempts: 16) {
+            bottomSeek == seek && placement == .ready && !jumping && !composerAnimating && !userScrolling
+        }
     }
 
     /// The workspace this session belongs to, for the subtitle.
@@ -1560,6 +1569,43 @@ struct SessionDetailView: View {
         turnIndex.glow(target)
         try? await Task.sleep(for: .milliseconds(220))
         jumping = false
+        // And then make sure it really is there. Putting the conversation back
+        // moves the rows above the target from estimates to real heights, and a
+        // row that is a screen tall can move the anchor by more than the
+        // screenful it was aimed at -- the page ends up above the turn, in the
+        // space the stack had not drawn yet. A few aims at the same row, once
+        // the layout has stopped moving, is what puts it under the eye.
+        await correctJumpLanding(to: target, anchor: anchor, proxy: proxy, generation: generation)
+    }
+
+    /// Aim at a turn again until the page is showing it.
+    ///
+    /// Only for the jump that is still current, and only a handful of times: a
+    /// row that will not settle is a row that is still being built, and the
+    /// conversation's own bottom correction will pick it up from there.
+    ///
+    /// - Parameters:
+    ///   - target: the turn that should be on screen.
+    ///   - anchor: where it should sit.
+    ///   - proxy: the conversation's scroll view.
+    ///   - generation: which jump this is.
+    private func correctJumpLanding(
+        to target: String,
+        anchor: UnitPoint,
+        proxy: ScrollViewProxy,
+        generation: Int,
+    ) async {
+        for _ in 0..<6 {
+            guard isCurrentJump(generation), !userScrolling else { return }
+            if turnIndex.visible.contains(target) { return }
+            var transaction = Transaction()
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(target, anchor: anchor)
+            }
+            await settleLayout()
+        }
     }
 
     /// Let the lazy stack build and lay out what it was just given.
