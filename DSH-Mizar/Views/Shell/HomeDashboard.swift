@@ -19,12 +19,12 @@
 import SwiftUI
 import MizarKit
 
-/// Thirty days of work, as one column per week.
+/// A year of work, as one column per week.
 struct UsageHeatmap: View {
     /// The host's rows, oldest first.
     let days: [UsageDay]
     /// How many days the chart shows, ending today.
-    var span = 30
+    var span = 371
     /// Whether the read is on the socket.
     var loading = false
 
@@ -33,6 +33,11 @@ struct UsageHeatmap: View {
     private var calendar: Calendar { .current }
 
     /// The days to draw, oldest first, with `nil` for one that had no work.
+    ///
+    /// The window starts on the week boundary before it, so every column is a
+    /// whole week and the rows line up with the days they mean. The first
+    /// column is usually short -- the year did not start on that weekday -- and
+    /// the chart pads it rather than shifting every other column by a day.
     private var cells: [(date: String, day: UsageDay?)] {
         let byDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { first, _ in first })
         let formatter = DateFormatter()
@@ -40,8 +45,15 @@ struct UsageHeatmap: View {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         let today = calendar.startOfDay(for: .now)
-        return (0..<span).reversed().map { offset in
-            let date = calendar.date(byAdding: .day, value: -offset, to: today) ?? today
+        let start = calendar.date(byAdding: .day, value: -(span - 1), to: today) ?? today
+        // Back to the first weekday of the calendar (Sunday in the US, Monday
+        // elsewhere), which is what makes a column a week.
+        let weekday = calendar.component(.weekday, from: start)
+        let lead = (weekday - calendar.firstWeekday + 7) % 7
+        let first = calendar.date(byAdding: .day, value: -lead, to: start) ?? start
+        let count = calendar.dateComponents([.day], from: first, to: today).day ?? span
+        return (0...count).map { offset in
+            let date = calendar.date(byAdding: .day, value: offset, to: first) ?? first
             let label = formatter.string(from: date)
             return (label, byDate[label])
         }
@@ -67,17 +79,18 @@ struct UsageHeatmap: View {
             // "two thirds of the page" a card two thirds of the page tall with
             // a stamp-sized month inside it -- the figure the page exists for,
             // drawn as a footnote.
+            // A fixed strip: seven rows of the squares the width allows, so
+            // the card is as tall as a year of weeks needs and no taller.
             GeometryReader { proxy in
-                // Height follows the rows at this size; the card no longer
-                // stretches to fill whatever the page has left.
-                let gap: CGFloat = 5
+                // A year across the card: as many columns as the year has
+                // weeks, each as wide as the row allows. The squares are small
+                // because there are fifty-three of them, which is the point --
+                // the year reads as one bar, the way the desktop draws it.
+                let gap: CGFloat = 2
                 let across = CGFloat(max(1, columns.count))
-                // A month at a glance, not a poster. The cells grow with the
-                // width only up to a readable size: past that the grid is a
-                // wall of squares, and the readings above it are the point.
                 let side = min(
-                    26,
-                    max(6, (proxy.size.width - gap * (across - 1)) / across),
+                    9,
+                    max(2.5, (proxy.size.width - gap * (across - 1)) / across),
                 )
                 HStack(alignment: .top, spacing: gap) {
                     ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
@@ -96,12 +109,13 @@ struct UsageHeatmap: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .frame(height: 64)
             footer
         }
-        .padding(18)
+        .padding(16)
         .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("Work in the last thirty days"))
+        .accessibilityLabel(Text("Work in the last year"))
         .accessibilityValue(Text("\(totalMessages) messages, \(totalTokens) tokens"))
         .accessibilityIdentifier("home.heatmap")
     }
@@ -116,7 +130,7 @@ struct UsageHeatmap: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text("Last 30 days")
+            Text("Last year")
                 .font(.subheadline.weight(.semibold))
             Spacer(minLength: 8)
             if loading {

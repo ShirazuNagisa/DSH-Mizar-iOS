@@ -20,24 +20,33 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            UsageReadings(
-                overview: model.usageOverview,
-                loading: model.usageLoading,
-            )
+            // The top half, and no more: the six figures and the year they
+            // describe. Anything taller pushes the way back into the work off
+            // the bottom of the screen.
+            VStack(spacing: 16) {
+                UsageReadings(
+                    overview: model.usageOverview,
+                    loading: model.usageLoading,
+                )
+                UsageHeatmap(
+                    days: model.usageOverview?.days ?? [],
+                    loading: model.usageLoading,
+                )
+            }
             .padding(.horizontal, 18)
-            .padding(.top, 8)
-            // The month, the reason to open the app, under the readings.
-            UsageHeatmap(
-                days: model.usageOverview?.days ?? [],
-                loading: model.usageLoading,
-            )
-            .padding(.horizontal, 18)
-            .frame(maxHeight: .infinity)
-            // The bottom: the way back into the conversations that were last on
-            // screen. Three, not one: "continue" is usually "the one I was in",
-            // and when it is not, the next two are a tap away instead of a trip
-            // through the sidebar.
-            VStack(spacing: 6) {
+            .padding(.top, 10)
+            // Right under the year, not pinned to the bottom of the screen: the
+            // page reads top to bottom, and a list floating at the bottom of an
+            // empty screen reads as a mistake.
+            Spacer(minLength: 24)
+            // The conversations that were last on screen, under a title that
+            // says what they are.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Pick up where you left off")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("home.recent.title")
                 ForEach(Array(recentSessions.enumerated()), id: \.element.sessionId) { index, session in
                     LastSessionButton(
                         session: session,
@@ -48,7 +57,6 @@ struct HomeView: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.top, 10)
             .padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity)
@@ -59,13 +67,13 @@ struct HomeView: View {
         }
     }
 
-    /// The three most recently touched conversations, newest first.
+    /// The four most recently touched conversations, newest first.
     private var recentSessions: [SessionRow] {
         Array(
             model.sessions
                 .filter { !$0.blank && !$0.isSubagent }
                 .sorted { $0.updatedAt > $1.updatedAt }
-                .prefix(3),
+                .prefix(4),
         )
     }
 }
