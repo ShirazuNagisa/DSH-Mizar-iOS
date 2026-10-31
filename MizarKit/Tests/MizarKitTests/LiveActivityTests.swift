@@ -112,14 +112,64 @@ struct LiveActivityTests {
     /// One decision, with the arguments spelled out.
     private func decide(
         _ sessions: [RunningSession],
+        approvals: [LiveActivityApproval] = [],
         opened: Bool = false,
         at now: Date,
     ) -> LiveActivityDecision {
         LiveActivityDecision.make(
             sessions: sessions,
+            approvals: approvals,
             appOpenedSinceLastFinish: opened,
             now: now,
         )
+    }
+
+    @Test("keeps the card up, and says what is blocked, while an approval waits")
+    func anApprovalKeepsTheCardUp() {
+        let approval = LiveActivityApproval(
+            requestId: "r1",
+            sessionId: "dsh:s-1",
+            tool: "Bash",
+            detail: "rm -rf build",
+        )
+        // A blocked turn is the one moment the operator must act: a card that
+        // ended because nothing is "running" would take the button with it.
+        let decision = decide([], approvals: [approval], at: t0)
+
+        #expect(!decision.phase.isFinished)
+        #expect(decision.phase.rows.isEmpty)
+        #expect(decision.phase.approvals.map(\.requestId) == ["r1"])
+        #expect(decision.phase.approvals.first?.headline == "Bash")
+    }
+
+    @Test("carries the approvals beside the running rows, and caps them at two")
+    func approvalsSitBesideRows() {
+        let approvals = (1...3).map { index in
+            LiveActivityApproval(
+                requestId: "r\(index)",
+                sessionId: "dsh:s-1",
+                tool: "Bash",
+                detail: "",
+            )
+        }
+        let decision = decide([running("s-1", seed: 0, at: t0)], approvals: approvals, at: t0)
+
+        #expect(decision.phase.rows.count == 1, "the row is still there: the turn is blocked, not over")
+        #expect(decision.phase.approvals.map(\.requestId) == ["r1", "r2"])
+    }
+
+    @Test("decodes an approval the computer pushed, and a card that has none")
+    func approvalPayloadDecodes() throws {
+        let pushed = #"{"rows":[],"approvals":[{"requestId":"r1","sessionId":"dsh:s-1","tool":"Bash","detail":"rm"}]}"#
+        let withApprovals = try JSONDecoder().decode(LiveActivityState.self, from: Data(pushed.utf8))
+        #expect(withApprovals.approvals.first?.requestId == "r1")
+        #expect(!withApprovals.isFinished, "an approval alone is still something to show")
+
+        // The relay's older payloads have no `approvals` key at all, and a card
+        // that cannot decode its content state draws nothing.
+        let bare = try JSONDecoder().decode(LiveActivityState.self, from: Data(#"{"rows":[]}"#.utf8))
+        #expect(bare.approvals.isEmpty)
+        #expect(bare.isFinished)
     }
 
     @Test("is live and counting while a session is running")
@@ -505,8 +555,14 @@ struct LiveActivityTests {
         // builds this same JSON for a push, between three repositories. Pinned
         // here so a rename is a failing test rather than an activity that draws
         // nothing on somebody's phone.
+        //
+        // Read as an object rather than as a string: `JSONEncoder` has never
+        // promised a key order, and a prefix assertion on two keys is a test that
+        // fails on the day one of them is added.
         let text = String(decoding: data, as: UTF8.self)
-        #expect(text.hasPrefix("{\"rows\":"))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["rows"] != nil)
+        #expect(object?["approvals"] != nil)
         #expect(text.contains("\"title\""))
         let read = try JSONDecoder().decode(LiveActivityState.self, from: data)
         #expect(read == decision.phase)
@@ -519,8 +575,16 @@ struct LiveActivityTests {
 
         // The other case carries no rows at all, and the decision as a whole is
         // `Codable` like everything else here.
+        //
+        // `approvals` is always written by this side, even when empty: this is the
+        // app's own encoder. The tolerance the other direction needs -- a relay
+        // that has never heard of approvals -- lives in
+        // `LiveActivityState.init(from:)` and is pinned by the end-push test
+        // below.
         let finished = try JSONEncoder().encode(LiveActivityState())
-        #expect(String(decoding: finished, as: UTF8.self) == #"{"rows":[]}"#)
+        let empty = try JSONSerialization.jsonObject(with: finished) as? [String: Any]
+        #expect(Set(empty?.keys ?? [:].keys) == ["rows", "approvals"])
+        #expect((empty?["rows"] as? [Any])?.isEmpty == true)
         #expect(try JSONDecoder().decode(LiveActivityState.self, from: finished) == LiveActivityState())
         #expect(try JSONDecoder().decode(LiveActivityDecision.self, from: JSONEncoder().encode(decision)) == decision)
     }

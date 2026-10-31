@@ -329,7 +329,7 @@ final class RunningDetailUITests: XCTestCase {
         return detailDiagnostics(app)
             + " runningRows=\(running)"
             + " attach=\(attach)"
-            + " errorBanner=\(app.staticTexts["sessions.error"].exists)"
+            + " link=\(app.descendants(matching: .any)["sidebar.link"].label)"
             + " sidebar=\(app.buttons["sessions.new"].exists)"
     }
 

@@ -243,12 +243,17 @@ final class LiveActivityController {
     ///   - sessionsAreKnown: whether that list is something the host said, rather
     ///     than the empty array a model has before its first read.
     ///   - titles: the app's title list, keyed by session id.
+    ///   - approvals: the approvals the host last listed as pending. Carried
+    ///     through rather than derived here: an approval is the operator's to
+    ///     answer, and the card has to keep showing it while the app is open just
+    ///     as it does while the app is asleep.
     ///   - now: the instant to measure the clocks to.
     func refresh(
         sessions: [SessionRow],
         conversations: any ConversationCache,
         sessionsAreKnown: Bool,
         titles: [String: String],
+        approvals: [LiveActivityApproval] = [],
         now: Date = Date(),
     ) async {
         guard sessionsAreKnown else {
@@ -270,6 +275,7 @@ final class LiveActivityController {
         )
         let decision = LiveActivityDecision.make(
             sessions: running,
+            approvals: approvals,
             appOpenedSinceLastFinish: appOpenedSinceLastFinish,
             now: now,
         )

@@ -185,7 +185,15 @@ struct DSHMizarLiveActivityWidget: Widget {
                     Headline(state: context.state)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    SessionRows(state: context.state)
+                    VStack(alignment: .leading, spacing: 6) {
+                        // A blocked turn comes before the clocks: the operator
+                        // can answer it from here, and a question under two
+                        // counting rows is a question nobody sees.
+                        if !context.state.approvals.isEmpty {
+                            ApprovalRows(approvals: context.state.approvals)
+                        }
+                        SessionRows(state: context.state)
+                    }
                 }
             // The compact presentation is content, and only content -- but the
             // content has to say how wide it is, and a date-styled `Text` will
@@ -458,6 +466,77 @@ private struct SessionRows: View {
     }
 }
 
+/// The approval block: what is blocked, and the two answers.
+///
+/// The only interactive thing this extension draws. Two rules shape it:
+///
+///   - **The buttons are intents, not taps into the app.**
+///     `Button(intent: AllowOnceIntent(...))` runs in the app's process, which the
+///     system wakes for exactly this, so the operator answers from the Lock
+///     Screen without the app coming up.
+///   - **Every string is resolved here.** `Text.translated` and
+///     `Text(verbatim:)` only -- see the note at the top of this file about the
+///     localisable segment attribute that cannot cross into the host process.
+private struct ApprovalRows: View {
+    let approvals: [LiveActivityApproval]
+    /// Whether to draw the larger card typography.
+    var prominent = false
+
+    private var titleFont: Font {
+        prominent ? .subheadline.weight(.semibold) : .caption.weight(.semibold)
+    }
+    private var detailFont: Font { prominent ? .footnote : .caption2 }
+    private var buttonFont: Font {
+        prominent ? .footnote.weight(.semibold) : .caption2.weight(.semibold)
+    }
+
+    var body: some View {
+        ForEach(approvals) { approval in
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.caption2)
+                        .accessibilityHidden(true)
+                    // The tool's name, from the computer. `verbatim`: it is an
+                    // identifier the operator already knows, not a phrase.
+                    Text(verbatim: approval.headline)
+                        .font(titleFont)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                if !approval.detail.isEmpty {
+                    Text(verbatim: approval.detail)
+                        .font(detailFont)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(2)
+                }
+                HStack(spacing: 8) {
+                    Button(intent: AllowOnceIntent(requestId: approval.requestId)) {
+                        Text.translated("Allow once")
+                            .font(buttonFont)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(.white.opacity(0.16), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    Button(intent: RejectIntent(requestId: approval.requestId)) {
+                        Text.translated("Reject")
+                            .font(buttonFont)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(.white.opacity(0.08), in: Capsule())
+                            .foregroundStyle(.white.opacity(0.82))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
 /// The card's heading: the mark and the app's name, at reading size.
 ///
 /// Larger than the island's title row on purpose. The card is the thing that
@@ -490,7 +569,12 @@ private struct LiveActivityCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             CardTitle()
-            if state.rows.isEmpty {
+            // A blocked turn first, for the same reason as on the island: this is
+            // the row the operator can act on.
+            if !state.approvals.isEmpty {
+                ApprovalRows(approvals: state.approvals, prominent: true)
+            }
+            if state.rows.isEmpty && state.approvals.isEmpty {
                 // Nothing is running. The decision layer has no rows to give and
                 // the card says so in words rather than by being blank, because
                 // an activity is only ever *started* running: no rows here

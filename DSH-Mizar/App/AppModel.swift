@@ -979,6 +979,14 @@ final class AppModel {
             conversations: conversations,
             sessionsAreKnown: sessionsAreKnown,
             titles: titles,
+            approvals: (pending?.approvals ?? []).map { approval in
+                LiveActivityApproval(
+                    requestId: approval.requestId,
+                    sessionId: approval.sessionId ?? "",
+                    tool: approval.toolName,
+                    detail: approval.reasonText(preferring: Locale.preferredLanguages.first ?? "en") ?? "",
+                )
+            },
         )
     }
 
@@ -3812,19 +3820,38 @@ final class AppModel {
     /// and say "Offline" until somebody found the Reconnect button, which is the
     /// reported bug: leave the app, come back, everything is offline.
     ///
-    /// So returning is a redial, not a read on the old socket: reconnect once
-    /// trying every route the pairing knows, then ask the LAN question, then
-    /// read what the screens draw. The order matters. A pairing made while the
+    /// So returning is a redial, not a read on the old socket -- and the redial
+    /// asks the local network first, because that is where the phone usually is.
+    ///
+    /// The order is the operator's: **scan the LAN, and only if nothing answers
+    /// start the other routes**, with the punched route and the relay both held
+    /// back by the same head start (see ``connect(using:preferring:)``). That is
+    /// cheaper than the sequential redial this used to do: a dead LAN address
+    /// no longer costs its whole leash before the relay is even started.
+    ///
+    /// The scan after the redial is not redundant. A pairing made while the
     /// computer listened only on loopback stores the relay address and nothing
     /// else; its LAN addresses exist only in the host's own answer, and the host
-    /// can only be asked over a live socket -- so the scan has to come after the
-    /// redial, not before it. A scan that finds the LAN has already dialled it,
-    /// and the read below waits only for that one shorter handshake.
+    /// can only be asked over a live socket. So the *second* scan runs once there
+    /// is one, and a LAN address that changed while the app slept is found there.
     func refreshAfterReturning() async {
         beginAutomaticRefresh()
         defer { endAutomaticRefresh() }
-        _ = await reconnect(tryingEveryRoute: true)
-        await scanForLocalNetwork()
+        // 1. The operator is usually back on their own Wi-Fi. A hit here has
+        //    already dialled the LAN address and switched the pairing to it.
+        let onLocalNetwork = await scanForLocalNetwork()
+        if !onLocalNetwork, let host {
+            // 2. Nothing we know answered: replace whatever socket the return
+            //    inherited and race the routes the switches allow.
+            disconnectCurrent()
+            let adopted = (try? await connect(using: host)) != nil
+            if adopted {
+                // 3. A socket exists now, so the host can be asked for the
+                //    addresses it is listening on -- the one fact the pairing
+                //    cannot know in advance.
+                await scanForLocalNetwork()
+            }
+        }
         await refreshSessions(reconnectingIfNeeded: false)
         await refreshInteractions()
     }
@@ -5569,7 +5596,7 @@ final class AppModel {
     /// enough that a direct route which *can* answer always wins -- and short
     /// enough that a direct address which cannot answer stops being the thing
     /// the operator is waiting for.
-    private static let launchRelayHeadStart: Duration = .milliseconds(400)
+    private static let launchDirectHeadStart: Duration = .milliseconds(400)
 
     /// One route's answer in the launch race.
     private struct Answered: Sendable {
@@ -5670,12 +5697,16 @@ final class AppModel {
     /// two attempts when only one of them could ever have worked.
     ///
     /// The order still means something, and this is now the only thing it
-    /// means: **a direct route gets a head start**. The relay is held back by
-    /// ``launchRelayHeadStart``, so a computer on the same network answers first
-    /// and the phone stays off the relay -- faster, and unmetered. When the
-    /// direct address is dead the relay is already dialling by the time the
-    /// first packet would have been lost, so the fallback costs the head start
-    /// instead of the direct timeout.
+    /// means: **the local network gets a head start, alone**. The punched route
+    /// and every relay are held back by ``launchDirectHeadStart``, so a computer
+    /// on the same network answers first and the phone stays off the relay --
+    /// faster, and unmetered. When the direct address is dead the other routes
+    /// are already dialling by the time the first packet would have been lost, so
+    /// the fallback costs the head start instead of the direct timeout.
+    ///
+    /// Starting the punched route at the same time as the relay is deliberate:
+    /// the two are alternatives to the same lost LAN, not a sequence, and making
+    /// P2P wait behind the relay would hand the slower of the two every race.
     ///
     /// A loser is cancelled and closed, never left half-open: a race that leaked
     /// a socket would leave the host with a second device session for every
@@ -5732,20 +5763,22 @@ final class AppModel {
             throw error
         }
 
-        // Only a relay is ever held back, and only when there is a direct route
-        // to beat it. A pairing with no direct address -- the usual one for a
-        // computer that listens only on loopback -- has nothing to prefer, so
-        // its relays all start at once.
-        // A LAN address, specifically: a punched route is not a reason to hold
-        // the relay back, because a punch that is going to fail spends seconds
-        // failing and the relay is the thing that would have worked.
+        // The local network goes first, alone, for a moment. Everything that is
+        // not the operator's own network -- the punched route and every relay --
+        // is held back by the same head start, so the order the operator asked
+        // for is the order the dials start in: LAN, then P2P and relay together,
+        // and whichever of the two answers first wins.
+        //
+        // A pairing with no direct address -- the usual one for a computer that
+        // listens only on loopback -- has nothing to prefer, so its dials all
+        // start at once.
         let hasDirect = endpoints.contains { if case .direct = $0 { return true } else { return false } }
         let dials = endpoints.map { endpoint in
             (
                 endpoint: endpoint,
                 connection: makeConnection(host: host, endpoint: endpoint),
-                delay: hasDirect && ReconnectPlan.isRelay(endpoint)
-                    ? Self.launchRelayHeadStart
+                delay: hasDirect && !ReconnectPlan.isDirect(endpoint)
+                    ? Self.launchDirectHeadStart
                     : .zero,
             )
         }

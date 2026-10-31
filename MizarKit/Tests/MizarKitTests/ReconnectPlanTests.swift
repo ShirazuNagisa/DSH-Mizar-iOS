@@ -20,6 +20,21 @@ struct ReconnectPlanTests {
     private let direct = PairedHost.Endpoint.direct(authority: "192.168.1.42:19390")
     private let relay = PairedHost.Endpoint.relay(baseURL: "https://relay.example.com/r/ROOM")
 
+    @Test("only the local route counts as direct, so only it starts at once")
+    func onlyTheLocalRouteIsDirect() {
+        // The launch plan gives the local route a head start and delays
+        // everything else. P2P is an alternative to a lost LAN, not a second
+        // local network: delaying it behind the relay would hand the slower route
+        // every race.
+        #expect(ReconnectPlan.isDirect(direct))
+        #expect(!ReconnectPlan.isDirect(relay))
+        #expect(
+            !ReconnectPlan.isDirect(
+                .p2p(relayBaseURL: "https://relay.example.com/r/ROOM", endpointId: "key"),
+            ),
+        )
+    }
+
     @Test("the route that was working is tried first, then the other one")
     func lastWorkingFirst() {
         // The relay is the fallback that turns a dead LAN into a working link

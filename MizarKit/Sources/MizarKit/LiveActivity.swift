@@ -329,14 +329,44 @@ public struct LiveActivityState: Codable, Sendable, Hashable {
     /// The rows to draw, longest-running first: one or two, and none when
     /// nothing is running.
     public var rows: [LiveActivityRow]
+    /// The approvals waiting on the operator, oldest first.
+    ///
+    /// Additive on the wire: a card posted by a computer that has no approvals
+    /// to report carries no `approvals` key at all, and the decoder supplies an
+    /// empty list rather than failing the whole card. That tolerance is what
+    /// lets the desktop start pushing these without a lockstep app release.
+    public var approvals: [LiveActivityApproval]
 
-    /// - Parameter rows: the rows to draw; empty means nothing is running.
-    public init(rows: [LiveActivityRow] = []) {
+    /// - Parameters:
+    ///   - rows: the rows to draw; empty means nothing is running.
+    ///   - approvals: the pending approvals to draw beside them.
+    public init(rows: [LiveActivityRow] = [], approvals: [LiveActivityApproval] = []) {
         self.rows = rows
+        self.approvals = approvals
     }
 
-    /// Whether nothing is running, so nothing is counting.
-    public var isFinished: Bool { rows.isEmpty }
+    private enum CodingKeys: String, CodingKey {
+        case rows, approvals
+    }
+
+    /// Decode, tolerating a state from a computer that predates `approvals`.
+    ///
+    /// Synthesised conformance would require the key the moment the property
+    /// exists, which would turn every card posted by an older host into a decode
+    /// failure -- and a Live Activity that cannot decode its `content-state` is a
+    /// card that draws nothing, with a 200 from Apple and no error anywhere.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rows = try container.decodeIfPresent([LiveActivityRow].self, forKey: .rows) ?? []
+        approvals = try container.decodeIfPresent([LiveActivityApproval].self, forKey: .approvals) ?? []
+    }
+
+    /// Whether nothing is running and nothing is waiting, so nothing is counting.
+    ///
+    /// An approval alone keeps the card up: the operator has to be able to answer
+    /// it, and a card that vanished because the turn is blocked rather than
+    /// running is exactly the case this exists for.
+    public var isFinished: Bool { rows.isEmpty && approvals.isEmpty }
 
     /// The time on the island's right side: the clock of the session that has
     /// been running longest, which is the first row's.
@@ -344,6 +374,45 @@ public struct LiveActivityState: Codable, Sendable, Hashable {
     /// Derived rather than stored, and `nil` once nothing is running. A second
     /// copy of a number is a second number that can disagree with the first.
     public var headline: TimeInterval? { rows.first?.elapsed }
+}
+
+/// One approval the card draws and the operator may answer from the island.
+///
+/// The id is the host's own `requestId`, passed through untouched: an answer
+/// names it, and an id this app rewrote would answer nothing.
+public struct LiveActivityApproval: Codable, Sendable, Hashable, Identifiable {
+    /// The host's request id.
+    public let requestId: String
+    /// The session the turn belongs to, for the row it is about.
+    public let sessionId: String
+    /// The tool asking, e.g. `Bash`.
+    public let tool: String
+    /// The sentence the agent wrote about it.
+    public let detail: String
+
+    public var id: String { requestId }
+
+    /// - Parameters:
+    ///   - requestId: the host's request id.
+    ///   - sessionId: the session the turn belongs to.
+    ///   - tool: the tool asking.
+    ///   - detail: the sentence the agent wrote.
+    public init(requestId: String, sessionId: String, tool: String, detail: String) {
+        self.requestId = requestId
+        self.sessionId = sessionId
+        self.tool = tool
+        self.detail = detail
+    }
+
+    /// What the island says above the buttons.
+    ///
+    /// Both lines travel because the tool name is what the operator recognises
+    /// and the detail is what they are deciding about; a card that showed only
+    /// one of them is either a name with no context or a wall of text.
+    public var headline: String {
+        let name = tool.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Permission" : name
+    }
 }
 
 /// What the activity should be showing, and whether it should still be up.
@@ -381,6 +450,12 @@ public struct LiveActivityDecision: Codable, Sendable, Equatable {
     /// the operator wants to know about the work that is taking a while.
     public static let maximumRows = 2
 
+    /// How many approvals the expanded activity shows.
+    ///
+    /// Two, for the same reason the rows are two: a card with three questions on
+    /// it is a card the operator reads twice and answers once.
+    public static let maximumApprovals = 2
+
     /// How much of an instruction a row shows before it is cut short.
     ///
     /// Deliberately tiny. The rows are the identity of two sessions on a
@@ -415,6 +490,7 @@ public struct LiveActivityDecision: Codable, Sendable, Equatable {
     /// - Returns: what to show, and whether to end the activity.
     public static func make(
         sessions: [RunningSession],
+        approvals: [LiveActivityApproval] = [],
         appOpenedSinceLastFinish: Bool,
         now: Date,
     ) -> LiveActivityDecision {
@@ -437,18 +513,23 @@ public struct LiveActivityDecision: Codable, Sendable, Equatable {
                     countingSince: min(session.countingSince, now),
                 )
             }
-        guard !rows.isEmpty else {
-            // Nothing is running: the island stops counting, and the card comes
-            // down. A finished card is not left standing for the app to be opened
-            // on: the app ends the activity with this state as soon as it learns a
-            // session stopped -- which, while the app is suspended, may be the
-            // relay's APNs end push and no code of this app at all. The flag is
-            // the second, confirming half of the same rule: the operator has been
-            // back since the last finish, so a card still up is one whose moment
-            // has passed.
+        guard !rows.isEmpty || !approvals.isEmpty else {
+            // Nothing is running and nothing is waiting: the island stops
+            // counting, and the card comes down. A finished card is not left
+            // standing for the app to be opened on: the app ends the activity
+            // with this state as soon as it learns a session stopped -- which,
+            // while the app is suspended, may be the relay's APNs end push and no
+            // code of this app at all. The flag is the second, confirming half of
+            // the same rule: the operator has been back since the last finish, so
+            // a card still up is one whose moment has passed.
             return LiveActivityDecision(phase: LiveActivityState(), shouldDismiss: appOpenedSinceLastFinish)
         }
-        return LiveActivityDecision(phase: LiveActivityState(rows: rows), shouldDismiss: false)
+        // An approval with no running row is still a card: the turn is blocked
+        // rather than working, and the button is the whole reason it is up.
+        return LiveActivityDecision(
+            phase: LiveActivityState(rows: rows, approvals: Array(approvals.prefix(maximumApprovals))),
+            shouldDismiss: false,
+        )
     }
 
     /// The session that has been running longest, first.

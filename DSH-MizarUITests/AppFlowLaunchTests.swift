@@ -352,19 +352,23 @@ final class AppFlowLaunchTests: AppFlowTestBase {
             app.staticTexts["demo"].waitForExistence(timeout: Self.patience),
             "an unreachable computer hid the sessions this phone already had",
         )
-        // And it says so rather than pretending everything is fine.
+        // And it says so rather than pretending everything is fine: the link
+        // bar marks the segment, in place of the error row that used to spell
+        // the failure out. The bar is a status, not a control -- there is no
+        // Retry on it, and the recovery is the gesture the list already has.
+        let link = app.descendants(matching: .any)["sidebar.link"]
         XCTAssertTrue(
-            app.staticTexts["sessions.error"].waitForExistence(timeout: Self.patience),
+            link.waitForExistence(timeout: Self.patience),
             "the app did not say the computer was unreachable",
         )
-        // But it says so quietly. The yellow banner and its Retry button were
-        // reported as looking like a development build -- and the retry those
-        // two words offered is already done by the read itself, by pull to
-        // refresh, and by the toolbar's refresh. An error row is information;
-        // the recovery lives where the operator already looks for it.
+        XCTAssertEqual(
+            link.label,
+            "Could not reach this computer",
+            "the link bar did not mark the link as broken",
+        )
         XCTAssertFalse(
             app.buttons["Retry"].exists,
-            "the list still offers a Retry control; the error must be a row, not a button",
+            "the list still offers a Retry control; the recovery is the list's own gesture",
         )
 
         // A refresh while unreachable must not report an all-clear, and it must
@@ -397,9 +401,14 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         let pullStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
         let pullEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88))
         pullStart.press(forDuration: 0.1, thenDragTo: pullEnd)
-        XCTAssertTrue(
-            app.staticTexts["sessions.error"].waitForNonExistence(timeout: Self.patience),
-            "a read that recovered left the error row on screen",
+        let recovered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Link OK, direct"),
+            object: link,
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [recovered], timeout: Self.patience),
+            .completed,
+            "a read that recovered left the link marked as broken",
         )
     }
 

@@ -12,3 +12,9 @@
    information -- so this noun is all a listener gets, and a duration announced
    with no noun is a number about nothing. */
 "Running time" = "Running time";
+
+/* The two buttons on a blocked turn's card, in the island and on the Lock
+   Screen. "Allow once" is exactly what the protocol grants -- one call, not a
+   standing permission -- and "Reject" is the other half of the choice. */
+"Allow once" = "Allow once";
+"Reject" = "Reject";

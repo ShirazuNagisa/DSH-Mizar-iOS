@@ -189,14 +189,19 @@ final class Feature094UITests: XCTestCase {
         )
     }
 
-    /// A host that refuses the archive keeps the session and says why.
+    /// A host that refuses the archive keeps the session.
     ///
     /// Archiving is non-destructive on the host and can be refused -- a running
     /// session, an unknown id -- so the phone must not remove a row it was told
     /// did not go. The failure is armed *before* the menu is opened, because
     /// the refusal has to land on the tap being measured rather than on a read
     /// the test happens to make first.
-    func testRefusedArchiveKeepsTheSessionAndShowsTheError() {
+    ///
+    /// The refusal is no longer announced in a row of its own: request failures
+    /// go to the log, and the sidebar's link bar reports the link. What this
+    /// pins is the part that matters -- the row stays, the host was asked, and
+    /// a request failure is not mistaken for a broken link.
+    func testRefusedArchiveKeepsTheSession() {
         let app = launch(session: nil)
         let row = expandFixtureWorkspace(in: app)
 
@@ -217,9 +222,16 @@ final class Feature094UITests: XCTestCase {
         // title, and the directory-and-id fallback before the title lands.
         Thread.sleep(forTimeInterval: 2)
         XCTAssertTrue(row.exists, "a refused archive removed the session anyway")
-        XCTAssertTrue(
-            app.staticTexts["sessions.error"].waitForExistence(timeout: Self.patience),
-            "a refused archive was not reported on the screen that offered it",
+        // A refusal is a request failure, and request failures no longer have a
+        // row of their own: the sidebar's link bar reports the link, not a
+        // request's answer. The row above and the mock's own count are the
+        // evidence -- and the link must not be marked broken by it.
+        let link = app.descendants(matching: .any)["sidebar.link"]
+        XCTAssertTrue(link.exists, "the sidebar's link bar is missing")
+        XCTAssertEqual(
+            link.label,
+            "Link OK, direct",
+            "a refused archive marked the link as broken",
         )
         XCTAssertGreaterThanOrEqual(
             Self.mockRefusedMethods()["session.archive"] ?? 0,

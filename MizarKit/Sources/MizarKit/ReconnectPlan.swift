@@ -124,4 +124,18 @@ public enum ReconnectPlan {
         if case .relay = endpoint { return true }
         return false
     }
+
+    /// Whether a route goes straight at the computer on the operator's own network.
+    ///
+    /// The one route that is meant to start immediately while the others wait out
+    /// the head start. Written here rather than as a `case .direct` in the launch
+    /// path so the rule lives beside the ordering it belongs to, and so a test can
+    /// ask the same question the dial plan asks.
+    ///
+    /// - Parameter endpoint: the route.
+    /// - Returns: whether it is a LAN (or tailnet) address.
+    public static func isDirect(_ endpoint: PairedHost.Endpoint) -> Bool {
+        if case .direct = endpoint { return true }
+        return false
+    }
 }
