@@ -1830,6 +1830,9 @@ struct SessionDetailView: View {
         } else {
             displayStalled = false
         }
+        if ProcessInfo.processInfo.arguments.contains("-mizarForceStalledBanner"), !didReachBottom {
+            displayStalled = true
+        }
         placement = .ready
         didReachBottom = true
         revealScheduled = false

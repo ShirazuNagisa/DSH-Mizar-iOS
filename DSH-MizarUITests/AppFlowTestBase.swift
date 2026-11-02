@@ -593,6 +593,7 @@ class AppFlowTestBase: XCTestCase {
         hideSession: Bool = false,
         slowPlacement: Bool = false,
         hugeSpacer: Bool = false,
+        forceStalled: Bool = false,
         naming: Bool = true,
         freshStart: Bool = true,
         pairingURIs: [String]? = nil,
@@ -624,6 +625,9 @@ class AppFlowTestBase: XCTestCase {
         }
         if hugeSpacer {
             app.launchArguments += ["-mizarHugeBottomSpacer"]
+        }
+        if forceStalled {
+            app.launchArguments += ["-mizarForceStalledBanner"]
         }
         if let contentSizeCategory {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategory]

@@ -280,6 +280,26 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         XCTAssertTrue(newest.isHittable, "the returned conversation is off screen")
     }
 
+    /// A page that cannot put a turn on screen must say so, and offer a reload
+    /// that actually lands the conversation -- never a silent black area.
+    func testAStalledDisplayShowsReloadInsteadOfBlack() {
+        let app = launch(pending: false, running: false, forceStalled: true)
+        let banner = app.descendants(matching: .any)["session.display.stalled"]
+        expect(banner, "the stalled conversation showed a black page with no explanation")
+        let newest = app.staticTexts["Two files changed, and it still fails."]
+        let reload = app.buttons["Reload"]
+        expect(reload, "the stalled banner has no reload action")
+        reload.tap()
+        expect(newest, "reloading the stalled conversation did not show its content")
+        XCTAssertTrue(newest.isHittable, "the reloaded content is off screen")
+        let gone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: banner,
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: Self.patience), .completed,
+                       "the stalled banner stayed after the content appeared")
+    }
+
     func testBalanceSupportMatrixAndExplicitRefresh() {
         let app = launch(pending: false, running: false, contentSizeCategory: "UICTContentSizeCategoryAccessibilityXXXL")
         openSidebar(app)
