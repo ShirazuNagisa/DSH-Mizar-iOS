@@ -97,3 +97,8 @@ zero-miss default, not a bug.
 
 Phase commits are single-purpose commits on `main`; revert with
 `git revert <sha>` (no data migration, no project-file edits).
+
+## Workspace wiki
+
+- 工作区根有本地预编译 Wiki：动 iOS 代码前先 `wiki search "<模块/错误关键词>" --scope ios`（等价 `node ../tools/wiki/bin/wiki.mjs search "..." --scope ios`）。
+- 规则、状态含义与 MCP 配置见根 `AGENTS.md` 的「本地 Wiki」节与 `docs/wiki/quickstart.md`（工作区根下）。

@@ -803,6 +803,14 @@ struct ComposerTextInput: UIViewRepresentable {
         // on every SwiftUI update resets the selection, empties the undo
         // stack and interrupts a Chinese input method's composition -- the
         // field would fight the operator mid-word.
+        // The placeholder is a UILabel, not the text view's own text, so
+        // XCUITest (and VoiceOver) see an empty value for an empty field. Say
+        // the placeholder as the value while it is empty; once there is text,
+        // the text is the value. This is also the string the localisation test
+        // asks for.
+        editor.accessibilityValue = text.isEmpty
+            ? String(localized: "Ask your agent…")
+            : nil
         if editor.text != text, editor.markedTextRange == nil {
             // A composition in progress is the operator's: the marked text is
             // a candidate being chosen between, and a replacement now takes

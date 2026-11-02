@@ -216,13 +216,21 @@ extension ServerFrame {
 
 /// A frame sent by the app.
 public enum ClientFrame: Sendable, Equatable {
-    case hello(id: String?, token: String, appVersion: String?, deviceModel: String?, engine: String? = nil)
+    case hello(
+        id: String?,
+        token: String,
+        appVersion: String?,
+        deviceModel: String?,
+        engine: String? = nil,
+        accountId: String? = nil,
+    )
     case request(id: String, type: String, payload: JSONValue?)
 }
 
 extension ClientFrame: Encodable {
     private enum CodingKeys: String, CodingKey {
         case v, type, id, token, appVersion, deviceModel, protocolVersion, payload, engine
+        case accountId
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -230,7 +238,7 @@ extension ClientFrame: Encodable {
         try container.encode(mizarProtocolVersion, forKey: .v)
 
         switch self {
-        case .hello(let id, let token, let appVersion, let deviceModel, let engine):
+        case .hello(let id, let token, let appVersion, let deviceModel, let engine, let accountId):
             try container.encode("hello", forKey: .type)
             try container.encodeIfPresent(id, forKey: .id)
             try container.encode(token, forKey: .token)
@@ -241,6 +249,11 @@ extension ClientFrame: Encodable {
             // it: this is the phone saying which agent the socket is for, and a
             // phone that omits it gets the older "all agents" answer.
             try container.encodeIfPresent(engine, forKey: .engine)
+            // The account this phone is signed in to, when it is. Additive: a
+            // computer that predates it ignores the key, and a computer signed
+            // in to another account refuses this socket -- which is the one
+            // question neither the pairing code nor the device token answers.
+            try container.encodeIfPresent(accountId, forKey: .accountId)
 
         case .request(let id, let type, let payload):
             try container.encode(type, forKey: .type)

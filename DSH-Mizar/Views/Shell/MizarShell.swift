@@ -119,10 +119,12 @@ struct MizarShell: View {
         .onAppear {
             guard !placed else { return }
             placed = true
-            // Open on a launch with nothing selected: the list is the only
-            // useful thing to look at. Placed without animating; the first frame
-            // is a state, not a change.
-            shell.place(open: model.selectedSessionId == nil)
+            // A launch opens on the app's own page, not on the folder list.
+            // The sidebar is one tap away; opening it for somebody who has not
+            // asked for it hides the page the app is about. Placed without
+            // animating; the first frame is a state, not a change.
+            shell.pinnedVisible = false
+            shell.place(open: false)
             shell.trailingAvailable = model.selectedSessionId != nil
             #if DEBUG
             // A debug way into the right drawer, for screenshots and future

@@ -29,6 +29,8 @@ enum ProcessCategory: Int, CaseIterable, Sendable {
     case plan
     case questions
     case tools
+    case background
+    case compacting
 
     /// DSH's completed-tense label.
     var label: String {
@@ -42,6 +44,8 @@ enum ProcessCategory: Int, CaseIterable, Sendable {
         case .plan: return "更新了计划"
         case .questions: return "向用户提出了问题"
         case .tools: return "已调用工具"
+        case .background: return "交给了后台任务"
+        case .compacting: return "压缩了上下文"
         }
     }
 
@@ -61,6 +65,8 @@ enum ProcessCategory: Int, CaseIterable, Sendable {
         case .plan: return "正在更新计划"
         case .questions: return "正在向你提问"
         case .tools: return "正在调用工具"
+        case .background: return "等待后台任务"
+        case .compacting: return "正在压缩上下文"
         }
     }
 
@@ -71,6 +77,8 @@ enum ProcessCategory: Int, CaseIterable, Sendable {
         case .tool: return .tools
         case .editing: return .edit
         case .subagent: return .subagents
+        case .background: return .background
+        case .compacting: return .compacting
         default: return nil
         }
     }

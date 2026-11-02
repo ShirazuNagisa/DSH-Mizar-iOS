@@ -33,14 +33,52 @@ struct SessionDetailView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var stats: SessionStatsFrame?
-    /// The host-reported state for this session, when it reports one.
-    @State private var liveState: SessionState?
-    @State private var liveStateStale = false
-    @State private var liveStateText = ""
-    /// The action in progress, for the present-tense line.
-    @State private var liveRunning: ProcessCategory?
-    /// What this segment has finished, for the frozen heading.
-    @State private var liveDone: Set<ProcessCategory> = []
+    /// The live stream of the turn this screen is watching.
+    ///
+    /// One accumulator per screen, not one per row: the blocks outlive a row
+    /// scrolling out of the lazy stack, and the same blocks feed the header,
+    /// the transcript and the toolbar after the turn settles.
+    @State private var stream = TurnStream()
+    /// The turn that stream belongs to, once the history has recorded it.
+    @State private var streamTurnId: String?
+    /// When the turn began on this phone, before the host's `turn/start`.
+    @State private var streamStartedAt: Date?
+    /// The turn a replay has already been asked for, so a loop that sees the
+    /// same running turn every 110 ms does not ask again.
+    @State private var replayedTurnId: String?
+    /// How many bodies are revealing themselves right now.
+    ///
+    /// While one is, the page must not chase the bottom: the reveal changes the
+    /// content height every frame, and following it is what made a typed answer
+    /// breathe up and down.
+    @State private var typingBodies = 0
+    /// The turn rows the conversation has built, mirrored locally.
+    ///
+    /// `TurnIndex.realized` is observable and the screen used to read it in its
+    /// body; a row being realized then invalidated the whole conversation
+    /// during the lazy stack's own placement. This mirror is written by the
+    /// row's deferred callback and is what the placement consults.
+    @State private var realizedTurnIds: Set<String> = []
+    /// The last lifecycle event believed for each turn, so a deferred removal
+    /// cannot undo a newer appearance (and vice versa).
+    @State private var realizedTurnSequences: [String: Int] = [:]
+    /// Whether this screen ever saw the stream live.
+    ///
+    /// A conversation opened after its turn ended can still have the turn's
+    /// frames buffered in the connection. Drawing those as a stream would
+    /// present old work as if it were happening now; history already has the
+    /// answer. Only a stream this screen watched run may take the turn over.
+    @State private var streamSawLive = false
+    /// Whether bodies may type at all.
+    ///
+    /// False for anything that came from a replay: that text is history, it has
+    /// already been read, and starting a reveal for it on entry is both wrong
+    /// and expensive.
+    @State private var streamTypingEnabled = false
+    /// When the link to the computer was first missed, for the card's grace.
+    @State private var disconnectSince: Date?
+    /// Whether the cards were already taken down for this outage.
+    @State private var endedCardsForDisconnect = false
     /// The session `stats` was read for.
     ///
     /// The shell keys this page per session (`.id(sessionId)`), so the state
@@ -130,7 +168,16 @@ struct SessionDetailView: View {
     /// content. The placement's acceptance test, because a page parked *under*
     /// the content is the one failure a clamped distance reads as "at the
     /// bottom" -- and it is the shape the black conversation used to open in.
-    @State private var placementGeometry: ConversationPlacementGeometry?
+    /// The scroll geometry the placement and `seekBottom` consult, kept in a
+    /// reference box on purpose: the scroll callback runs several times a
+    /// frame, and writing this into `@State` invalidated the whole screen on
+    /// every tick. The box is read where the latest value is needed and never
+    /// observed by the body.
+    @State private var placementGeometry = PlacementGeometryBox()
+
+    private final class PlacementGeometryBox {
+        var value: ConversationPlacementGeometry?
+    }
     /// Bumped when something was just sent, to move the view to it.
     @State private var newMessageArrived = 0
     /// Messages sent and not yet read back from the host.
@@ -224,7 +271,13 @@ struct SessionDetailView: View {
     /// about and goes by the geometry alone.
     private var newestIsBuilt: Bool {
         guard let newest = shownTurns.last?.id else { return true }
-        return turnIndex.sessionId == sessionId && turnIndex.realized.contains(newest)
+        return realizedTurnIds.contains(newest)
+    }
+
+    /// A number that moves whenever the live stream gains text, a block or its
+    /// ending. The scroll view watches it the way it watches a new turn.
+    private var streamRevision: Int {
+        stream.blocks.reduce(stream.finished ? 1 : 0) { $0 + $1.text.count + 1 }
     }
 
     /// What changes when something arrives at the end of the conversation --
@@ -289,7 +342,7 @@ struct SessionDetailView: View {
                 .overlay(alignment: .bottom) {
                     bottomStack(proxy: proxy)
                 }
-                .task(id: sessionId) { await watchLiveState() }
+                .task(id: sessionId) { await watchStream() }
                 // On an iPad with the index column put away, the turns stay at the
                 // edge as a rail to scrub.
                 .overlay(alignment: .trailing) {
@@ -411,6 +464,16 @@ struct SessionDetailView: View {
             // A different session is a different conversation, and the typewriter
             // state belongs to the one that was on screen.
             settledAnswerIds = []
+            // And a different stream: the turn this screen watched in the last
+            // session is history now, drawn by its own row.
+            stream = TurnStream()
+            streamTurnId = nil
+            streamStartedAt = nil
+            replayedTurnId = nil
+            streamTypingEnabled = false
+            streamSawLive = false
+            realizedTurnIds = []
+            realizedTurnSequences = [:]
             // What was typed here last time and never sent. Read before the
             // first frame the field draws, so the paragraph is simply there
             // rather than appearing a moment after the screen does.
@@ -493,18 +556,6 @@ struct SessionDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 conversation
 
-                // The running turn's own line, at the end of the conversation
-                // rather than above the composer: the answer is about to land
-                // here, and the place to watch is the place it will arrive.
-                if !liveDone.isEmpty || liveStateText.isEmpty == false || liveRunning != nil {
-                    LiveTurnBlock(
-                        running: liveRunning,
-                        done: liveDone,
-                        text: liveStateText,
-                    )
-                    .padding(.top, 10)
-                }
-
                 // What was just sent, drawn where it will land before the
                 // host has recorded it. Hidden from the accessibility tree:
                 // the conversation's own copy, read back from the host, is
@@ -516,6 +567,16 @@ struct SessionDetailView: View {
                         }
                         .padding(.top, 14)
                         .transition(.opacity)
+                }
+
+                // The turn's stream, under the bubble it answers: the status
+                // lines it passed through, the bodies it wrote between them,
+                // and -- while it runs -- the clock that says it is still
+                // going. It lives outside the lazy list on purpose: the block
+                // a row scrolls away from must not lose its typing state.
+                if showsStream {
+                    liveStream
+                        .padding(.top, 14)
                 }
 
                 // Room for the floating composer and the dock, as content
@@ -584,7 +645,7 @@ struct SessionDetailView: View {
         // to the bottom, each re-measure moved the page under the thumb, and a
         // scroll towards the newest message was pulled back again and again.
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(jumping || composerAnimating || userScrolling ? nil : .bottom, for: .sizeChanges)
+        .defaultScrollAnchor(jumping || composerAnimating || userScrolling || typingBodies > 0 ? nil : .bottom, for: .sizeChanges)
         .onScrollPhaseChange { _, phase in
             // Whatever the finger set going: a drag, the coast after it, and
             // the spring back from past either end. Not `.animating`, which
@@ -632,7 +693,8 @@ struct SessionDetailView: View {
             // Nor while the operator is scrolling: past the end is also where
             // a bounce goes, and an instant scroll there is the page jumping
             // back instead of springing back.
-            guard overshoot, placement == .ready, !jumping, !composerAnimating, !userScrolling, !shownItems.isEmpty else { return }
+            guard overshoot, placement == .ready, !jumping, !composerAnimating, !userScrolling,
+                  !shownItems.isEmpty else { return }
             reachBottomNow(proxy)
         }
         // How far the operator is from the newest message, kept current so
@@ -640,7 +702,13 @@ struct SessionDetailView: View {
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentSize.height - (geometry.visibleRect.maxY - geometry.contentInsets.bottom)
         } action: { _, distance in
-            distanceFromBottom = max(0, distance)
+            // The scroll callback can run more than once per frame. Writing the
+            // same value back each time is a state write per tick; only a real
+            // move is worth invalidating the screen for.
+            let clamped = max(0, distance)
+            if abs(clamped - distanceFromBottom) > 1 {
+                distanceFromBottom = clamped
+            }
         }
         // The placement's acceptance test: the same distance, kept signed.
         // Positive when the newest message is still below the viewport,
@@ -657,7 +725,9 @@ struct SessionDetailView: View {
                 bottomInset: geometry.contentInsets.bottom
             )
         } action: { _, geometry in
-            placementGeometry = geometry
+            // Keep the latest value for the re-aim loops, but outside SwiftUI's
+            // observation: a scroll tick must not rebuild the screen.
+            placementGeometry.value = geometry
             // A late success is still valid after the bounded re-aim budget.
             // Accept it without starting another scroll or network read.
             finishInitialPlacement()
@@ -665,7 +735,9 @@ struct SessionDetailView: View {
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.containerSize.height
         } action: { _, height in
-            scrollViewportHeight = height
+            if height != scrollViewportHeight {
+                scrollViewportHeight = height
+            }
         }
         .onChange(of: newMessageArrived) { _, _ in
             // A jump owns the position until it lands; a send mid-jump is
@@ -720,10 +792,20 @@ struct SessionDetailView: View {
         .onChange(of: newestContent) { _, _ in
             holdAtBottom(proxy: proxy)
         }
-        // The placement waits for the newest turn to be built as well as for
-        // the geometry; this is the other half arriving last.
-        .onChange(of: newestIsBuilt) { _, _ in
-            finishInitialPlacement()
+        // The live stream is not a turn row, so nothing above told the page it
+        // had grown. Every block that arrives below the last message is a size
+        // change at the bottom: follow it when the operator is already there,
+        // and never when they have scrolled away.
+        .onChange(of: streamRevision) { _, _ in
+            holdAtBottom(proxy: proxy)
+        }
+        .onChange(of: streamTurnId) { _, _ in
+            holdAtBottom(proxy: proxy)
+        }
+        .onChange(of: showsStream) { _, _ in
+            // The clock alone is already a row: a send shows it before the
+            // first status frame, and that insertion is a size change too.
+            holdAtBottom(proxy: proxy)
         }
         // Tapping the conversation puts the keyboard away. On a tap catcher
         // behind the content, not a gesture on the scroll view: as a
@@ -811,8 +893,22 @@ struct SessionDetailView: View {
             failure: shownItems.isEmpty ? model.conversationError : nil,
             onLoadOlder: onLoadOlder,
             historyReady: canReadHistory,
+            suppressedTurnId: showsStream ? streamTurnId : nil,
             typingAnswerId: typingAnswerId,
             onAnswerTypingStarted: noteAnswerTypingStarted,
+            onTurnRealized: { id, built, sequence in
+                let current = realizedTurnSequences[id] ?? 0
+                guard sequence > current else { return }
+                realizedTurnSequences[id] = sequence
+                if built {
+                    realizedTurnIds.insert(id)
+                } else {
+                    realizedTurnIds.remove(id)
+                }
+                if built, id == shownTurns.last?.id {
+                    finishInitialPlacement()
+                }
+            },
         )
     }
 
@@ -950,8 +1046,12 @@ struct SessionDetailView: View {
                 proxy.scrollTo(Self.endAnchor, anchor: .bottom)
             } completion: {
                 // The spring aimed at where the end was when it started; the
-                // rows it brought into view may have moved the end since.
-                holdAtBottom(proxy: proxy)
+                // rows it brought into view may have moved the end since. This
+                // is an explicit arrival, so it does not use `holdAtBottom`:
+                // that one refuses when the page is far from the bottom or a
+                // body is revealing -- exactly the two states a bad landing
+                // leaves behind.
+                settleAtBottom(proxy: proxy)
             }
             return
         }
@@ -1052,6 +1152,14 @@ struct SessionDetailView: View {
     }
 
     private func launch(_ text: String) {
+        // A send starts a new turn. Whatever the last one produced belongs to
+        // the history from here on; the stream is this turn's.
+        stream = TurnStream()
+        streamTurnId = nil
+        streamStartedAt = Date()
+        replayedTurnId = nil
+        streamSawLive = false
+        streamTypingEnabled = false
         let message = OutgoingMessage(text: text)
         let fly = !farFromBottom && !Motion.reduced && ComposerGeometry.shared.field != .zero
         withMizarAnimation(.mizarSmooth) {
@@ -1224,47 +1332,239 @@ struct SessionDetailView: View {
     /// layout must not permanently hide a successfully positioned conversation.
     ///
     /// - Parameter proxy: the conversation's scroll view.
-    /// Follow the host's state channel for this session.
+    /// Follow the host's state channel for this session, and build the turn's
+    /// stream out of it.
     ///
-    /// The channel is a push, but the connection is an actor: this view cannot
-    /// subscribe to it without another layer, so it samples once a second. A
-    /// state that changes is redrawn within a heartbeat, which is the pace the
-    /// channel itself uses.
-    private func watchLiveState() async {
+    /// Sampling the channel's newest state is not enough: three state changes
+    /// inside one second are three lines on screen, and a screen that only ever
+    /// reads the last one draws a transcript that never happened. The frames are
+    /// drained in order instead, and the accumulator decides which ones become
+    /// blocks.
+    ///
+    /// The journal replay is the other half. A socket that was away while the
+    /// turn kept running missed frames the channel cannot resend, so every new
+    /// socket is a reason to ask the host what the turn already said and drop
+    /// what this phone had.
+    private func watchStream() async {
+        var sawState = false
+        var generation = model.connectionGeneration
+
+        if let newest = shownTurns.last, newest.isRunning {
+            await replayTurnInFlight()
+        }
+
         while !Task.isCancelled {
-            if let snapshot = await model.liveState(for: sessionId) {
-                liveState = snapshot.state
-                liveStateStale = snapshot.stale
-                liveStateText = snapshot.text
-                if let state = snapshot.state {
-                    // A terminal state closes the segment; the next thing the
-                    // host says starts a new one.
-                    if !state.isBusy && !state.carriesText {
-                        if state == .completed || state == .failed || state == .paused {
-                            liveDone = []
-                            liveRunning = nil
-                            liveStateText = ""
-                            liveState = nil
+            for frame in await model.drainStateFrames(for: sessionId) {
+                // A frame is the first evidence that this host has a state
+                // channel at all. Before it, a session opened mid-turn has no
+                // stream to show and the history is the only clock; after it,
+                // the stream owns the turn.
+                if streamStartedAt == nil, frame.state != .idle, frame.state != .unknown {
+                    streamStartedAt = shownTurns.last?.startedAt ?? Date()
+                }
+                // Only a turn that is still running may take over the history
+                // or type. Frames buffered from a turn that ended before this
+                // screen opened are history: revealing them on entry starts a
+                // typewriter for text nobody watched arrive -- and, on a long
+                // answer, a Markdown layout per frame for the whole reveal.
+                let turnRunning = streamTurn?.isRunning
+                    ?? shownTurns.last?.isRunning
+                    ?? false
+                if stream.apply(frame) {
+                    sawState = true
+                    if turnRunning {
+                        streamSawLive = true
+                        if frame.state.carriesText, !frame.text.isEmpty {
+                            streamTypingEnabled = true
                         }
-                    } else if let category = ProcessCategory.from(state: state) {
-                        // Present tense while it runs; past tense once a later
-                        // state replaces it. The line is the answer to "what is
-                        // it doing", so it only ever says one thing at a time.
-                        if let previous = liveRunning { liveDone.insert(previous) }
-                        liveRunning = category
                     }
                 }
-            } else {
-                liveState = nil
-                liveStateStale = false
-                liveStateText = ""
-                liveDone = []
-                liveRunning = nil
             }
-            // A stream is worth watching closely; a resting state is not.
-            let interval: Duration = liveState?.carriesText == true ? .milliseconds(250) : .seconds(1)
-            try? await Task.sleep(for: interval)
+
+            if model.connectionGeneration != generation {
+                generation = model.connectionGeneration
+                stream.markReconnected()
+                await replayTurnInFlight()
+                // The new socket has not said anything yet. Pretending it had
+                // would make the very next `liveState` nil look like a drop --
+                // every reconnect would flash "remote connection failed" and,
+                // three seconds later, take every Live Activity down.
+                sawState = false
+            }
+
+            if let live = await model.liveState(for: sessionId) {
+                sawState = true
+                if live.stale, !stream.finished {
+                    stream.markDisconnected()
+                } else if stream.disconnected {
+                    stream.markReconnected()
+                    await replayTurnInFlight()
+                }
+            } else if sawState, !stream.finished {
+                // The socket, not the host, has gone: the turn may still be
+                // running on the computer, and the clock must not keep counting
+                // as if this phone were watching it.
+                stream.markDisconnected()
+            }
+
+            if let newest = shownTurns.last, newest.isRunning, replayedTurnId != newest.id {
+                replayedTurnId = newest.id
+                await replayTurnInFlight()
+            }
+            associateStream()
+            sweepCardsForDisconnect()
+            try? await Task.sleep(for: .milliseconds(110))
         }
+    }
+
+    /// Draw the turn that was already running when this screen opened, or that
+    /// ran while the link was away.
+    ///
+    /// Only for a turn the history still calls running: the host keeps the
+    /// journal of the last turn, and replaying a finished one would draw it a
+    /// second time beside the history that already has it.
+    private func replayTurnInFlight() async {
+        guard let turn = shownTurns.last, turn.isRunning else { return }
+        guard let replay = await model.streamReplay(for: sessionId), !replay.entries.isEmpty else {
+            // An older host has no journal. The history's own running row still
+            // says how long the turn has been going, and the screen keeps it:
+            // drawing a second clock from here would say it twice.
+            return
+        }
+        stream.replace(with: replay)
+        streamTypingEnabled = false
+        // The screen adopted this running turn, so it owns the settled view
+        // when it ends too -- even though the replay itself is not typed.
+        streamSawLive = true
+        // Bind before `associateStream` runs: leaving the previous turn's id in
+        // place would make it look like a new turn began and clear the replay
+        // that was just drawn.
+        streamTurnId = turn.id
+        replayedTurnId = turn.id
+        // The host's clock, not the moment this screen first saw the turn: a
+        // reconnect in the middle of a long turn must not restart the count.
+        if let started = turn.startedAt {
+            streamStartedAt = started
+        } else if streamStartedAt == nil {
+            streamStartedAt = Date()
+        }
+    }
+
+    /// Bind the stream to the turn it belongs to, and start a new one when the
+    /// history shows a new turn running.
+    private func associateStream() {
+        guard let newest = shownTurns.last else { return }
+        // The first turn after a send: the bubble may already be in the
+        // history, or still a stand-in. Either way this is the row the stream
+        // hangs under.
+        // Nothing has been heard yet: the history's own running row is the
+        // clock, and taking the turn over now would hide the answer without
+        // having anything to put in its place.
+        //
+        // A turn that has just *finished* is still the turn this stream is
+        // about: binding it is what gives the header its end time and keeps the
+        // history from drawing the same answer underneath. Waiting for
+        // `isRunning` missed exactly that case, and the header said "Completed"
+        // with no duration for the rest of the screen's life.
+        if streamTurnId == nil, streamStartedAt != nil, !stream.blocks.isEmpty,
+           newest.isRunning || streamSawLive {
+            streamTurnId = newest.id
+            if streamStartedAt == nil { streamStartedAt = newest.startedAt }
+            return
+        }
+        // A later turn while this screen is open is a later send: the blocks
+        // of the turn before it belong to the history now.
+        if let id = streamTurnId, id != newest.id, newest.isRunning {
+            stream = TurnStream()
+            streamTurnId = newest.id
+            streamStartedAt = newest.startedAt ?? Date()
+        }
+    }
+
+    /// The turn the stream belongs to, when the history has it.
+    private var streamTurn: ConversationTurn? {
+        guard let streamTurnId else { return nil }
+        return shownTurns.first(where: { $0.id == streamTurnId })
+    }
+
+    /// The stream view, isolated in its own property.
+    ///
+    /// The type checker cannot see through this expression inline in the
+    /// scroll content, and keeping it here makes its inputs explicit: the
+    /// typewriter only runs for a turn this screen watched live.
+    private var liveStream: some View {
+        ConversationStreamView(
+            sessionId: sessionId,
+            stream: stream,
+            turn: streamTurn,
+            startedAt: streamStartedAt ?? streamTurn?.startedAt,
+            endedAt: streamTurn?.endedAt,
+            running: streamIsRunning,
+            typing: streamTypingEnabled,
+            onTypingStarted: { typingBodies += 1 },
+            onTypingStopped: { typingBodies = max(0, typingBodies - 1) },
+            fallbackAnswer: streamFallbackAnswer,
+        )
+        // A new turn is a new piece of paper: the typewriter that already ran
+        // must not decide that this turn's answer was typed too.
+        .id(streamTurnId ?? "pending")
+    }
+
+    /// Whether the stream has anything to draw, including the moment between
+    /// the send and the first frame.
+    private var showsStream: Bool {
+        guard streamStartedAt != nil else { return false }
+        if streamTurnId != nil {
+            // Only a stream this screen watched live may take over a turn. A
+            // finished turn opened from history keeps its history row.
+            guard streamSawLive || streamIsRunning else { return false }
+            return !stream.blocks.isEmpty || stream.finished
+        }
+        // Before the host has recorded the turn, the send's own clock is the
+        // only thing there is to show. It leaves with the stand-in bubble, so a
+        // send that failed does not leave a clock counting nothing.
+        return !outgoing.isEmpty
+    }
+
+    /// The answer the history holds for the stream's turn, when it has one.
+    ///
+    /// The stream usually carries it, but a host without a journal ends a turn
+    /// with status lines and no body. The history's last assistant message is
+    /// then the answer, and the stream draws it in the body's place.
+    private var streamFallbackAnswer: String? {
+        guard let turn = streamTurn ?? shownTurns.last else { return nil }
+        for item in turn.steps.reversed() {
+            if case .message(_, .assistant, let text, _) = item,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return text
+            }
+        }
+        return nil
+    }
+
+    /// Whether the turn is still working, from whichever side knows better.
+    private var streamIsRunning: Bool {
+        if stream.finished { return false }
+        return streamTurn?.isRunning ?? true
+    }
+
+    /// Take the Live Activity down once the link has been gone long enough.
+    ///
+    /// Three seconds: a lift, a Wi-Fi handover and a relay hop all reconnect
+    /// inside it, and each of them is a disconnect that was not one. After it,
+    /// the card is describing a computer nobody can reach.
+    private func sweepCardsForDisconnect() {
+        guard stream.disconnected else {
+            disconnectSince = nil
+            endedCardsForDisconnect = false
+            return
+        }
+        let now = Date()
+        if disconnectSince == nil { disconnectSince = now }
+        guard !endedCardsForDisconnect, let since = disconnectSince,
+              now.timeIntervalSince(since) >= 3 else { return }
+        endedCardsForDisconnect = true
+        Task { await model.endLiveActivitiesForDisconnect() }
     }
 
     private func placeInitially(proxy: ScrollViewProxy) async {
@@ -1306,10 +1606,29 @@ struct SessionDetailView: View {
     /// Reveal the placed conversation, once.
     private func finishInitialPlacement() {
         guard !Task.isCancelled, !shownItems.isEmpty, newestIsBuilt,
-              placement.finishIfPositioned(placementGeometry, tolerance: Self.placementTolerance) else { return }
+              placement.finishIfPositioned(placementGeometry.value, tolerance: Self.placementTolerance) else { return }
         // The one-shot claim the composer's corrections read: the placement
         // *is* the appearance's jump to the newest message.
         didReachBottom = true
+    }
+
+    /// Arrive at the bottom after an explicit move, and keep correcting.
+    ///
+    /// Unlike ``holdAtBottom`` this asks no questions about the current
+    /// distance or a running typewriter: the operator pressed "back to the
+    /// newest", and the page must end up on it. It still stands down if a
+    /// newer correction supersedes it, a jump starts, or the operator grabs
+    /// the page.
+    private func settleAtBottom(proxy: ScrollViewProxy, attempts: Int = 16) {
+        bottomSeek &+= 1
+        let seek = bottomSeek
+        Task { @MainActor in
+            await settleLayout()
+            await seekBottom(proxy: proxy, attempts: attempts, while: {
+                bottomSeek == seek && placement == .ready && !jumping
+                    && !composerAnimating && !userScrolling
+            }, stopsWhenStill: true)
+        }
     }
 
     /// Scroll to the end now, without the one-shot guard.
@@ -1356,7 +1675,13 @@ struct SessionDetailView: View {
     ///   - wanted: whether the seek is still wanted, asked after every aim.
     /// - Returns: whether the page arrived.
     @discardableResult
-    private func seekBottom(proxy: ScrollViewProxy, attempts: Int, while wanted: () -> Bool) async -> Bool {
+    private func seekBottom(
+        proxy: ScrollViewProxy,
+        attempts: Int,
+        while wanted: () -> Bool,
+        stopsWhenStill: Bool = false,
+    ) async -> Bool {
+        var last: ConversationPlacementGeometry?
         var transaction = Transaction()
         transaction.animation = nil
         transaction.disablesAnimations = true
@@ -1367,10 +1692,19 @@ struct SessionDetailView: View {
             // A sleep that came back nil is a cancellation.
             guard (try? await Task.sleep(for: .milliseconds(Self.placementAttemptSpacing))) != nil,
                   !Task.isCancelled, wanted() else { return false }
+            let current = placementGeometry.value
             if newestIsBuilt,
-               placementGeometry?.isAtBottom(tolerance: Self.placementTolerance) == true {
+               current?.isAtBottom(tolerance: Self.placementTolerance) == true {
                 return true
             }
+            // An explicit arrival can be parked at the bottom already (or the
+            // newest row is not realized yet) while the at-bottom test stays
+            // false. Aiming again changes nothing and costs a layout; stop once
+            // the geometry has stopped answering.
+            if stopsWhenStill, let last, let current, last == current {
+                return false
+            }
+            last = current
         }
         return false
     }
@@ -1416,7 +1750,7 @@ struct SessionDetailView: View {
     /// a reader who has scrolled away.
     private func holdAtBottom(proxy: ScrollViewProxy) {
         guard placement == .ready, !jumping, !composerAnimating, !userScrolling,
-              distanceFromBottom <= Self.pinnedDistance else { return }
+              typingBodies == 0, distanceFromBottom <= Self.pinnedDistance else { return }
         bottomSeek &+= 1
         let seek = bottomSeek
         Task { @MainActor in

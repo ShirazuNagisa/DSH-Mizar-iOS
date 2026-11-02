@@ -14,12 +14,48 @@ final class AppFlowLaunchTests: AppFlowTestBase {
 
     func testSessionListNamesTheHostAndOffersANewSession() {
         let app = launch(session: nil)
+        openSidebar(app)
         expect(app.staticTexts["Mock Mac (fixture)"], "the host's name is not shown")
         expect(app.buttons["sessions.new"], "there is no way to start a session")
         expect(app.buttons["sessions.refresh"], "there is no way to refresh")
         // The row is titled by its directory, which is what tells two sessions
         // apart when neither has a title yet.
         expect(app.staticTexts["demo"], "the session row is missing")
+    }
+
+    /// A cold launch is the app's own page, not the folder list.
+    ///
+    /// The six readings come from `usage.overview` on the connected computer:
+    /// the fixture answers 3 sessions, 20 messages, 3,000 tokens, 2 active
+    /// days, the 14:00 hour and one model. If the connection only triggered a
+    /// read when the home screen appeared, the fields would still be empty.
+    func testColdLaunchOpensOnTheHomePageWithTheHostFigures() {
+        let app = launch(session: nil, running: false)
+
+        let readings = app.descendants(matching: .any)["home.readings"]
+        expect(readings, "the home page's readings are missing")
+        XCTAssertFalse(app.buttons["sessions.new"].isHittable, "the sidebar opened on a cold launch")
+
+        let sessions = app.descendants(matching: .any)["home.reading.Sessions"]
+        let messages = app.descendants(matching: .any)["home.reading.Messages"]
+        expect(sessions, "the sessions reading is missing")
+        expect(messages, "the messages reading is missing")
+        XCTAssertTrue(sessions.label.contains("3"), "sessions reading was \(sessions.label)")
+        XCTAssertTrue(messages.label.contains("20"), "messages reading was \(messages.label)")
+    }
+
+    /// The conversation survives the process being ended in the background.
+    ///
+    /// iOS may terminate a suspended app; the next launch must come back to
+    /// the conversation, not to the home page. Nothing here clears the app's
+    /// defaults between the two launches.
+    func testTheLastConversationSurvivesARelaunch() {
+        let first = launch(session: "first", running: false)
+        expect(first.textViews["composer.field"], "the conversation never opened")
+        first.terminate()
+
+        let reopened = launch(session: nil, running: false, freshStart: false)
+        expect(reopened.textViews["composer.field"], "the last conversation was not restored")
     }
 
     func testAnUnpairedLaunchOffersPairing() throws {

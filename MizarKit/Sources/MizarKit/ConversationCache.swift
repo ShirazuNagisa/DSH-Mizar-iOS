@@ -70,6 +70,16 @@ public struct CachedConversation: Codable, Sendable, Equatable {
     /// can stand behind.
     public let deliveredSeq: Int?
 
+    /// The session row's `updatedAt` this conversation was synced against.
+    ///
+    /// The host's ledger makes a repeated read cheap in bytes, but not in round
+    /// trips: a "sync all" pass still asks about every session. The row's
+    /// `updatedAt` moves for exactly the things a history pass cares about (a
+    /// new record, a rename, a model change), so a cache that already covers
+    /// that value needs no request at all. Optional so caches written before
+    /// this existed still decode, and so an older host's rows still sync.
+    public let syncedUpdatedAt: Double?
+
     public init(
         sessionId: String,
         items: [ConversationItem],
@@ -80,16 +90,31 @@ public struct CachedConversation: Codable, Sendable, Equatable {
         oldestSeq: Int? = nil,
         stats: SessionStatsFrame? = nil,
         deliveredSeq: Int? = nil,
+        syncedUpdatedAt: Double? = nil,
     ) {
         self.turns = turns
         self.oldestSeq = oldestSeq
         self.stats = stats
         self.deliveredSeq = deliveredSeq
+        self.syncedUpdatedAt = syncedUpdatedAt
         self.sessionId = sessionId
         self.items = items
         self.throughSeq = throughSeq
         self.syncedAt = syncedAt
         self.hasMore = hasMore
+    }
+}
+
+/// Whether a stored conversation already covers a session row.
+///
+/// Kept here rather than in the app so the rule is testable without a network:
+/// the history pass may skip a session exactly when the cache was synced at or
+/// after the row's last change.
+public enum HistorySyncPolicy {
+    /// Whether `cached` is at least as new as the row's `updatedAt`.
+    public static func isCurrent(_ cached: CachedConversation?, updatedAt: Double) -> Bool {
+        guard let synced = cached?.syncedUpdatedAt else { return false }
+        return synced >= updatedAt
     }
 }
 

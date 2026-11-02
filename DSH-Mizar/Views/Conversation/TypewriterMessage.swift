@@ -46,6 +46,8 @@ struct TypewriterMessage: View {
     /// scrolls out of the lazy stack mid-reveal cannot come back and start the
     /// reveal over.
     var onStarted: () -> Void = {}
+    /// Called when the reveal ends or the view goes away.
+    var onStopped: () -> Void = {}
 
     /// The message's blocks, parsed once. Empty for a body that is not Markdown.
     @State private var blocks: [MarkdownBlock]
@@ -71,23 +73,72 @@ struct TypewriterMessage: View {
     /// and glass.
     @State private var held = false
 
-    init(text: String, typing: Bool, onStarted: @escaping () -> Void = {}) {
-        self.text = text
-        self.typing = typing
-        self.onStarted = onStarted
+    /// A message's parse, kept across the many times a parent re-creates this
+    /// view.
+    ///
+    /// `init` runs on every parent body evaluation, and parsing a long answer is
+    /// the expensive part of that -- not the draw. A conversation screen
+    /// re-evaluates while its scroll geometry changes, so without this cache a
+    /// fast scroll re-parsed every visible answer on every frame and the main
+    /// thread never caught up.
+    private final class ParsedMessage: NSObject {
+        let blocks: [MarkdownBlock]
+        let markdown: Bool
+        let visible: String
+        /// Built once, on the first edit that asks for a reveal.
+        ///
+        /// The schedule is the other expensive part of `init`, and the flag
+        /// that asks for it stays true after the reveal has finished. A parent
+        /// that re-evaluates on every scroll tick must not rebuild a table of
+        /// thousands of instants for an answer that is already whole.
+        lazy var plan = TypewriterPlan(text: visible)
+
+        init(blocks: [MarkdownBlock], markdown: Bool, visible: String) {
+            self.blocks = blocks
+            self.markdown = markdown
+            self.visible = visible
+        }
+    }
+
+    private static let parsedCache: NSCache<NSString, ParsedMessage> = {
+        let cache = NSCache<NSString, ParsedMessage>()
+        cache.countLimit = 32
+        return cache
+    }()
+
+    /// The cached parse of one message.
+    private static func parse(_ text: String) -> ParsedMessage {
+        let key = text as NSString
+        if let cached = parsedCache.object(forKey: key) { return cached }
         let markdown = MessageMarkdown.looksLikeMarkdown(text)
-        let parsed = markdown ? MarkdownBlocks.parse(text) : []
+        let blocks = markdown ? MarkdownBlocks.parse(text) : []
         // The plan paces the characters the reveal actually counts: for a
         // Markdown body that is the text inside its blocks, without markers,
         // pipes or fences. See `MarkdownReveal`.
-        let visible = markdown ? MarkdownReveal.plainText(parsed) : text
+        let visible = markdown ? MarkdownReveal.plainText(blocks) : text
+        let parsed = ParsedMessage(blocks: blocks, markdown: markdown, visible: visible)
+        parsedCache.setObject(parsed, forKey: key)
+        return parsed
+    }
+
+    init(
+        text: String,
+        typing: Bool,
+        onStarted: @escaping () -> Void = {},
+        onStopped: @escaping () -> Void = {},
+    ) {
+        self.text = text
+        self.typing = typing
+        self.onStarted = onStarted
+        self.onStopped = onStopped
+        let parsed = Self.parse(text)
         // The schedule only matters for a reveal. A message that is drawn
         // instantly -- all of history, every redraw of it -- must not pay for a
         // per-character table it will never read; a long answer's table is
         // thousands of entries, rebuilt on every redraw of its row.
-        let plan = typing ? TypewriterPlan(text: visible) : TypewriterPlan(text: "")
-        _blocks = State(initialValue: parsed)
-        _isMarkdown = State(initialValue: markdown)
+        let plan = typing ? parsed.plan : TypewriterPlan(text: "")
+        _blocks = State(initialValue: parsed.blocks)
+        _isMarkdown = State(initialValue: parsed.markdown)
         _plan = State(initialValue: plan)
         _revealed = State(initialValue: 0)
         _running = State(initialValue: typing)
@@ -100,6 +151,18 @@ struct TypewriterMessage: View {
             } else {
                 whole
             }
+        }
+        .onChange(of: text) { _, newText in
+            // A streamed body can grow: the host appends to the same interval.
+            // The parsed blocks and the schedule were built for the first
+            // chunk; without this the row kept drawing only that chunk while
+            // the text property (and VoiceOver) already had the rest.
+            let parsed = Self.parse(newText)
+            blocks = parsed.blocks
+            isMarkdown = parsed.markdown
+            if typing { plan = parsed.plan }
+            running = false
+            revealed = plan.totalCharacters
         }
         .task {
             // A task on the view, not a timer: it starts when the row appears,
@@ -116,6 +179,13 @@ struct TypewriterMessage: View {
     // MARK: - Drawing
 
     /// The message with only the typed part drawn.
+    ///
+    /// There is deliberately no hidden full-size copy underneath: a second
+    /// selectable layout of the same long answer, on every reveal frame, is a
+    /// far bigger cost than the height change it used to reserve -- and taps
+    /// over two overlapping text views were a way into a TextKit loop. The
+    /// scroll screen holds its position while a body is revealing
+    /// (`typingBodies`) instead of chasing the growing row.
     @ViewBuilder private var revealing: some View {
         if isMarkdown {
             MarkdownBlocksView(blocks: MarkdownReveal.blocks(blocks, visibleCharacters: revealed))
@@ -160,10 +230,12 @@ struct TypewriterMessage: View {
     private func reveal() async {
         guard running else { return }
         onStarted()
+        defer { onStopped() }
         let clock = ContinuousClock()
         let start = clock.now
         var last = -1
         while !Task.isCancelled {
+            guard running else { break }
             if !held {
                 let elapsed = clock.now - start
                 let count = plan.revealedCount(after: elapsed)

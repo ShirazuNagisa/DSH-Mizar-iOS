@@ -12,6 +12,65 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
     override class var mockPort: Int { MockPorts.port(for: String(describing: self)) }
     // MARK: - Session detail
 
+    /// A turn with a live state channel opens at the stream's bottom, not in
+    /// the empty space below it.
+    func testALiveStreamOpensAtTheNewestMessage() {
+        let app = launch(pending: false, running: true, states: true)
+        expect(app.staticTexts["And run the whole suite."], "the running prompt is missing")
+
+        // The header is the stream's stable bottom edge: the clock is a
+        // transient, and by the time a query settles the turn may have ended.
+        let header = app.descendants(matching: .any)["conversation.stream.header"]
+        expect(header, "the stream header is missing")
+        XCTAssertTrue(app.frame.contains(header.frame), "the conversation opened below the stream")
+
+        expect(app.staticTexts["我先看一下现有的实现。"], "the narration is missing")
+    }
+
+    /// The turn settles into the header, and the answer stays on screen rather
+    /// than being pushed out by a re-typed paragraph.
+    func testALiveStreamSettlesTheAnswer() {
+        let app = launch(pending: false, running: true, states: true)
+        let answer = app.staticTexts["三处都改完了，测试全绿。"]
+        expect(answer, "the final answer is missing")
+
+        let header = app.descendants(matching: .any)["conversation.stream.header"]
+        expect(header, "the settled header is missing")
+        // A settled turn says how long it took; "Completed" alone means the
+        // stream never bound to the turn the history recorded.
+        let timed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Completed in"),
+            object: header,
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [timed], timeout: 10), .completed, "the header has no duration")
+        XCTAssertTrue(app.frame.contains(answer.frame), "the settled answer is below the fold")
+    }
+
+    /// A long streaming turn survives repeated fast scrolling.
+    ///
+    /// The reported freeze happened while scrolling a conversation whose stream
+    /// was being typed: the answer is large, every body was a Markdown parse,
+    /// and the scroll geometry makes the screen re-evaluate. This test drives
+    /// the same shape -- a dozen narration blocks, a long final answer, and the
+    /// typewriter still running -- through eight up/down pairs. A hang fails the
+    /// next query rather than passing silently.
+    func testALongLiveStreamSurvivesRepeatedScrolling() {
+        let app = launch(pending: false, running: true, states: true, longStates: true)
+
+        // The long final answer is arriving; keep scrolling while it types.
+        // The prompt may already be above the viewport by then, so the answer's
+        // own element is the stable anchor.
+        let answer = app.descendants(matching: .any)["conversation.stream.answer"]
+        expect(answer, "the long answer is missing")
+
+        for _ in 0..<8 {
+            app.swipeUp(velocity: .fast)
+            app.swipeDown(velocity: .fast)
+        }
+
+        XCTAssertTrue(app.textViews["composer.field"].isHittable, "the screen stopped responding after scrolling")
+    }
+
     func testBalanceSupportMatrixAndExplicitRefresh() {
         let app = launch(pending: false, running: false, contentSizeCategory: "UICTContentSizeCategoryAccessibilityXXXL")
         openSidebar(app)
@@ -682,6 +741,97 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
             app.staticTexts["Running the tests now."].exists,
             "a step that the transport no longer sends is on screen",
         )
+    }
+
+    /// Repeated up/down scrolling on a long conversation must not lock the
+    /// screen.
+    ///
+    /// Reported from the phone: dragging the conversation up and down a few
+    /// times leaves the page frozen, with the system log repeating
+    /// `<OnScrollGeometryChange Modifier> tried to update multiple times per
+    /// frame` -- the shape of a scroll callback that writes state which moves
+    /// the scroll view again.
+    ///
+    /// The assertion is on the *answer*, not on the gesture: a query that has
+    /// to reach the app is what a frozen main thread cannot satisfy. Time, not
+    /// a screenshot, is the signal.
+    /// The way-back button must land on the newest turn, not in the space the
+    /// lazy stack leaves below it after its estimated heights are replaced by
+    /// real ones.
+    func testJumpToLatestLandsOnTheNewestTurn() {
+        let app = launch(pending: false, running: false)
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:\(Self.mockPort)/reader?long=1")!) { _, _, _ in done.signal() }.resume()
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "long reader fixture did not answer")
+        app.terminate()
+        app.launch()
+
+        let field = app.textViews["composer.field"]
+        expect(field, "reader fixture did not open the real conversation")
+
+        // Far enough up that the newest turn is not built and the button shows.
+        let up = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.26))
+        let down = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.64))
+        for _ in 0..<10 {
+            up.press(forDuration: 0.05, thenDragTo: down)
+        }
+
+        let jump = app.buttons["conversation.jumpToLatest"]
+        expect(jump, "the way back to the newest message did not appear")
+        jump.tap()
+
+        // The newest turn's usage line is the one thing only the true bottom
+        // shows; a landing in the empty space below it leaves this above the
+        // screen (or unbuilt).
+        let newest = app.staticTexts["turn.24.usage"]
+        let deadline = Date().addingTimeInterval(10)
+        var landed = false
+        while Date() < deadline {
+            if newest.exists {
+                let frame = newest.frame
+                let visible = app.frame.insetBy(dx: 0, dy: 80)
+                if visible.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+                    landed = true
+                    break
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        XCTAssertTrue(landed, "the way-back button left the page away from the newest turn")
+    }
+
+    func testRepeatedScrollingNeverLocksTheConversation() {
+        let app = launch(pending: false, running: false)
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:\(Self.mockPort)/reader?long=1")!) { _, _, _ in done.signal() }.resume()
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "long reader fixture did not answer")
+        app.terminate()
+        app.launch()
+
+        let field = app.textViews["composer.field"]
+        expect(field, "reader fixture did not open the real conversation")
+
+        // The report has the field focused while the page is dragged, which is
+        // the state `scrollDismissesKeyboard(.interactively)` animates in.
+        field.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+
+        let up = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.26))
+        let down = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.64))
+        for pass in 0..<12 {
+            if pass.isMultiple(of: 2) {
+                up.press(forDuration: 0.05, thenDragTo: down)
+            } else {
+                down.press(forDuration: 0.05, thenDragTo: up)
+            }
+        }
+
+        let asked = Date()
+        let answered = field.waitForExistence(timeout: 8)
+        let waited = Date().timeIntervalSince(asked)
+        print("[scroll-stress] answered=\(answered) in \(waited)s")
+        XCTAssertTrue(answered, "the conversation stopped answering after repeated scrolling")
+        XCTAssertLessThan(waited, 6, "the conversation took \(waited)s to answer after repeated scrolling")
     }
 
 }

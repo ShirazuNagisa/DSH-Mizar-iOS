@@ -478,11 +478,24 @@ final class AppModel {
     private(set) var firstLoad = false
     /// Changes even when navigation leaves and later returns to the same id.
     private var selectionGeneration: UInt64 = 0
+    /// The computer whose saved window has already been offered to this launch.
+    /// One attempt per connection: a later session-list refresh must not reopen
+    /// a conversation the operator deliberately left.
+    private var restoredSelectionForHost: String?
     /// The session the conversation screen is showing.
     var selectedSessionId: String? {
         didSet {
             guard selectedSessionId != oldValue else { return }
             selectionGeneration &+= 1
+            // The window is part of what a launch should restore: iOS can end
+            // a suspended app while it is in the background, and coming back
+            // must not be indistinguishable from a fresh install. An explicit
+            // back to the home page writes the empty string, which is just as
+            // much a remembered choice.
+            UserDefaults.standard.set(
+                selectedSessionId ?? "",
+                forKey: "lastSession." + (host?.hostId ?? "local"),
+            )
             // Dropped rather than kept: the cards on screen belong to the session
             // being left, and the read below is what puts this one's up.
             pendingState.clear()
@@ -842,6 +855,44 @@ final class AppModel {
         return (state, stale, text)
     }
 
+    /// Take the state frames that arrived for one session since the last read.
+    ///
+    /// The stream view drains these rather than sampling ``liveState(for:)``:
+    /// three state changes inside one second are three lines on screen, and the
+    /// sampled channel can only ever report the last of them.
+    func drainStateFrames(for sessionId: String) async -> [StateFrame] {
+        guard let connection else { return [] }
+        return await connection.drainStateFrames(sessionId)
+    }
+
+    /// The host's journal for a turn already in flight, when it keeps one.
+    ///
+    /// `nil` on an older host, on a session that has never run, and on any
+    /// failure: the screen then falls back to what it can draw from the frames
+    /// it saw, exactly as it did before this method existed. A replay is an
+    /// improvement, never a requirement.
+    func streamReplay(for sessionId: String) async -> StreamReplay? {
+        guard let connection else { return nil }
+        do {
+            return try await connection.call(
+                "session.stream",
+                payload: .object(["sessionId": .string(sessionId)]),
+                as: StreamReplay.self,
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// Which socket the app is talking over, as a number that changes on every
+    /// reconnect.
+    ///
+    /// A screen that kept a live stream across a reconnect must know that the
+    /// frames it is about to read belong to a new socket; the journal replay is
+    /// keyed on this.
+    var connectionGeneration: Int { connectionEpoch }
+
+
     private var connection: MizarConnection? {
         didSet {
             if connection !== oldValue { deepSeekBalance.configure(tag: nil) }
@@ -965,6 +1016,16 @@ final class AppModel {
     /// on screen -- including the case where the operator has switched the whole
     /// feature off, which is read at the moment of acting rather than remembered
     /// from when an activity started.
+    /// Take every Live Activity down because the computer is unreachable.
+    ///
+    /// The card is a window onto a turn on a computer; once the link is gone it
+    /// is a clock nobody can stop and rows the computer cannot end. The grace
+    /// period is the screen's, not this method's: it calls here only once the
+    /// disconnect has outlived a network handover.
+    func endLiveActivitiesForDisconnect() async {
+        await liveActivity.endForDisconnect()
+    }
+
     func refreshLiveActivity() async {
         // The island belongs to a computer: it is fed by that computer's pushes
         // and by background refreshes that can reach it. The on-device agent has
@@ -974,8 +1035,7 @@ final class AppModel {
             await liveActivity.endForLocalAgent()
             return
         }
-        await liveActivity.refresh(
-            sessions: sessions,
+        await liveActivity.refresh(            sessions: sessions,
             conversations: conversations,
             sessionsAreKnown: sessionsAreKnown,
             titles: titles,
@@ -1137,6 +1197,12 @@ final class AppModel {
     private(set) var usageOverview: UsageOverview?
     /// Whether that read is on the socket.
     private(set) var usageLoading = false
+    /// A read asked for while one was already in flight.
+    ///
+    /// A connection can land while the home screen's own read is still
+    /// travelling; dropping that second request would leave the figures from
+    /// before the connection on screen until the operator left and came back.
+    private var usageReloadPending = false
 
     /// Whether the launch mark has left, for this run of the app.
     ///
@@ -1161,9 +1227,18 @@ final class AppModel {
     /// picture it had, and the connection window is where a link problem is
     /// reported.
     func loadUsageOverview() async {
-        guard !usageLoading else { return }
+        guard !usageLoading else {
+            usageReloadPending = true
+            return
+        }
         usageLoading = true
-        defer { usageLoading = false }
+        defer {
+            usageLoading = false
+            if usageReloadPending {
+                usageReloadPending = false
+                Task { await loadUsageOverview() }
+            }
+        }
 
         var readings: [UsageOverview] = []
 
@@ -1411,6 +1486,29 @@ final class AppModel {
     /// makes the app drivable from `simctl launch` and from a UI test without
     /// typing into fields or tapping through an alert. It is the same payload
     /// the QR carries, so the path exercised is the real one.
+    /// Reopen the conversation the last run was showing, once per host.
+    ///
+    /// Only when nothing else has claimed the window: a notification tap, a
+    /// debug launch argument and a deliberate home page all win over the saved
+    /// id. The session must still exist, or the app opens on the home page
+    /// rather than on a conversation the host no longer has.
+    private func restoreLastSessionIfNeeded() {
+        guard let host,
+              Self.launchSelectedSession == nil,
+              selectedSessionId == nil,
+              restoredSelectionForHost != host.hostId
+        else { return }
+        restoredSelectionForHost = host.hostId
+        let key = "lastSession." + host.hostId
+        guard let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty,
+              sessions.contains(where: { $0.sessionId == saved })
+        else {
+            UserDefaults.standard.removeObject(forKey: key)
+            return
+        }
+        selectedSessionId = saved
+    }
+
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
@@ -1444,6 +1542,13 @@ final class AppModel {
             // list under a fresh install's pairing.
             await conversations.clear()
             await indexStore.clear()
+            // The remembered window is app state too. A "start from nothing"
+            // launch that kept it would reopen the previous test's session and
+            // measure a conversation where the test asked for the home page.
+            for key in UserDefaults.standard.dictionaryRepresentation().keys
+            where key.hasPrefix("lastSession.") || key.hasPrefix("mizar.draft.") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
             log.add(.cache, "starting from nothing: stored conversations and index cleared")
         }
         if !Self.launchPairingURIs.isEmpty {
@@ -3862,6 +3967,9 @@ final class AppModel {
         }
         await refreshSessions(reconnectingIfNeeded: false)
         await refreshInteractions()
+        // A return is a new link to the computer, so the home page's figures
+        // are read again; in the background, so the screen is usable first.
+        Task { await loadUsageOverview() }
     }
 
     /// Mark an automatic pass as running, for the refresh button to draw.
@@ -4739,15 +4847,33 @@ final class AppModel {
 
         for (index, session) in runnable.enumerated() {
             syncProgress?.current = session.cwd.map { ($0 as NSString).lastPathComponent } ?? session.sessionId
-            await syncConversation(for: session.sessionId)
+            // A session's row moves when anything a history pass would fetch
+            // moves: a new record, a rename, a model change. If the stored
+            // conversation already covers that instant, the request would
+            // return nothing; with hundreds of sessions those empty round trips
+            // are the whole cost of the button.
+            let known = await conversations.load(sessionId: session.sessionId)
+            if HistorySyncPolicy.isCurrent(known, updatedAt: session.updatedAt) {
+                syncProgress?.completed = index + 1
+                log.add(.sync, "history sync: \(index + 1)/\(runnable.count) \(session.sessionId) unchanged")
+                continue
+            }
+            let synced = await syncConversation(for: session.sessionId)
             // The usage frame too, not only the messages. It carries the row's
             // title and the model and context figures above the composer, and a
             // history download that skipped it left every row unnamed and every
             // session's cost unknown until the operator opened it -- on a link
             // that may not answer by then. One extra request per session, once.
-            if let frame = await stats(for: session.sessionId),
-               let title = frame.title, !title.isEmpty {
+            let frame = await stats(for: session.sessionId)
+            if let frame, let title = frame.title, !title.isEmpty {
                 titles[session.sessionId] = title
+            }
+            // Both halves have to have landed before the session may be
+            // skipped: a failed stats read would otherwise leave the title and
+            // model blank for good, because the next pass would think this
+            // instant was already covered.
+            if synced.succeeded, frame != nil {
+                await markConversationSynced(session.sessionId, updatedAt: session.updatedAt)
             }
             syncProgress?.completed = index + 1
             log.add(.sync, "history sync: \(index + 1)/\(runnable.count) \(session.sessionId)")
@@ -4776,6 +4902,30 @@ final class AppModel {
         /// The cached usage frame after the page's context figure was folded
         /// in, or `nil` when nothing is known yet.
         let stats: SessionStatsFrame?
+        /// Whether the read actually landed. A cancelled or failed read must
+        /// not advance the session's sync watermark, or the next pass would
+        /// skip the records it never received.
+        let succeeded: Bool
+    }
+
+    /// Remember which session-row instant this conversation covers.
+    private func markConversationSynced(_ sessionId: String, updatedAt: Double) async {
+        guard let stored = await conversations.load(sessionId: sessionId) else { return }
+        await conversations.update(sessionId: sessionId) { current in
+            let base = current ?? stored
+            return CachedConversation(
+                sessionId: base.sessionId,
+                items: base.items,
+                throughSeq: base.throughSeq,
+                syncedAt: Date(),
+                hasMore: base.hasMore,
+                turns: base.turns,
+                oldestSeq: base.oldestSeq,
+                stats: base.stats,
+                deliveredSeq: base.deliveredSeq,
+                syncedUpdatedAt: updatedAt,
+            )
+        }
     }
 
     /// Fetch one session's page and fold it into the cache.
@@ -4865,6 +5015,7 @@ final class AppModel {
             return SyncedConversation(
                 items: known?.items ?? stored.items,
                 stats: known?.stats ?? stored.stats,
+                succeeded: true,
             )
         } catch {
             // A cancelled read is not a failure to report. It is a phone being
@@ -4875,7 +5026,7 @@ final class AppModel {
             // moment the app could ask again.
             if Task.isCancelled {
                 log.add(.cache, "session \(sessionId): read cancelled; nothing changed")
-                return SyncedConversation(items: [], stats: nil)
+                return SyncedConversation(items: [], stats: nil, succeeded: false)
             }
             let message = Self.describe(error, authority: host?.authority ?? host?.baseURL)
             if !message.isEmpty { lastError = message }
@@ -4890,6 +5041,7 @@ final class AppModel {
             return SyncedConversation(
                 items: await conversations.load(sessionId: sessionId)?.items ?? [],
                 stats: nil,
+                succeeded: false,
             )
         }
     }
@@ -5553,7 +5705,7 @@ final class AppModel {
             // answered. Short enough that nobody notices, long enough that the
             // screen is still.
             try? await Task.sleep(for: .milliseconds(700))
-            pendingNameHostId = paired.hostId
+            if !Self.skipNaming { pendingNameHostId = paired.hostId }
         } catch {
             if error is CancellationError || Task.isCancelled {
                 // The task that started this pairing went away (a view rebuilt
@@ -5994,6 +6146,10 @@ final class AppModel {
         if let requested = Self.launchSelectedSession {
             selectedSessionId = requested == "first" ? sessions.first?.sessionId : requested
         }
+        restoreLastSessionIfNeeded()
+        // The home page's figures are about the computer we just reached; load
+        // them now rather than waiting for the home screen to appear.
+        Task { await loadUsageOverview() }
     }
 
     /// Build a connection for one route, not yet opened.
@@ -6065,6 +6221,9 @@ final class AppModel {
                 // everything it sends by it, and a token the relay scoped wins
                 // over it on the computer's side, so this cannot widen anything.
                 engine: host.engine,
+                // Which account this phone is signed in to, when it is. A
+                // computer signed in to another one refuses the socket.
+                accountId: account.session?.profile.id,
                 // The handshake is given the same leash as the dial. A socket
                 // that opens and then says nothing is otherwise a screen stuck
                 // on "Connecting…" for as long as the process lives, and this
@@ -6079,6 +6238,7 @@ final class AppModel {
                 appVersion: Self.appVersion,
                 deviceModel: Self.deviceModel,
                 engine: host.engine,
+                accountId: account.session?.profile.id,
                 baseURL: baseURL,
                 handshakeTimeout: .seconds(timeout),
                 relayHeaders: relayHeaders,
@@ -6090,6 +6250,7 @@ final class AppModel {
                 appVersion: Self.appVersion,
                 deviceModel: Self.deviceModel,
                 engine: host.engine,
+                accountId: account.session?.profile.id,
                 handshakeTimeout: .seconds(timeout),
                 relayHeaders: relayHeaders,
                 p2p: P2PRoute(relayBaseURL: relayBaseURL, endpointId: endpointId),
@@ -6216,6 +6377,20 @@ final class AppModel {
     /// line and the archive it travels into exist to be read by somebody else.
     /// The scrubber in `MizarKit` would catch the code; not writing it is better
     /// than catching it.
+    /// Whether a debug launch asked to skip the one-time computer name prompt.
+    ///
+    /// The prompt is anchored to the sidebar button and is offered when the
+    /// drawer closes on a conversation; the UI suite opens conversations by
+    /// tapping rows, so it arrives exactly when a test is looking for the
+    /// conversation's toolbar and covers it. The real prompt has its own test.
+    static var skipNaming: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-mizarSkipNaming")
+        #else
+        false
+        #endif
+    }
+
     static var launchFlags: [String] {
         ProcessInfo.processInfo.arguments.filter { $0.hasPrefix("-") }
     }

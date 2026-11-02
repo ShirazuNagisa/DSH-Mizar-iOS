@@ -64,6 +64,12 @@ public actor MizarConnection {
         /// scoped on the computer's side and wins over this -- asking for
         /// another agent must never widen what a scoped token can see.
         public var engine: String?
+        /// The account this phone is signed in to, when it is signed in.
+        ///
+        /// Sent at `hello` and nowhere else. A computer signed in to another
+        /// account refuses the socket: the pairing code proves somebody stood at
+        /// the screen, not that the two accounts are the same person.
+        public var accountId: String?
         /// How long a unary call may take before it is failed.
         public var requestTimeout: Duration
         /// How long the handshake may take before it is failed.
@@ -94,6 +100,7 @@ public actor MizarConnection {
             appVersion: String? = nil,
             deviceModel: String? = nil,
             engine: String? = nil,
+            accountId: String? = nil,
             requestTimeout: Duration = .seconds(60),
             baseURL: String? = nil,
             handshakeTimeout: Duration = .seconds(20),
@@ -111,6 +118,7 @@ public actor MizarConnection {
             self.handshakeTimeout = handshakeTimeout
             self.relayHeaders = relayHeaders
             self.p2p = p2p
+            self.accountId = accountId
         }
 
         /// Which of the two routes this configuration names.
@@ -155,6 +163,20 @@ public actor MizarConnection {
 
     /// The host's state channels, one per session it talks about.
     private var stateChannels: [String: StateChannel] = [:]
+    /// Every state frame since the screen last read, one list per session.
+    ///
+    /// The channel keeps the newest state; the stream view needs the sequence.
+    /// A status line is a history ("分析过、调用过工具"), and collapsing three
+    /// frames into the last one erases the line the operator was watching. The
+    /// list is drained by the one screen that reads it, so it is not an event
+    /// bus and needs no subscribers.
+    private var stateFrames: [String: [StateFrame]] = [:]
+    /// The most frames one session may hold before the oldest are dropped.
+    ///
+    /// A screen that stops reading -- navigated away, suspended -- must not grow
+    /// this without bound. Dropping the oldest is safe: the next `session.stream`
+    /// replay rebuilds the turn from the host's journal.
+    private static let bufferedStateFrames = 512
     /// The sentence the peer closed with, when it sent one.
     ///
     /// The relay uses it for one thing the app must act on: `traffic allowance
@@ -317,6 +339,7 @@ public actor MizarConnection {
             appVersion: configuration.appVersion,
             deviceModel: configuration.deviceModel,
             engine: configuration.engine,
+            accountId: configuration.accountId,
         )
         do {
             try await socket.send(text: try Self.encode(hello))
@@ -596,6 +619,23 @@ public actor MizarConnection {
         var channel = stateChannels[sessionId] ?? StateChannel()
         channel.apply(frame)
         stateChannels[sessionId] = channel
+
+        var frames = stateFrames[sessionId] ?? []
+        frames.append(frame)
+        if frames.count > Self.bufferedStateFrames {
+            frames.removeFirst(frames.count - Self.bufferedStateFrames)
+        }
+        stateFrames[sessionId] = frames
+    }
+
+    /// Take the state frames buffered for one session, oldest first.
+    ///
+    /// Draining is deliberate: the caller is the screen drawing that session's
+    /// stream, and a second reader would apply the same interval twice. A frame
+    /// that arrived before the screen opened is not returned -- the host's
+    /// `session.stream` journal is the way to recover a turn already in flight.
+    public func drainStateFrames(_ sessionId: String) -> [StateFrame] {
+        stateFrames.removeValue(forKey: sessionId) ?? []
     }
 
     /// What the host says one session is doing, when it says anything.

@@ -60,6 +60,13 @@ struct ConversationView: View {
     /// page has been placed. Part of the asking task's identity, so a row that
     /// was in view all along asks the moment it may.
     var historyReady = true
+    /// The turn whose body is being drawn by the live stream below this list.
+    ///
+    /// The stream owns the status lines, bodies and toolbar of one turn while
+    /// the screen holds them; drawing the same answer from the history too
+    /// would show it twice. The prompt is still drawn here, because it is the
+    /// bubble the stream hangs under.
+    var suppressedTurnId: String?
 
     /// The answer currently being typed, decided by the screen above.
     ///
@@ -70,6 +77,8 @@ struct ConversationView: View {
     var typingAnswerId: String?
     /// Called when that answer's reveal begins, before the first character.
     var onAnswerTypingStarted: (String) -> Void = { _ in }
+    /// Whether a turn's row is built, for the screen's placement.
+    var onTurnRealized: (String, Bool, Int) -> Void = { _, _, _ in }
 
     @State private var loadingOlder = false
     @State private var exhausted = false
@@ -155,7 +164,7 @@ struct ConversationView: View {
                 )
                 .transition(.rise)
             } else if turns.isEmpty {
-                ForEach(items) { item in
+                ForEach(ConversationNoticeFold.fold(items)) { item in
                     ConversationRow(
                         item: item,
                         isLastPrompt: false,
@@ -175,6 +184,8 @@ struct ConversationView: View {
                         sessionId: sessionId,
                         typingAnswerId: typingAnswerId,
                         onAnswerTypingStarted: onAnswerTypingStarted,
+                        suppressBody: turn.id == suppressedTurnId,
+                        onRealized: onTurnRealized,
                     )
                     .transition(.rise)
                 }
@@ -243,6 +254,28 @@ private struct TurnSection: View {
     var typingAnswerId: String?
     /// Called when that answer's reveal begins.
     var onAnswerTypingStarted: (String) -> Void = { _ in }
+    /// Whether the live stream below the list owns this turn's body.
+    var suppressBody = false
+    /// Whether this row is built, reported to the screen without the index.
+    var onRealized: (String, Bool, Int) -> Void = { _, _, _ in }
+
+    /// Which appearance of this row the parent should believe.
+    ///
+    /// The report is deferred out of the layout pass, so an appear and a
+    /// disappear can reach the parent out of order (a row staged at the top by
+    /// the initial placement is built, removed and built again). A monotonic
+    /// number assigned at the moment of the event -- not when the Task runs --
+    /// lets the parent keep the last one that actually happened.
+    @State private var realizationSequence = 0
+
+    private func reportRealized(_ built: Bool) {
+        realizationSequence &+= 1
+        let sequence = realizationSequence
+        Task { @MainActor in
+            index.setRealized(turn.id, built, for: sessionId)
+            onRealized(turn.id, built, sequence)
+        }
+    }
     @Environment(TurnIndex.self) private var index
     @Environment(PreviewCenter.self) private var preview
     @Environment(ShellState.self) private var shell
@@ -250,6 +283,7 @@ private struct TurnSection: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
+        let steps = ConversationNoticeFold.fold(turn.steps)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(turn.prompts.enumerated()), id: \.element.id) { index, item in
                 ConversationRow(item: item, isLastPrompt: index == turn.prompts.count - 1)
@@ -260,31 +294,37 @@ private struct TurnSection: View {
             // row jump or hid the one thing a monitoring app must show. The paid
             // full-detail area is added *below* the row for the same reason:
             // opening it must never move or replace the status row.
-            TurnActivitySummary(turn: turn, sessionId: sessionId)
+            //
+            // A turn the live stream below the list owns draws none of this:
+            // the stream has the same answer already, plus the status lines the
+            // history never carried. See ``ConversationStreamView``.
+            if !suppressBody {
+                TurnActivitySummary(turn: turn, sessionId: sessionId)
 
-            ForEach(turn.steps) { item in
-                ConversationRow(
-                    item: item,
-                    isLastPrompt: false,
-                    typing: item.id == typingAnswerId,
-                    onTypingStarted: { onAnswerTypingStarted(item.id) },
-                )
-                .transition(.rise(distance: 14, blur: 6))
-            }
-            // The files this turn declared, between the answer and its actions:
-            // the prose says what was done, the card is what was produced, and
-            // the toolbar belongs to the message. Drawn whether or not the turn
-            // ended with text, because a turn that only produced a file still
-            // produced something.
-            DeliveredFilesRow(turn: turn, sessionId: sessionId)
+                ForEach(steps) { item in
+                    ConversationRow(
+                        item: item,
+                        isLastPrompt: false,
+                        typing: item.id == typingAnswerId,
+                        onTypingStarted: { onAnswerTypingStarted(item.id) },
+                    )
+                    .transition(.rise(distance: 14, blur: 6))
+                }
+                // The files this turn declared, between the answer and its actions:
+                // the prose says what was done, the card is what was produced, and
+                // the toolbar belongs to the message. Drawn whether or not the turn
+                // ended with text, because a turn that only produced a file still
+                // produced something.
+                DeliveredFilesRow(turn: turn, sessionId: sessionId)
 
-            if turn.endSeq != nil, !turn.isRunning, !turn.isEndInferred,
-               let response = turn.steps.last(where: { item in
-                   if case .message(_, .assistant, let text, _) = item { return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                   return false
-               }),
-               case .message(_, .assistant, let text, let at) = response {
-                TurnResponseToolbar(turn: turn, sessionId: sessionId, text: text, at: at)
+                if turn.endSeq != nil, !turn.isRunning, !turn.isEndInferred,
+                   let response = turn.steps.last(where: { item in
+                       if case .message(_, .assistant, let text, _) = item { return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                       return false
+                   }),
+                   case .message(_, .assistant, let text, let at) = response {
+                    TurnResponseToolbar(turn: turn, sessionId: sessionId, text: text, at: at)
+                }
             }
         }
         // A link in the prose that names a file on the computer opens the same
@@ -319,13 +359,17 @@ private struct TurnSection: View {
         // scrolled far enough away is destroyed, and the index asks before it
         // tries to scroll to one, because a scroll to a row that no longer
         // exists goes nowhere. See ``TurnIndex/travels(to:)``.
-        .onAppear { index.setRealized(turn.id, true) }
+        // These mutate an `@Observable` the screen also reads. Running them
+        // synchronously from a scroll-visibility callback meant the lazy stack
+        // could invalidate itself in the middle of placing its rows; defer to
+        // the next runloop, and `TurnIndex` drops no-op writes.
+        .onAppear { reportRealized(true) }
         .onScrollVisibilityChange(threshold: 0.25) { visible in
-            index.setVisible(turn.id, visible)
+            Task { @MainActor in index.setVisible(turn.id, visible, for: sessionId) }
         }
         .onDisappear {
-            index.setVisible(turn.id, false)
-            index.setRealized(turn.id, false)
+            reportRealized(false)
+            Task { @MainActor in index.setVisible(turn.id, false, for: sessionId) }
         }
     }
 }
@@ -411,12 +455,22 @@ private struct TurnSummary: View {
                 // Through `elapsed(asOf:)`, which clamps at zero: the start came
                 // off the host's clock and `context.date` is the phone's.
                 let running = turn.elapsed(asOf: context.date) ?? 0
+                // No shimmer here. The sweep is a repeating keyframe animation
+                // that re-masks its text every frame, and this text lives in
+                // the conversation's LazyVStack: a stack measured it while the
+                // mask was animating, and the text-layout attribute looped
+                // (100% CPU, memory climbing). The clock still ticks and its
+                // digits still transition; the decoration is not worth a
+                // layout fight inside a lazy row.
+                // A plain text, updated once a second: no numeric transition
+                // and no animation. The animated variant kept the row's text
+                // layout attribute in play inside the lazy stack -- the same
+                // failure class as the shimmer removed above, only at 1 Hz.
+                // Monospaced digits keep the width from stepping.
                 Text(String(format: String(localized: "DeepSeeking for %@"), Self.spell(running)))
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .contentTransition(.numericText(countsDown: false))
-                    .animation(.mizarSnappy, value: Int(running))
-                    .shimmering()
+                    .monospacedDigit()
             }
         } else {
             Text(staticHeadline)
@@ -659,7 +713,7 @@ private struct ConversationNotice: View {
                 .fill(.quaternary)
                 .frame(height: 1)
             HStack(spacing: 5) {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                Image(systemName: symbol)
                     .font(.system(size: 9, weight: .semibold))
                 Text(text)
                     .font(.caption)
@@ -675,6 +729,22 @@ private struct ConversationNotice: View {
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("conversation.notice")
+    }
+
+    /// The family's glyph: a compaction is about the history, a task runs on a
+    /// terminal, a subagent is another worker.
+    private var symbol: String {
+        let lower = text.lowercased()
+        if lower.contains("compact") || text.contains("压缩") {
+            return "arrow.down.right.and.arrow.up.left"
+        }
+        if lower.contains("task") || text.contains("任务") {
+            return "terminal"
+        }
+        if lower.contains("subagent") || text.contains("子代理") {
+            return "person.2"
+        }
+        return "arrow.down.right.and.arrow.up.left"
     }
 }
 

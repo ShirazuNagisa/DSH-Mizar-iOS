@@ -303,6 +303,25 @@ final class LiveActivityController {
         forgetPushToken()
     }
 
+    /// Take every card down because the computer cannot be reached.
+    ///
+    /// A card that outlives the link it describes is not a stale decoration: it
+    /// keeps counting a turn nobody can confirm, and its rows cannot be ended by
+    /// the computer's `turn/end` either. The app is the only side left that can
+    /// stop it, so it does -- after a grace period wide enough to let a lift or
+    /// a network handover reconnect, which is the disconnect that is not one.
+    func endForDisconnect() async {
+        guard ActivityCalls.hasPresentable else { return }
+        log.add(
+            .live,
+            await ActivityCalls.endAll(
+                with: LiveActivityState(),
+                why: "the computer is unreachable",
+            ),
+        )
+        forgetPushToken()
+    }
+
     // MARK: - Making the island match
 
     /// Carry out one decision.

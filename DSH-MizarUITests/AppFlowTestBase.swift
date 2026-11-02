@@ -97,6 +97,8 @@ class AppFlowTestBase: XCTestCase {
         skew: Int = 0,
         pageLimit: Int? = nil,
         running: Bool = true,
+        states: Bool = false,
+        longStates: Bool = false,
     ) {
         var query = pending ? "" : "?pending=0"
         if slow > 0 { query += query.isEmpty ? "?slow=\(slow)" : "&slow=\(slow)" }
@@ -109,6 +111,10 @@ class AppFlowTestBase: XCTestCase {
         // this is for is a test that must not be run in the same process as the
         // widget extension.
         if !running { query += query.isEmpty ? "?running=0" : "&running=0" }
+        // A host that pushes a live state sequence: the stream exists only when
+        // the binary channel does.
+        if longStates { query += query.isEmpty ? "?states=long" : "&states=long" }
+        else if states { query += query.isEmpty ? "?states=1" : "&states=1" }
         guard let url = URL(string: "http://127.0.0.1:\(mockPort)/reset\(query)") else { return }
         let done = DispatchSemaphore(value: 0)
         var request = URLRequest(url: url)
@@ -580,12 +586,22 @@ class AppFlowTestBase: XCTestCase {
         skew: Int = 0,
         pageLimit: Int? = nil,
         running: Bool = true,
+        states: Bool = false,
+        longStates: Bool = false,
         naming: Bool = true,
         freshStart: Bool = true,
         pairingURIs: [String]? = nil,
         contentSizeCategory: String? = nil,
     ) -> XCUIApplication {
-        Self.resetMockHost(pending: pending, slow: slow, skew: skew, pageLimit: pageLimit, running: running)
+        Self.resetMockHost(
+            pending: pending,
+            slow: slow,
+            skew: skew,
+            pageLimit: pageLimit,
+            running: running,
+            states: states,
+            longStates: longStates,
+        )
         let app = XCUIApplication()
         app.launchArguments = Self.arguments(
             pairing: pairing,
@@ -656,6 +672,11 @@ class AppFlowTestBase: XCTestCase {
         // The system prompts are real and belong to the app, not to a test:
         // answered by an alert, every assertion after them measures the alert.
         arguments += ["-mizarSkipPermissionPrompts"]
+        // The one-time "name this computer" prompt is anchored to the sidebar
+        // button and appears when a drawer closes on a conversation; a suite
+        // that opens conversations by tapping rows would meet it over the
+        // toolbar. The prompt itself is covered by its own test.
+        arguments += ["-mizarSkipNaming"]
         // No account in the protocol suite. A session left in the Keychain by
         // the account suite would otherwise make every launch call the
         // production `/me`, and the first screen would be measured through a

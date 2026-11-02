@@ -210,6 +210,18 @@ let pageLimit = Infinity
 let sessionRunning = true
 
 /**
+ * Whether this reset asks the mock to play a live state sequence.
+ *
+ * The real host pushes 13-byte state frames on a binary channel while a turn
+ * runs; without them the phone has no status lines and no stream to draw, so a
+ * UI test for the stream is a test of an empty page. `/reset?states=1` schedules
+ * one sequence per reset for the fixture session.
+ */
+let stateStream = ''
+let stateStreamPlayed = false
+let stateStreamEntries = []
+
+/**
  * The fixture session's permission preset, as the host last reported it.
  *
  * `session.permission.set` changes it, `session.stats` reports it, and `/reset`
@@ -970,6 +982,36 @@ function answer(frame) {
           ],
         },
       }
+    case 'usage.overview':
+      // What the home page's six readings are folded from. Small and exact so
+      // a UI test can assert the figures, and shaped like the host's: the
+      // kernel already merged every agent into one row per day.
+      return {
+        v: 1,
+        type: 'ok',
+        id,
+        result: {
+          sessions: 3,
+          days: [
+            {
+              date: '2026-10-31',
+              messages: 12,
+              inputTokens: 1200,
+              outputTokens: 800,
+              hours: [...Array(24)].map((_, hour) => (hour === 10 ? 5 : hour === 14 ? 7 : 0)),
+              models: [{ model: 'deepseek-v4.1', messages: 12, inputTokens: 1200, outputTokens: 800 }],
+            },
+            {
+              date: '2026-11-01',
+              messages: 8,
+              inputTokens: 600,
+              outputTokens: 400,
+              hours: [...Array(24)].map((_, hour) => (hour === 14 ? 8 : 0)),
+              models: [{ model: 'deepseek-v4.1', messages: 8, inputTokens: 600, outputTokens: 400 }],
+            },
+          ],
+        },
+      }
     case 'interactions.pending':
       return {
         v: 1,
@@ -1497,6 +1539,21 @@ function answer(frame) {
         },
       }
     }
+    case 'session.stream':
+      return {
+        v: 1,
+        type: 'ok',
+        id,
+        result: {
+          sessionId: frame.payload?.sessionId ?? SESSION.sessionId,
+          turn: 4,
+          state: stateStreamEntries.length === 0 ? 0 : stateStreamEntries[stateStreamEntries.length - 1].state,
+          interval: stateStreamEntries.length === 0 ? 0 : stateStreamEntries[stateStreamEntries.length - 1].interval,
+          textSeq: 0,
+          truncated: false,
+          entries: stateStreamEntries.map((entry) => ({ ...entry })),
+        },
+      }
     case 'session.messages':
       if (longReaderFixture) {
         const records = []
@@ -2478,6 +2535,13 @@ const server = createServer((request, response) => {
     // process, and a suite that has to draw one is a suite that fails for reasons
     // that have nothing to do with what it is testing.
     sessionRunning = !(request.url ?? '').includes('running=0')
+    // `?states=1` plays one live state sequence for the fixture session; the
+    // phone's stream is empty without the binary channel.
+    stateStream = (request.url ?? '').includes('states=long')
+      ? 'long'
+      : (request.url ?? '').includes('states=1') ? 'short' : ''
+    stateStreamPlayed = false
+    stateStreamEntries = []
     // `/reset` restores the whole fixture, the delivered file included: a test
     // that leaves it on would put a card under every later test's answer.
     deliverablesPresent = false
@@ -2557,6 +2621,66 @@ function refuseUpgrade(socket, status, reason) {
  *
  * - Parameter socket - the open WebSocket.
  */
+/** One 13-byte state-channel frame. */
+function stateFrame(code, interval, flags, textSeq, text) {
+  const payload = Buffer.from(text ?? '', 'utf8')
+  const out = Buffer.alloc(13 + payload.length)
+  out[0] = 0x53
+  out[1] = code
+  out[2] = flags
+  out.writeUInt32BE(interval, 3)
+  out.writeUInt32BE(textSeq, 7)
+  out.writeUInt16BE(payload.length, 11)
+  payload.copy(out, 13)
+  return out
+}
+
+/** The socket envelope: one length byte, the session id, the frame. */
+function stateEnvelope(sessionId, frame) {
+  const id = Buffer.from(sessionId, 'utf8')
+  return Buffer.concat([Buffer.from([id.length]), id, frame])
+}
+
+/** Play one turn: thinking, narration, tool, narration, final, completed. */
+function playStateStream(socket) {
+  const id = SESSION.sessionId
+  const long = stateStream === 'long'
+  const finalText = long
+    ? ('这是一段用于滚动与打字压力的长回答。\n\n' +
+       '- **第一项**：保留现有的路由选择；\n' +
+       '- **第二项**：把会话流的块按 interval 排序；\n' +
+       '- **第三项**：在没有 journal 时退回历史渲染。\n\n' +
+       '然后是一段较长的说明，用来让 Markdown 解析、打字机和滚动锚点同时工作。').repeat(8)
+    : '三处都改完了，测试全绿。'
+  const steps = [
+    [400, { interval: 1, state: 1, text: '', final: false }, stateFrame(1, 1, 4, 0, '')],
+    [900, { interval: 2, state: 5, text: '我先看一下现有的实现。', final: false }, stateFrame(5, 2, 6, 0, '我先看一下现有的实现。')],
+    [900, { interval: 3, state: 2, text: '', final: false }, stateFrame(2, 3, 4, 0, '')],
+  ]
+  if (long) {
+    for (let index = 0; index < 12; index += 1) {
+      const interval = 4 + index * 2
+      const text = `第 ${index + 1} 段过程。` + '这是一段较长的过程正文，用于滚动压力测试。'.repeat(3)
+      steps.push([220, { interval, state: 5, text, final: false }, stateFrame(5, interval, 6, 0, text)])
+      steps.push([120, { interval: interval + 1, state: 2, text: '', final: false }, stateFrame(2, interval + 1, 4, 0, '')])
+    }
+  }
+  const finalInterval = long ? 40 : 5
+  steps.push([900, { interval: finalInterval, state: 6, text: finalText, final: true }, stateFrame(6, finalInterval, 6, 0, finalText)])
+  steps.push([150, { interval: finalInterval, state: 6, text: '', final: true }, stateFrame(6, finalInterval, 8, 0, '')])
+  steps.push([150, { interval: finalInterval + 1, state: 11, text: '', final: false }, stateFrame(11, finalInterval + 1, 0, 0, '')])
+  let at = 0
+  for (const [delay, entry, frame] of steps) {
+    at += delay
+    setTimeout(() => {
+      if (entry.text !== '') stateStreamEntries.push(entry)
+      if (socket.readyState === socket.OPEN) socket.send(stateEnvelope(id, frame), { binary: true })
+      else console.log('mock: state socket closed before', entry.interval)
+    }, at)
+  }
+  setTimeout(() => { sessionRunning = false }, at + 250)
+}
+
 function handleSocket(socket) {
   if (offline) {
     // Closed immediately rather than left hanging: a socket that opens and then
@@ -2572,6 +2696,11 @@ function handleSocket(socket) {
     // Counted around the whole answer, not around the delay: a read that is
     // still being answered when the next one arrives is the overlap being
     // measured, and whether it was slow is beside the point.
+    if (stateStream !== '' && !stateStreamPlayed && frame.type === 'hello') {
+      stateStreamPlayed = true
+      console.log('mock: playing a live state stream')
+      setTimeout(() => playStateStream(socket), 700)
+    }
     const isLogRead = frame.type === 'session.messages'
     if (isLogRead) {
       messagesInFlight += 1

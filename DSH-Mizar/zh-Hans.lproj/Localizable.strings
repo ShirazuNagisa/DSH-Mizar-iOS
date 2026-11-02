@@ -660,3 +660,20 @@
 "Top model" = "常用模型";
 "Last year" = "过去一年";
 "Pick up where you left off" = "继续工作";
+
+/* Conversation notices */
+"Conversation context compacted" = "会话上下文已压缩";
+"Background task started" = "后台任务已启动";
+"Background task finished" = "后台任务已结束";
+"Background task stopped" = "后台任务已停止";
+"Background subagent started" = "后台子代理已启动";
+"Background subagent finished" = "后台子代理已结束";
+"Message from a subagent" = "收到子代理消息";
+"Multiple background tasks started" = "后台多个任务启动";
+"Multiple background tasks finished" = "后台多个任务结束";
+"Multiple background tasks stopped" = "后台多个任务停止";
+"Multiple background subagents started" = "后台多个子代理启动";
+"Multiple background subagents finished" = "后台多个子代理结束";
+"Multiple messages from subagents" = "收到多条子代理消息";
+"Background tasks updated" = "后台任务有更新";
+"Background subagents updated" = "后台子代理有更新";

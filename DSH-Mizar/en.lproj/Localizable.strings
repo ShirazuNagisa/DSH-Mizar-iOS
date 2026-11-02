@@ -660,3 +660,20 @@
 "Top model" = "Top model";
 "Last year" = "Last year";
 "Pick up where you left off" = "Pick up where you left off";
+
+/* Conversation notices */
+"Conversation context compacted" = "Conversation context compacted";
+"Background task started" = "Background task started";
+"Background task finished" = "Background task finished";
+"Background task stopped" = "Background task stopped";
+"Background subagent started" = "Background subagent started";
+"Background subagent finished" = "Background subagent finished";
+"Message from a subagent" = "Message from a subagent";
+"Multiple background tasks started" = "Multiple background tasks started";
+"Multiple background tasks finished" = "Multiple background tasks finished";
+"Multiple background tasks stopped" = "Multiple background tasks stopped";
+"Multiple background subagents started" = "Multiple background subagents started";
+"Multiple background subagents finished" = "Multiple background subagents finished";
+"Multiple messages from subagents" = "Multiple messages from subagents";
+"Background tasks updated" = "Background tasks updated";
+"Background subagents updated" = "Background subagents updated";

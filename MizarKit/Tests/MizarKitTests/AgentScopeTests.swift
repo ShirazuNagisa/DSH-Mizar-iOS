@@ -316,3 +316,43 @@ struct HelloEngineTests {
         #expect(object["engine"] == nil)
     }
 }
+
+@Suite("The account a connection belongs to")
+struct HelloAccountTests {
+    /// The key the computer reads with `Hello.account_id`, spelled the way it
+    /// parses it: a rename on either side is a check that silently stops
+    /// checking, which is worse than one that fails.
+    @Test("the account rides at the top level, beside the token")
+    func encodesAtTopLevel() throws {
+        let frame = ClientFrame.hello(
+            id: nil,
+            token: "mz_token",
+            appVersion: "1.0",
+            deviceModel: "iPhone17,1",
+            engine: "dsh",
+            accountId: "8f14e45f-ceea-467a-9575-4b1d3f7c1a2b",
+        )
+        let data = try JSONEncoder().encode(frame)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["accountId"] as? String == "8f14e45f-ceea-467a-9575-4b1d3f7c1a2b")
+        #expect(object["payload"] == nil, "the host reads hello at the top level")
+    }
+
+    @Test("a signed-out phone sends no account, and is not asked to")
+    func omitsWhenSignedOut() throws {
+        let frame = ClientFrame.hello(
+            id: nil,
+            token: "mz_token",
+            appVersion: nil,
+            deviceModel: nil,
+            accountId: nil,
+        )
+        let data = try JSONEncoder().encode(frame)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["accountId"] == nil)
+        // Absent, not null: an older computer reads unknown keys, and `null`
+        // would be a value it has to interpret.
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(!text.contains("accountId"))
+    }
+}

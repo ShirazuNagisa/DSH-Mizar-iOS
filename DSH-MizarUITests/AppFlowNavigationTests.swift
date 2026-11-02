@@ -18,9 +18,11 @@ final class AppFlowNavigationTests: AppFlowTestBase {
     /// screen the operator cannot reach that way.
     func testTheSidebarOpensAndCloses() {
         let app = launch(session: nil)
-        // Nothing selected, so the list is out: it is the only useful thing.
+        // A launch opens on the app's own page; the list is one tap away.
         let newSession = app.buttons["sessions.new"]
-        expect(newSession, "the sidebar is not out on a launch with nothing selected")
+        XCTAssertFalse(newSession.isHittable, "the sidebar opened on a launch with nothing selected")
+        openSidebar(app)
+        expect(newSession, "the sidebar did not open from its button")
         XCTAssertEqual(app.tabBars.count, 0, "a tab bar is still drawn")
 
         // Choosing a session puts the list away.
@@ -28,7 +30,18 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         let row = sessionRow(in: app, titled: "Mock session", in: "demo")
         XCTAssertTrue(expand(demo, revealing: row), "the session never appeared under its workspace")
         row.tap()
-        expect(app.textViews["composer.field"], "the conversation never opened")
+        // The one-time naming prompt is anchored to the sidebar button and is
+        // offered when the drawer closes on the conversation -- after `launch`
+        // already looked for it. Answer it here, or it covers the screen.
+        dismissNamingIfPresented(app)
+        // The conversation's own refresh button, not the composer field: a
+        // pending approval docks over the composer, and this test is about the
+        // drawer, not about that card.
+        expect(app.buttons["session.refresh"], "the conversation never opened")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["session.placement.failed"].exists,
+            "the conversation could not be positioned",
+        )
         XCTAssertTrue(sidebar(newSession, isOut: false), "the sidebar stayed out over the conversation")
 
         // The toggle brings it back, and a tap on the conversation beside it
@@ -158,12 +171,16 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         }
         guard require(editor.waitForExistence(timeout: Self.patience), "composer-ready") else { return }
         phase("beforeDrawerNormalize")
-        if drawerDismiss.exists {
-            guard require(waitUntil({ drawerDismiss.isHittable }, timeout: 5), "drawer-dismiss-button") else { return }
+        if drawerDismiss.exists, drawerDismiss.isHittable {
             drawerDismiss.tap()
         }
+        // "Normalized" means no drawer can be tapped, not that its catcher was
+        // removed from the tree: the catcher can exist while the drawer is shut.
+        // The card's dismiss catcher can remain in the tree (and even hittable)
+        // while the drawer is shut; what "normalized" means here is that neither
+        // drawer is on screen.
         guard require(waitUntil {
-            !drawerDismiss.exists && !sidebar.isHittable && !index.isHittable
+            !sidebar.isHittable && !index.isHittable
         }, "drawers-normalized") else { return }
         phase("afterDrawerNormalize")
         phase("beforeDismiss")
@@ -209,7 +226,10 @@ final class AppFlowNavigationTests: AppFlowTestBase {
                 .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: to, dy: 0.42)))
             // Identical settling allowance in every baseline/candidate. No AX polling
             // during the measured cycle: accessibility snapshots themselves cost CPU.
-            Thread.sleep(forTimeInterval: 0.65)
+            // Long enough for the drawer spring to finish before the next drag; the
+            // cold-launch shell starts closed and the first open/close pair runs
+            // sooner than it used to.
+            Thread.sleep(forTimeInterval: 1.0)
         }
         @discardableResult func cycle(prove: Bool) -> Bool {
             drag(0.10, 0.90)
@@ -406,6 +426,8 @@ final class AppFlowNavigationTests: AppFlowTestBase {
             pairingURIs: [Self.mockPairingURI, Self.secondMockPairingURI],
         )
         // The second computer is the one open: the last pairing is the current one.
+        // Its name lives in the sidebar, which a cold launch leaves closed.
+        openSidebar(app)
         if !app.staticTexts["Mock Mac (second)"].waitForExistence(timeout: Self.patience) {
             let dump = app.staticTexts.allElementsBoundByIndex.prefix(25)
                 .map { $0.identifier.isEmpty ? "<no id>" : $0.identifier }
@@ -479,7 +501,9 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         )
         // The second computer was paired last, so this first launch legitimately
         // opens it: with no choice recorded yet, "the machine given most
-        // recently" is the only answer the phone has.
+        // recently" is the only answer the phone has. Its name is in the
+        // sidebar, which a cold launch leaves closed.
+        openSidebar(app)
         XCTAssertTrue(
             app.staticTexts["Mock Mac (second)"].waitForExistence(timeout: Self.patience),
             "the launch did not open the most recently paired computer",
@@ -508,6 +532,9 @@ final class AppFlowNavigationTests: AppFlowTestBase {
             freshStart: false,
         )
         reopened.launch()
+        // A cold launch opens on the app's page; the chosen computer's name is
+        // in the sidebar, which is one tap away.
+        openSidebar(reopened)
         XCTAssertTrue(
             reopened.staticTexts["Mock Mac (fixture)"].waitForExistence(timeout: Self.patience),
             "the relaunch opened a computer other than the one the operator last chose",
@@ -596,6 +623,12 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         // The composer's placeholder, which is interface copy. This used to
         // assert on the "对话" segmented control; that control is gone, and the
         // placeholder is the localised string nearest the same place on screen.
+        // Put the keyboard away first: a focused empty field reports an empty
+        // value instead of its placeholder.
+        if chinese.keyboards.firstMatch.exists {
+            let dismissKeyboard = chinese.buttons["composer.dismissKeyboard"]
+            if dismissKeyboard.exists, dismissKeyboard.isHittable { dismissKeyboard.tap() }
+        }
         XCTAssertEqual(
             chinese.textViews["composer.field"].value as? String,
             "给 agent 发消息…",
@@ -774,6 +807,7 @@ final class AppFlowNavigationTests: AppFlowTestBase {
     /// fast it is -- measured -- and what keeps the phone current.
     func testTheConnectionWindowMeasuresLatency() {
         let app = launch(session: nil, pending: false)
+        openSidebar(app)
         let capsule = app.buttons["sidebar.connection"]
         expect(capsule, "there is no connection control")
         capsule.tap()
@@ -788,6 +822,7 @@ final class AppFlowNavigationTests: AppFlowTestBase {
     /// The computer's name is the way to another computer, in a small window.
     func testTheComputersNameOpensTheComputerPicker() {
         let app = launch(session: nil, pending: false)
+        openSidebar(app)
         let name = app.buttons["sessions.hosts"]
         expect(name, "the computer's name is not a button")
         XCTAssertTrue(name.staticTexts["Mock Mac (fixture)"].exists, "the button is not the computer's name")

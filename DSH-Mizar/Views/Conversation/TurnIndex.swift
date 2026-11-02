@@ -82,12 +82,33 @@ final class TurnIndex {
         title = nil
     }
 
-    func setVisible(_ id: String, _ isVisible: Bool) {
-        if isVisible { visible.insert(id) } else { visible.remove(id) }
+    /// Mark a turn visible, only for the session this index currently holds.
+    ///
+    /// Turn ids restart at 1 in every session, and these calls are deferred out
+    /// of the layout pass now; without the session check a row from the session
+    /// the operator just left could land in the new session's set and make the
+    /// index believe a row was built when it was not.
+    func setVisible(_ id: String, _ isVisible: Bool, for session: String? = nil) {
+        if let session, session != sessionId { return }
+        if isVisible {
+            guard !visible.contains(id) else { return }
+            visible.insert(id)
+        } else {
+            guard visible.contains(id) else { return }
+            visible.remove(id)
+        }
     }
 
-    func setRealized(_ id: String, _ isRealized: Bool) {
-        if isRealized { realized.insert(id) } else { realized.remove(id) }
+    /// Mark a turn built, with the same session fence as ``setVisible``.
+    func setRealized(_ id: String, _ isRealized: Bool, for session: String? = nil) {
+        if let session, session != sessionId { return }
+        if isRealized {
+            guard !realized.contains(id) else { return }
+            realized.insert(id)
+        } else {
+            guard realized.contains(id) else { return }
+            realized.remove(id)
+        }
     }
 
     /// Ask the conversation to show a turn.

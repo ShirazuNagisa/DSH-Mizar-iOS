@@ -13,7 +13,7 @@ import UIKit
 @MainActor
 struct SplashMarkTests {
     @Test func theMarkIsDrawn() throws {
-        let image = SplashMark.image
+        let image = SplashMark.frontLight
         #expect(image.size.width == 1024)
         let cg = try #require(image.cgImage)
         let width = cg.width
