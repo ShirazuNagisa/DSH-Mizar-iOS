@@ -734,6 +734,38 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         XCTAssertTrue(prompt.isHittable, "the conversation did not scroll to the chosen turn")
     }
 
+    /// A far turn chosen in the index arrives directly, without travelling the
+    /// whole conversation first. The reader fixture has 24 turns; opening its
+    /// index at the bottom and choosing turn 1 used to run the staged travel.
+    func testTheTurnIndexJumpsDirectlyToAFarTurn() {
+        let app = launch(pending: false, running: false)
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(
+            with: URL(string: "http://127.0.0.1:\(Self.mockPort)/reader?long=1")!,
+        ) { _, _, _ in done.signal() }.resume()
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "the reader fixture did not answer")
+        app.terminate()
+        app.launch()
+        expect(app.staticTexts["turn.24.usage"], "the long conversation did not open at its newest turn")
+
+        let title = app.buttons["session.turnIndex"]
+        expect(title, "the turn index is not reachable")
+        title.tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "turnIndex.entry."))
+        let first = rows.firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: Self.patience), "the turn index never opened")
+
+        first.tap()
+        let prompt = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Reader prompt 1."),
+        ).firstMatch
+        XCTAssertTrue(
+            prompt.waitForExistence(timeout: 2.5),
+            "choosing a far turn did not show it within 2.5 s (a travel, not a jump)",
+        )
+        XCTAssertTrue(prompt.isHittable, "the chosen turn is not on screen")
+    }
+
     /// Jumping between turns, over and over, must never wedge the screen.
     ///
     /// Reported as "tapping a turn sometimes freezes the app". The jump goes

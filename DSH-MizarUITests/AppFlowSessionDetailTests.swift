@@ -137,6 +137,20 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
             shot.name = "switch-round-\(round)"
             shot.lifetime = .keepAlways
             add(shot)
+
+            // The reported 100% case: from far up, tap the way-back button,
+            // then switch sessions. It must land on the newest turn and stay
+            // there; a blank page here fails the next round's marker check.
+            let up = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.26))
+            let down = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.64))
+            for _ in 0..<10 {
+                up.press(forDuration: 0.05, thenDragTo: down)
+            }
+            let jump = app.buttons["conversation.jumpToLatest"]
+            expect(jump, "the way-back button did not appear after scrolling up (round \(round))")
+            jump.tap()
+            expect(marker, "the way-back button left the conversation away from the newest turn (round \(round))")
+            XCTAssertTrue(marker.isHittable, "the way-back jump landed off screen (round \(round))")
         }
     }
 
@@ -188,6 +202,44 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
             shot.lifetime = .keepAlways
             add(shot)
         }
+    }
+
+    /// Entry is a cover, then the conversation at the bottom -- never a page
+    /// that scrolls into place, starts in the wrong place, or flashes the
+    /// way-back button while the placement works.
+    func testOpeningASessionHoldsACoverUntilItIsPlaced() {
+        let app = launch(session: nil, pending: false, running: false, slowPlacement: true)
+        openSidebar(app)
+        let demo = app.buttons["workspace./Users/you/projects/demo"]
+        let mock = sessionRow(in: app, titled: "Mock session", in: "demo")
+        XCTAssertTrue(expand(demo, revealing: mock), "the session is missing")
+        mock.tap()
+        let cover = app.descendants(matching: .any)["session.placement.cover"]
+        expect(cover, "the placement cover never appeared")
+        XCTAssertFalse(
+            app.buttons["conversation.jumpToLatest"].exists,
+            "the way-back button flashed during placement",
+        )
+        XCTAssertFalse(
+            app.staticTexts["Two files changed, and it still fails."].exists,
+            "conversation content was visible under the placement cover",
+        )
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "placement-cover"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        let gone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: cover,
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: Self.patience), .completed,
+                       "the placement cover never went away")
+        expect(app.staticTexts["Two files changed, and it still fails."], "the conversation never appeared")
+        XCTAssertFalse(
+            app.buttons["conversation.jumpToLatest"].exists,
+            "the way-back button was still showing after the page landed at the bottom",
+        )
     }
 
     func testBalanceSupportMatrixAndExplicitRefresh() {

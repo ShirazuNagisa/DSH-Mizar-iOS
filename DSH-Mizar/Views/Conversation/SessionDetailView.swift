@@ -14,6 +14,22 @@ import MizarKit
 /// The order is deliberate. Pending requests sit above usage because an agent
 /// blocked on a decision is more urgent than a number, and the composer is
 /// pinned to the bottom where the keyboard expects it.
+/// The turn rows the lazy stack has built, kept off the view's state.
+@MainActor
+private final class RealizedTurns {
+    var ids: Set<String> = []
+    var sequences: [String: Int] = [:]
+}
+
+/// The page's distance chrome, observed only by the jump button.
+@MainActor
+@Observable
+private final class ScrollChrome {
+    var farFromBottom = false
+    var unseen = 0
+    var distance: CGFloat = 0
+}
+
 struct SessionDetailView: View {
     let sessionId: String
     /// Internal hosted-test observation seam, nil in production. Delivers the
@@ -52,16 +68,9 @@ struct SessionDetailView: View {
     /// content height every frame, and following it is what made a typed answer
     /// breathe up and down.
     @State private var typingBodies = 0
-    /// The turn rows the conversation has built, mirrored locally.
-    ///
-    /// `TurnIndex.realized` is observable and the screen used to read it in its
-    /// body; a row being realized then invalidated the whole conversation
-    /// during the lazy stack's own placement. This mirror is written by the
-    /// row's deferred callback and is what the placement consults.
-    @State private var realizedTurnIds: Set<String> = []
-    /// The last lifecycle event believed for each turn, so a deferred removal
-    /// cannot undo a newer appearance (and vice versa).
-    @State private var realizedTurnSequences: [String: Int] = [:]
+    /// The turn rows the conversation has built. A reference box, not
+    /// `@State`, so a realize during a scroll does not invalidate the body.
+    @State private var realized = RealizedTurns()
     /// Whether this screen ever saw the stream live.
     ///
     /// A conversation opened after its turn ended can still have the turn's
@@ -163,6 +172,13 @@ struct SessionDetailView: View {
     /// not been placed yet -- including one whose first read failed, so a
     /// late answer still gets its first frame at the bottom.
     @State private var placementRound = 0
+    /// One deferred reveal per placement. The page is already at the bottom as
+    /// far as the first geometry tick can tell; the rows that make its real
+    /// height have not been built yet. Revealing then is what showed a page
+    /// that corrected itself under the operator. The cover stays until a final
+    /// aim has run against the settled rows.
+    @State private var revealScheduled = false
+    @State private var revealRequest = 0
     /// The signed distance from the newest message: positive when it is still
     /// below the viewport, negative when the page sits past the end of the
     /// content. The placement's acceptance test, because a page parked *under*
@@ -185,9 +201,8 @@ struct SessionDetailView: View {
     /// The text of the last send, on its way from the field to the conversation.
     @State private var flight: Flight?
     /// Whether the operator has scrolled well away from the newest message.
-    @State private var farFromBottom = false
+    @State private var chrome = ScrollChrome()
     /// Messages that arrived below while the operator was reading further up.
-    @State private var unseen = 0
     /// How many pieces of this screen are reading the conversation right now.
     ///
     /// The single-flight lock, and it has to be one lock rather than a flag per
@@ -208,7 +223,6 @@ struct SessionDetailView: View {
     /// nudge from a journey -- a long way back takes the same travelling
     /// transition a long turn jump takes, not an animated scroll across rows
     /// nobody asked to see.
-    @State private var distanceFromBottom: CGFloat = 0
     @State private var scrollViewportHeight: CGFloat = 0
     /// Whether a finger has the conversation, or let go of it and it is still
     /// coasting or bouncing. Every correction below stands down while it does:
@@ -271,7 +285,7 @@ struct SessionDetailView: View {
     /// about and goes by the geometry alone.
     private var newestIsBuilt: Bool {
         guard let newest = shownTurns.last?.id else { return true }
-        return realizedTurnIds.contains(newest)
+        return realized.ids.contains(newest)
     }
 
     /// A number that moves whenever the live stream gains text, a block or its
@@ -472,8 +486,7 @@ struct SessionDetailView: View {
             replayedTurnId = nil
             streamTypingEnabled = false
             streamSawLive = false
-            realizedTurnIds = []
-            realizedTurnSequences = [:]
+            realized = RealizedTurns()
             // What was typed here last time and never sent. Read before the
             // first frame the field draws, so the paragraph is simply there
             // rather than appearing a moment after the screen does.
@@ -543,6 +556,19 @@ struct SessionDetailView: View {
         }
     }
 
+    /// The page's true end: room for the floating composer, and the anchor
+    /// every bottom aim names.
+    private var endSpacer: some View {
+        Color.clear
+            .frame(height: (composerReservedHeight ?? composerHeight) + 16)
+            .id(Self.endAnchor)
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.frame(in: .named(Self.space)).minY
+            } action: { bottom in
+                onConversationContentBottomChanged?(bottom)
+            }
+    }
+
     /// The conversation's scroll view, gated until its first position is known.
     ///
     /// The gate is opacity, hit-testing and the accessibility tree together,
@@ -594,14 +620,7 @@ struct SessionDetailView: View {
                 // screenful, and reserving it would grow the page by a
                 // screen and then shrink it back over the animation --
                 // the bounce that made a collapse feel broken.
-                Color.clear
-                    .frame(height: (composerReservedHeight ?? composerHeight) + 16)
-                    .id(Self.endAnchor)
-                    .onGeometryChange(for: CGFloat.self) { geometry in
-                        geometry.frame(in: .named(Self.space)).minY
-                    } action: { bottom in
-                        onConversationContentBottomChanged?(bottom)
-                    }
+                endSpacer
             }
             .padding(.horizontal, 18)
             .padding(.top, 8)
@@ -671,8 +690,8 @@ struct SessionDetailView: View {
             return distance > max(320, geometry.containerSize.height * 0.8)
         } action: { _, far in
             withMizarAnimation(.mizarBouncy) {
-                farFromBottom = far
-                if !far { unseen = 0 }
+                chrome.farFromBottom = far
+                if !far { chrome.unseen = 0 }
             }
         }
         // …and the mirror case: past the end of the content rather than
@@ -706,8 +725,8 @@ struct SessionDetailView: View {
             // same value back each time is a state write per tick; only a real
             // move is worth invalidating the screen for.
             let clamped = max(0, distance)
-            if abs(clamped - distanceFromBottom) > 1 {
-                distanceFromBottom = clamped
+            if abs(clamped - chrome.distance) > 1 {
+                chrome.distance = clamped
             }
         }
         // The placement's acceptance test: the same distance, kept signed.
@@ -739,6 +758,9 @@ struct SessionDetailView: View {
                 scrollViewportHeight = height
             }
         }
+        .onChange(of: revealRequest) { _, _ in
+            Task { await revealWhenPlaced(proxy: proxy) }
+        }
         .onChange(of: newMessageArrived) { _, _ in
             // A jump owns the position until it lands; a send mid-jump is
             // picked up by the jump's own final aim instead.
@@ -754,7 +776,7 @@ struct SessionDetailView: View {
         .onChange(of: composerHeight) { _, _ in
             // The dock arriving or the field growing is the bottom moving
             // up; a reader who was at the bottom stays at it.
-            guard !jumping, !composerAnimating, !userScrolling, !farFromBottom, didReachBottom else { return }
+            guard !jumping, !composerAnimating, !userScrolling, !chrome.farFromBottom, didReachBottom else { return }
             withMizarAnimation(.mizarSmooth) {
                 proxy.scrollTo(Self.endAnchor, anchor: .bottom)
             }
@@ -771,7 +793,7 @@ struct SessionDetailView: View {
                 } catch { return }
                 guard !Task.isCancelled else { return }
                 composerAnimating = false
-                guard !expanded, !jumping, !farFromBottom, didReachBottom else { return }
+                guard !expanded, !jumping, !chrome.farFromBottom, didReachBottom else { return }
                 proxy.scrollTo(Self.endAnchor, anchor: .bottom)
             }
         }
@@ -787,7 +809,9 @@ struct SessionDetailView: View {
             // initial placement is running -- before it has settled, "below
             // the viewport" is where the page is by construction, not a
             // message that arrived while somebody was reading.
-            if farFromBottom, placementRevealed, new > old, old > 0 { unseen += new - old }
+            let isFar = chrome.farFromBottom
+            guard isFar, placementRevealed, new > old, old > 0 else { return }
+            chrome.unseen += new - old
         }
         .onChange(of: newestContent) { _, _ in
             holdAtBottom(proxy: proxy)
@@ -829,16 +853,21 @@ struct SessionDetailView: View {
     /// a local retry, separately from the network failure state in the log.
     @ViewBuilder
     private var placementPlaceholder: some View {
-        // The failure card is gone on purpose. A position we could not verify
-        // is still a conversation: revealing it and correcting underneath is
-        // readable, while a full-screen "could not position" made the session
-        // impossible to read at all, and Retry just re-ran the same failing
-        // estimate. The page is revealed after the bounded attempt and the
-        // correction continues in the background.
-        ProgressView()
-            .controlSize(.regular)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityHidden(true)
+        // An opaque cover, not a transparent spinner. The page underneath is
+        // being aimed at the bottom with several no-animation scrolls; those
+        // aims were visible through the old overlay as a page that scrolled
+        // down on its own, started in the wrong place, or flashed the
+        // way-back button. Nothing under this cover is seen until it has
+        // arrived.
+        ZStack {
+            Color(.systemBackground)
+            ProgressView()
+                .controlSize(.regular)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading the conversation")
+        .accessibilityIdentifier("session.placement.cover")
     }
 
     /// The conversation itself.
@@ -888,13 +917,13 @@ struct SessionDetailView: View {
             typingAnswerId: typingAnswerId,
             onAnswerTypingStarted: noteAnswerTypingStarted,
             onTurnRealized: { id, built, sequence in
-                let current = realizedTurnSequences[id] ?? 0
+                let current = realized.sequences[id] ?? 0
                 guard sequence > current else { return }
-                realizedTurnSequences[id] = sequence
+                realized.sequences[id] = sequence
                 if built {
-                    realizedTurnIds.insert(id)
+                    realized.ids.insert(id)
                 } else {
-                    realizedTurnIds.remove(id)
+                    realized.ids.remove(id)
                 }
                 if built, id == shownTurns.last?.id {
                     finishInitialPlacement()
@@ -915,14 +944,11 @@ struct SessionDetailView: View {
                 // initial placement runs: the page is at the top by
                 // construction until it is placed, and "far from bottom" then
                 // describes the placement, not the operator.
-                if placementRevealed, farFromBottom, !jumping, !composerExpanded, !composerAnimating {
-                    JumpToLatest(unseen: unseen) {
-                        returnToLatest(proxy: proxy)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.trailing, 16)
-                    .transition(.pop)
-                }
+                JumpToLatestChrome(
+                    chrome: chrome,
+                    isAvailable: placementRevealed && !jumping && !composerExpanded && !composerAnimating,
+                    action: { returnToLatest(proxy: proxy) },
+                )
                 VStack(spacing: 8) {
                     // The dock leaves while the composer is expanded: the open
                     // field is the whole height of the screen, and a queue of
@@ -1032,7 +1058,7 @@ struct SessionDetailView: View {
     ///
     /// - Parameter proxy: the conversation's scroll view.
     private func returnToLatest(proxy: ScrollViewProxy) {
-        guard distanceFromBottom > max(600, scrollViewportHeight * 2) else {
+        guard chrome.distance > max(600, scrollViewportHeight * 2) else {
             withAnimation(Motion.pick(.mizarSmooth)) {
                 proxy.scrollTo(Self.endAnchor, anchor: .bottom)
             } completion: {
@@ -1072,6 +1098,41 @@ struct SessionDetailView: View {
         var transaction = Transaction()
         transaction.animation = nil
         transaction.disablesAnimations = true
+        // The end anchor lives after the last row. Far away it is not in the
+        // lazy stack at all, and `scrollTo` on an id that is not in the
+        // hierarchy does nothing -- the button then "does nothing" or leaves
+        // the page blank. Stage the newest turn first so there is a real row
+        // to aim at, restore the list, then aim at the end.
+        if let newest = shownTurns.last?.id {
+            if !newestIsBuilt {
+                withTransaction(transaction) { stagedTurn = newest }
+                await settleLayout()
+                guard isCurrentJump(generation) else {
+                    stagedTurn = nil
+                    jumping = false
+                    return
+                }
+                withTransaction(transaction) {
+                    proxy.scrollTo(newest, anchor: .bottom)
+                }
+                await settleLayout()
+                guard isCurrentJump(generation) else {
+                    stagedTurn = nil
+                    jumping = false
+                    return
+                }
+                withTransaction(transaction) {
+                    stagedTurn = nil
+                    proxy.scrollTo(newest, anchor: .bottom)
+                }
+                await settleLayout()
+            } else {
+                withTransaction(transaction) {
+                    proxy.scrollTo(newest, anchor: .bottom)
+                }
+                await settleLayout()
+            }
+        }
         withTransaction(transaction) {
             proxy.scrollTo(Self.endAnchor, anchor: .bottom)
         }
@@ -1200,7 +1261,7 @@ struct SessionDetailView: View {
         streamSawLive = false
         streamTypingEnabled = false
         let message = OutgoingMessage(text: text)
-        let fly = !farFromBottom && !Motion.reduced && ComposerGeometry.shared.field != .zero
+        let fly = !chrome.farFromBottom && !Motion.reduced && ComposerGeometry.shared.field != .zero
         withMizarAnimation(.mizarSmooth) {
             outgoing.append(OutgoingMessage(id: message.id, text: text, landed: !fly))
         }
@@ -1641,9 +1702,57 @@ struct SessionDetailView: View {
         // the operator, not to lock the session behind a card whose Retry
         // re-runs the same failing estimate.
         guard !Task.isCancelled, placement == .placing(generation: generation) else { return }
-        // One last aim with animations off, then reveal. The anchor keeps the
-        // page at the bottom as the rows settle; there is no second visible
-        // correction to watch.
+        // The budget did not accept, but the loaded page must not be held
+        // hostage. Schedule the same deferred reveal: it makes a final aim
+        // under the cover, then shows the conversation wherever it is.
+        scheduleInitialReveal()
+    }
+
+    /// Reveal the placed conversation, once.
+    private func finishInitialPlacement() {
+        // A geometry tick at the bottom only says the *estimates* put the page
+        // there. Schedule the reveal; the final aim runs after the rows have
+        // had a chance to realize, while the cover is still opaque.
+        guard !Task.isCancelled, !shownItems.isEmpty,
+              placementGeometry.value?.isAtBottom(tolerance: Self.placementTolerance) == true
+        else { return }
+        scheduleInitialReveal()
+    }
+
+    /// Ask for the one deferred reveal, if this placement still owns the page.
+    private func scheduleInitialReveal() {
+        guard case .placing = placement, !revealScheduled else { return }
+        revealScheduled = true
+        revealRequest &+= 1
+    }
+
+    /// The reveal itself: a final no-animation aim against settled rows, then
+    /// show the page. Runs under the cover, so none of the aims are seen.
+    private func revealWhenPlaced(proxy: ScrollViewProxy) async {
+        await settleLayout()
+        if ProcessInfo.processInfo.arguments.contains("-mizarSlowPlacement") {
+            try? await Task.sleep(for: .milliseconds(8000))
+        } else {
+            try? await Task.sleep(for: .milliseconds(180))
+        }
+        guard !Task.isCancelled, case .placing = placement else {
+            revealScheduled = false
+            return
+        }
+        // The end anchor lives after the last row; far away the lazy stack
+        // has not built it, and `scrollTo` on an id outside the hierarchy is
+        // a no-op. Put the newest turn in the stack first, from behind the
+        // cover, then aim at the true end.
+        if !newestIsBuilt {
+            await stageNewest(proxy: proxy, while: {
+                if case .placing = placement { return true }
+                return false
+            })
+        }
+        guard !Task.isCancelled, case .placing = placement else {
+            revealScheduled = false
+            return
+        }
         var transaction = Transaction()
         transaction.animation = nil
         transaction.disablesAnimations = true
@@ -1651,21 +1760,27 @@ struct SessionDetailView: View {
             proxy.scrollTo(Self.endAnchor, anchor: .bottom)
         }
         await settleLayout()
+        try? await Task.sleep(for: .milliseconds(80))
+        guard !Task.isCancelled, case .placing = placement else {
+            revealScheduled = false
+            return
+        }
+        withTransaction(transaction) {
+            proxy.scrollTo(Self.endAnchor, anchor: .bottom)
+        }
+        await settleLayout()
+        guard !Task.isCancelled, case .placing = placement else {
+            revealScheduled = false
+            return
+        }
         placement = .ready
         didReachBottom = true
-    }
-
-    /// Reveal the placed conversation, once.
-    private func finishInitialPlacement() {
-        // Geometry alone, not "the newest row was reported realized": a row
-        // that the lazy stack has built but whose deferred callback has not
-        // landed yet is not evidence of a bad position. Requiring both was
-        // what kept a readable conversation behind the failure card.
-        guard !Task.isCancelled, !shownItems.isEmpty,
-              placement.finishIfPositioned(placementGeometry.value, tolerance: Self.placementTolerance) else { return }
-        // The one-shot claim the composer's corrections read: the placement
-        // *is* the appearance's jump to the newest message.
-        didReachBottom = true
+        revealScheduled = false
+        // The page was far from the bottom by construction while it was being
+        // placed. Reset the chrome so the way-back button does not flash on
+        // entry; the next real scroll reports the truth.
+        chrome.farFromBottom = false
+        chrome.unseen = 0
     }
 
     /// Arrive at the bottom after an explicit move, and keep correcting.
@@ -1805,7 +1920,7 @@ struct SessionDetailView: View {
     /// a reader who has scrolled away.
     private func holdAtBottom(proxy: ScrollViewProxy) {
         guard placement == .ready, !jumping, !composerAnimating, !userScrolling,
-              distanceFromBottom <= Self.pinnedDistance else { return }
+              chrome.distance <= Self.pinnedDistance else { return }
         bottomSeek &+= 1
         let seek = bottomSeek
         Task { @MainActor in
@@ -1864,7 +1979,72 @@ struct SessionDetailView: View {
             turnIndex.glow(target)
             return
         }
-        await travel(to: target, anchor: anchor, proxy: proxy, generation: generation)
+        await jumpDirectly(to: target, anchor: anchor, proxy: proxy, generation: generation)
+    }
+
+    /// A far turn jump that arrives instead of travelling.
+    ///
+    /// The staging is the same as the old travel -- a row outside the lazy
+    /// stack cannot be scrolled to, so the target is drawn alone first -- but
+    /// there is no long fade, no directional shift and no page travelling
+    /// through the turns. A short fade covers the swap; the operator sees the
+    /// turn, not the journey.
+    private func jumpDirectly(
+        to target: String,
+        anchor: UnitPoint,
+        proxy: ScrollViewProxy,
+        generation: Int,
+    ) async {
+        jumping = true
+        jumpShift = 0
+        // Fast enough to hide the swap, slow enough not to blink.
+        withAnimation(Motion.pick(.easeOut(duration: 0.06))) {
+            jumpFade = 0.05
+        }
+        try? await Task.sleep(for: .milliseconds(70))
+        guard isCurrentJump(generation) else {
+            abortJump()
+            return
+        }
+
+        var transaction = Transaction()
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { stagedTurn = target }
+        await settleLayout()
+        guard isCurrentJump(generation) else {
+            stagedTurn = nil
+            abortJump()
+            return
+        }
+        withTransaction(transaction) {
+            proxy.scrollTo(target, anchor: .top)
+        }
+        await settleLayout()
+        guard isCurrentJump(generation) else {
+            stagedTurn = nil
+            abortJump()
+            return
+        }
+        withTransaction(transaction) {
+            stagedTurn = nil
+            proxy.scrollTo(target, anchor: anchor)
+        }
+        await settleLayout()
+        guard isCurrentJump(generation) else {
+            abortJump()
+            return
+        }
+        withTransaction(transaction) {
+            proxy.scrollTo(target, anchor: anchor)
+        }
+        withAnimation(Motion.pick(.easeIn(duration: 0.12))) {
+            jumpFade = 1
+        }
+        turnIndex.glow(target)
+        try? await Task.sleep(for: .milliseconds(120))
+        jumping = false
+        await correctJumpLanding(to: target, anchor: anchor, proxy: proxy, generation: generation)
     }
 
     /// Undo a jump that was overtaken before it could land.
@@ -2580,6 +2760,27 @@ private struct PlacementKey: Equatable {
 }
 
 /// Acceptance uses valid measured geometry, never an unmeasured default zero.
+/// The floating way-back button, observing only its own chrome.
+///
+/// The parent must not read `chrome`: if it did, every threshold crossing would
+/// rebuild the conversation body, which is the hitch this object exists to
+/// avoid.
+private struct JumpToLatestChrome: View {
+    let chrome: ScrollChrome
+    let isAvailable: Bool
+    let action: () -> Void
+
+    var body: some View {
+        if isAvailable, chrome.farFromBottom {
+            JumpToLatest(unseen: chrome.unseen, action: action)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.trailing, 16)
+                .transition(.pop)
+                .animation(.mizarSmooth, value: chrome.farFromBottom)
+        }
+    }
+}
+
 struct ConversationPlacementGeometry: Equatable {
     var contentHeight: CGFloat
     var viewportHeight: CGFloat

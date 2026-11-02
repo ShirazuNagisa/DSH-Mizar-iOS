@@ -752,3 +752,5 @@
 "The connection was refused with HTTP %lld." = "The connection was refused with HTTP %lld.";
 "The computer reported an error." = "The computer reported an error.";
 "The computer reported an error: %@" = "The computer reported an error: %@";
+
+"Loading the conversation" = "Loading the conversation";

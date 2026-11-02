@@ -591,6 +591,7 @@ class AppFlowTestBase: XCTestCase {
         states: Bool = false,
         longStates: Bool = false,
         hideSession: Bool = false,
+        slowPlacement: Bool = false,
         naming: Bool = true,
         freshStart: Bool = true,
         pairingURIs: [String]? = nil,
@@ -617,6 +618,9 @@ class AppFlowTestBase: XCTestCase {
             // subclass's port.
             pairingURIs: pairingURIs ?? [Self.mockPairingURI],
         )
+        if slowPlacement {
+            app.launchArguments += ["-mizarSlowPlacement"]
+        }
         if let contentSizeCategory {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategory]
         }

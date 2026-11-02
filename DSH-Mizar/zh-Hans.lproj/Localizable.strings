@@ -752,3 +752,5 @@
 "The connection was refused with HTTP %lld." = "连接被拒绝（HTTP %lld）。";
 "The computer reported an error." = "电脑报告了一个错误。";
 "The computer reported an error: %@" = "电脑报告了一个错误：%@";
+
+"Loading the conversation" = "正在加载会话";
