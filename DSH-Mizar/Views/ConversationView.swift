@@ -28,6 +28,9 @@ struct ConversationView: View {
     /// conversation could not ask for it.
     let sessionId: String
     let items: [ConversationItem]
+    /// Set when the lazy stack has lost every row on this page; render the
+    /// whole page eagerly instead.
+    var forceEager: Bool = false
     /// The conversation grouped into turns. Empty when the host sent no turn
     /// numbers, in which case the flat list is drawn instead.
     var turns: [ConversationTurn] = []
@@ -139,6 +142,7 @@ struct ConversationView: View {
     /// built there -- a blank conversation that needs a swipe. Eager layout is
     /// cheap for a page this small and cannot lose the rows.
     private var usesEagerStack: Bool {
+        if forceEager { return true }
         if turns.isEmpty { return items.count <= 40 }
         return turns.count <= 6
     }

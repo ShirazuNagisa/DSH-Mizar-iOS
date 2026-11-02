@@ -183,6 +183,10 @@ struct SessionDetailView: View {
     /// that lands under a reader must not yank them; a fresh page that lands
     /// during entry (the host replacing the cached copy) must be placed.
     @State private var userHasScrolled = false
+    /// A lazy page that reported no visible turn after landing is rebuilt
+    /// eagerly for this session; the measure is a hint, the eager rebuild is
+    /// the guarantee.
+    @State private var forceEager = false
     /// The signed distance from the newest message: positive when it is still
     /// below the viewport, negative when the page sits past the end of the
     /// content. The placement's acceptance test, because a page parked *under*
@@ -469,6 +473,7 @@ struct SessionDetailView: View {
             // state belongs to the one that was on screen.
             settledAnswerIds = []
             userHasScrolled = false
+            forceEager = false
             // And a different stream: the turn this screen watched in the last
             // session is history now, drawn by its own row.
             stream = TurnStream()
@@ -902,6 +907,7 @@ struct SessionDetailView: View {
         return ConversationView(
             sessionId: sessionId,
             items: shownItems,
+            forceEager: forceEager,
             turns: shownTurns,
             stagedTurn: stagedTurn,
             loading: loadingConversation,
@@ -1155,6 +1161,9 @@ struct SessionDetailView: View {
             proxy.scrollTo(Self.endAnchor, anchor: .bottom)
         }
         await settleLayout()
+        if turnIndex.visible.isEmpty {
+            await forceEagerAndLand(proxy: proxy)
+        }
         jumping = false
     }
 
@@ -1764,6 +1773,9 @@ struct SessionDetailView: View {
             revealScheduled = false
             return
         }
+        if turnIndex.visible.isEmpty {
+            await forceEagerAndLand(proxy: proxy)
+        }
         placement = .ready
         didReachBottom = true
         revealScheduled = false
@@ -2237,6 +2249,26 @@ struct SessionDetailView: View {
             }
             await settleLayout()
         }
+    }
+
+    /// Rebuild this page eagerly and put the true end under the viewport.
+    ///
+    /// `TurnIndex.visible` is only a hint: it can be empty on a page that is
+    /// fine. The cost of being wrong is an eager page; the cost of not
+    /// rebuilding is the blank conversation that a jump or a switch left
+    /// behind. The final aim runs after the eager rows exist.
+    private func forceEagerAndLand(proxy: ScrollViewProxy) async {
+        guard !forceEager else { return }
+        forceEager = true
+        await settleLayout()
+        try? await Task.sleep(for: .milliseconds(120))
+        var transaction = Transaction()
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(Self.endAnchor, anchor: .bottom)
+        }
+        await settleLayout()
     }
 
     /// Let the lazy stack build and lay out what it was just given.
