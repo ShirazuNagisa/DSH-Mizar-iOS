@@ -57,6 +57,8 @@ struct TurnResponseToolbar: View {
                             defer { branching = false }
                             do {
                                 try await model.forkSession(sessionId: sessionId, atSeq: seq)
+                            } catch let error as MizarError {
+                                failure = AppModel.displayMessage(for: error)
                             } catch {
                                 failure = error.localizedDescription
                             }

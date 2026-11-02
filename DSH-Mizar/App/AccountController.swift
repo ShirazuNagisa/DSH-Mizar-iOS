@@ -501,7 +501,7 @@ final class AccountController {
             desktops = try await client.desktops(token: session.token)
             desktopsError = nil
         } catch {
-            desktopsError = (error as? AccountError)?.message ?? error.localizedDescription
+            desktopsError = (error as? AccountError).map(message(for:)) ?? error.localizedDescription
         }
     }
 

@@ -139,7 +139,7 @@ struct HostListView: View {
                     .disabled(model.localAgent.state == .starting)
                     .accessibilityIdentifier("host.row.local")
 
-                    sectionHeader("我的电脑")
+                    sectionHeader("My computers")
                     ForEach(model.hosts, id: \.hostId) { host in
                         Button {
                             // A computer that serves three agents is asked which
@@ -183,7 +183,7 @@ struct HostListView: View {
                         }
                     }
                     if model.account.session?.isUsable != true, model.hosts.isEmpty {
-                        Text("登录后，这里会出现你的电脑。")
+                        Text("Your computers appear here after you sign in.")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -191,7 +191,7 @@ struct HostListView: View {
                             .padding(.vertical, 4)
                     }
 
-                    Text("点一下电脑，选择要连接的 Agent。")
+                    Text("Tap a computer to choose the agent to connect to.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -611,13 +611,13 @@ struct UnpairedView<Mark: View>: View {
                     if signedIn {
                         // Who this phone thinks it is: a wrong account is the
                         // one failure this screen cannot otherwise show.
-                        Text(model?.account.user?.email ?? "已登录")
+                        Text(model?.account.user?.email ?? String(localized: "Signed in"))
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.5))
                             .padding(.top, 6)
                     }
                     if signedIn {
-                        Text("用同一个账户登录过的电脑都在下面，点一下就能连。")
+                        Text("Computers signed in to the same account are below; tap one to connect.")
                             .font(.body)
                             .foregroundStyle(.white.opacity(0.7))
                             .multilineTextAlignment(.center)
@@ -636,7 +636,7 @@ struct UnpairedView<Mark: View>: View {
                         }
                         if let model, !model.account.desktops.isEmpty,
                            model.account.desktops.allSatisfy({ !$0.online }) {
-                            Text("电脑显示离线：请确认电脑上的 AGI Mizar 正在运行。")
+                            Text("The computer is offline. Make sure AGI Mizar is running on it.")
                                 .font(.footnote)
                                 .foregroundStyle(.white.opacity(0.55))
                                 .multilineTextAlignment(.center)
@@ -646,7 +646,7 @@ struct UnpairedView<Mark: View>: View {
                         Button {
                             Task { await model?.account.loadDesktops() }
                         } label: {
-                            Label("刷新列表", systemImage: "arrow.clockwise")
+                            Label("Refresh list", systemImage: "arrow.clockwise")
                                 .font(.subheadline.weight(.medium))
                                 .foregroundStyle(.white.opacity(0.75))
                                 .padding(.vertical, 10)
@@ -702,7 +702,7 @@ struct UnpairedView<Mark: View>: View {
         VStack(spacing: 0) {
             let desktops = model?.account.desktops ?? []
             if desktops.isEmpty {
-                Text("正在读取电脑…")
+                Text("Reading the computer…")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))
                     .padding(.vertical, 18)
@@ -772,7 +772,7 @@ struct AccountDesktopRow: View {
                     .font(.body.weight(.medium))
                     .foregroundStyle(desktop.online ? .primary : .secondary)
                     .lineLimit(1)
-                Text(desktop.online ? "在线 · 点一下选择 Agent" : "离线")
+                Text(desktop.online ? String(localized: "Online · tap to choose an agent") : String(localized: "Offline"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -792,7 +792,7 @@ struct AccountDesktopRow: View {
 }
 
 /// A quiet label above a group of rows.
-private func sectionHeader(_ title: String) -> some View {
+private func sectionHeader(_ title: LocalizedStringKey) -> some View {
     Text(title)
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)

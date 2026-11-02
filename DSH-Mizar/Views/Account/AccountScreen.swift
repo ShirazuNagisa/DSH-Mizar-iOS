@@ -800,7 +800,7 @@ struct AccountScreen: View {
                     at: AccountController.origin,
                 )
             } catch let error as AccountError {
-                desktopFailure = error.message
+                desktopFailure = model.account.message(for: error)
             } catch {
                 desktopFailure = error.localizedDescription
             }

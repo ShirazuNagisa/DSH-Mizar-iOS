@@ -91,7 +91,7 @@ struct EnginePickerSheet: View {
                                 Text("All agents")
                                     .font(.body.weight(.medium))
                                     .foregroundStyle(.primary)
-                                Text("这台电脑上的全部会话，混在一起")
+                                Text("Every session on this computer, mixed together")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

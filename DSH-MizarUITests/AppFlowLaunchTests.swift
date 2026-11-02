@@ -58,6 +58,25 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         expect(reopened.textViews["composer.field"], "the last conversation was not restored")
     }
 
+    /// The computer list and its empty states follow the interface language.
+    ///
+    /// These were hard-coded Chinese before the localisation pass: the English
+    /// build showed Chinese, and the Chinese build had no table entry to fall
+    /// back on. The keys now exist in both languages.
+    func testTheHostListSpeaksChinese() {
+        let app = launch(session: nil, language: "zh-Hans", pending: false)
+        openSidebar(app)
+        let hosts = app.buttons["sessions.hosts"]
+        expect(hosts, "the computer picker is missing")
+        hosts.tap()
+        expect(app.staticTexts["我的电脑"], "the computer section is not translated")
+        expect(
+            app.staticTexts["点一下电脑，选择要连接的 Agent。"],
+            "the host list's hint is not translated",
+        )
+        expect(app.staticTexts["Mock Mac (fixture)"], "the paired computer is missing")
+    }
+
     func testAnUnpairedLaunchOffersPairing() throws {
         throw XCTSkip("migrated to snapshot: unpairedLaunch (HostListView golden + Sidebar contract); placeholder until map v2")
         let app = launch(pairing: false, session: nil)

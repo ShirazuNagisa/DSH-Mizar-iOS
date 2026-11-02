@@ -1730,7 +1730,12 @@ final class AppModel {
 
     /// Surface a failed account connection on the banner the app already has.
     func reportAccountFailure(_ error: any Error) {
-        let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        let text: String
+        if let accountError = error as? AccountError {
+            text = account.message(for: accountError)
+        } else {
+            text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
         lastError = text.isEmpty ? nil : text
     }
 
@@ -3603,7 +3608,7 @@ final class AppModel {
     @discardableResult
     func archiveSession(_ sessionId: String) async -> Bool {
         guard let connection else {
-            lastError = "Not connected to the computer."
+            lastError = String(localized: "Not connected to the computer.")
             return false
         }
         let payload = JSONValue.object(["sessionId": .string(sessionId)])
@@ -6457,7 +6462,10 @@ final class AppModel {
             // it. Over a relay the diagnosis still runs, because a handshake
             // that never completed is the one host-shaped failure that is really
             // about the hop.
-            return mizar.message
+            return Self.displayMessage(for: mizar)
+        }
+        if let refused = error as? WebSocketUpgradeRefused {
+            return String(format: String(localized: "The connection was refused with HTTP %lld."), refused.status)
         }
         guard let authority else { return error.localizedDescription }
         return ConnectionDiagnosis.of(
@@ -6465,6 +6473,53 @@ final class AppModel {
             authority: authority,
             over: throughServer ? .server : .direct,
         ).message
+    }
+
+    /// A host refusal, in the operator's language.
+    ///
+    /// The wire's ``MizarError/message`` is a log line and is English. For a
+    /// code this build knows, the app owns the sentence; an unknown code (a
+    /// newer host) keeps the host's detail rather than inventing a meaning.
+    static func displayMessage(for error: MizarError) -> String {
+        guard let known = error.known else {
+            // A newer host's code: keep its detail, inside a sentence the
+            // operator can read. The detail itself is the host's English.
+            return error.message.isEmpty
+                ? String(localized: "The computer reported an error.")
+                : String(format: String(localized: "The computer reported an error: %@"), error.message)
+        }
+        switch known {
+        case .protocolVersionMismatch:
+            return String(localized: "The computer's Mizar plugin speaks a different protocol version. Update both.")
+        case .malformedFrame:
+            return String(localized: "The computer sent a frame this app cannot read. Update the plugin.")
+        case .unauthenticated:
+            return String(localized: "This computer no longer recognises this pairing. Pair again.")
+        case .pairingRequired:
+            return String(localized: "This computer requires pairing first.")
+        case .pairingCodeInvalid:
+            return String(localized: "That pairing code is not valid.")
+        case .pairingCodeExpired:
+            return String(localized: "That pairing code has expired. Refresh it on the computer.")
+        case .pairingCodeUnknown:
+            return String(localized: "The computer does not know that pairing code. Refresh it on the computer.")
+        case .rateLimited:
+            return String(localized: "Too many requests. Wait a moment and try again.")
+        case .deviceRevoked:
+            return String(localized: "This device was removed on the computer. Pair again.")
+        case .writerHeld:
+            return String(localized: "The desktop is using this session. Try again when it is free.")
+        case .modelUnavailable:
+            return String(localized: "The computer does not offer that model. Choose another.")
+        case .remoteError:
+            return String(localized: "The agent on the computer returned an error.")
+        case .notImplemented:
+            return String(localized: "The computer's plugin is too old for this action. Update it.")
+        case .internalError:
+            return String(localized: "The computer hit an internal error.")
+        case .responseTooLarge:
+            return String(localized: "The answer is too large for this connection to carry.")
+        }
     }
 
     /// One route's failure, as the picker below sees it.

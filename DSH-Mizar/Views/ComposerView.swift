@@ -256,7 +256,7 @@ struct ComposerView: View {
         ) { result in
             switch result {
             case .success(let urls): addFiles(urls)
-            case .failure(let error): attachmentError = error.localizedDescription
+            case .failure(let error): attachmentError = Self.describeAttachmentFailure(error)
             }
         }
         .sheet(isPresented: $showingPaywall) {
@@ -572,7 +572,7 @@ struct ComposerView: View {
             case "NOT_IMPLEMENTED", "MALFORMED_FRAME", "UPLOAD_UNKNOWN":
                 return String(localized: "This computer's DSH plugin is too old to receive attachments. Update DSH on the computer, then try again.")
             default:
-                return mizar.message
+                return AppModel.displayMessage(for: mizar)
             }
         }
         return error.localizedDescription
