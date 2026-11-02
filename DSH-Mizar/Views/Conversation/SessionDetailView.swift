@@ -801,6 +801,13 @@ struct SessionDetailView: View {
                 proxy.scrollTo(Self.endAnchor, anchor: .bottom)
             }
         }
+        .onChange(of: turnIndex.visible) { _, visible in
+            // Content arrived (a scroll, a reload, a late layout): the page is
+            // no longer stalled, so take the banner away.
+            if !visible.isEmpty, displayStalled {
+                displayStalled = false
+            }
+        }
         .onChange(of: turnIndex.jumpCount) { _, _ in
             // A turn chosen in the index: go there, then let it glow once
             // so the eye finds it.
