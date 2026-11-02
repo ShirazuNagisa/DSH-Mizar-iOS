@@ -93,6 +93,7 @@ let deliverablesPresent = false
 // therefore cannot accidentally issue balance queries or expose account data.
 let balanceVariant = 'old'
 let longReaderFixture = false
+let hideSessionFromList = false
 let markdownReaderFixture = false
 const performanceMarkdown = (turn, role) => `# 固定性能样本 ${turn} ${role}\n\n正文 **强调** 与中文，保持布局可重复。\n\n- 第一项\n- 第二项\n\n\`\`\`swift\nlet value = ${turn}\n\`\`\`\n\n| 列A | 列B |\n| --- | --- |\n| 甲 | 乙 |`
 const forkRequests = []
@@ -971,7 +972,9 @@ function answer(frame) {
               .map(({ prompts, ...row }) => row),
             // An archived session is gone from the list, exactly as an archived
             // one is gone from the workspace that held it.
-            ...(archivedSessionIds.has(SESSION.sessionId) ? [] : [{ ...SESSION, running: sessionRunning }]),
+            ...(archivedSessionIds.has(SESSION.sessionId) || hideSessionFromList
+              ? []
+              : [{ ...SESSION, running: sessionRunning }]),
             ...(archivedSessionIds.has(ORPHANED_SESSION.sessionId) ? [] : [ORPHANED_SESSION]),
             // A forked conversation and a delegated child, both optional. The
             // fork is a top-level session with a parent and no `origin`; the
@@ -2537,6 +2540,7 @@ const server = createServer((request, response) => {
     sessionRunning = !(request.url ?? '').includes('running=0')
     // `?states=1` plays one live state sequence for the fixture session; the
     // phone's stream is empty without the binary channel.
+    hideSessionFromList = (request.url ?? '').includes('hideSession=1')
     stateStream = (request.url ?? '').includes('states=long')
       ? 'long'
       : (request.url ?? '').includes('states=1') ? 'short' : ''

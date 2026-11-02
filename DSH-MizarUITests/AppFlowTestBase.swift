@@ -99,6 +99,7 @@ class AppFlowTestBase: XCTestCase {
         running: Bool = true,
         states: Bool = false,
         longStates: Bool = false,
+        hideSession: Bool = false,
     ) {
         var query = pending ? "" : "?pending=0"
         if slow > 0 { query += query.isEmpty ? "?slow=\(slow)" : "&slow=\(slow)" }
@@ -113,6 +114,7 @@ class AppFlowTestBase: XCTestCase {
         if !running { query += query.isEmpty ? "?running=0" : "&running=0" }
         // A host that pushes a live state sequence: the stream exists only when
         // the binary channel does.
+        if hideSession { query += query.isEmpty ? "?hideSession=1" : "&hideSession=1" }
         if longStates { query += query.isEmpty ? "?states=long" : "&states=long" }
         else if states { query += query.isEmpty ? "?states=1" : "&states=1" }
         guard let url = URL(string: "http://127.0.0.1:\(mockPort)/reset\(query)") else { return }
@@ -588,6 +590,7 @@ class AppFlowTestBase: XCTestCase {
         running: Bool = true,
         states: Bool = false,
         longStates: Bool = false,
+        hideSession: Bool = false,
         naming: Bool = true,
         freshStart: Bool = true,
         pairingURIs: [String]? = nil,
@@ -601,6 +604,7 @@ class AppFlowTestBase: XCTestCase {
             running: running,
             states: states,
             longStates: longStates,
+            hideSession: hideSession,
         )
         let app = XCUIApplication()
         app.launchArguments = Self.arguments(

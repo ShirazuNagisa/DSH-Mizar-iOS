@@ -478,10 +478,6 @@ final class AppModel {
     private(set) var firstLoad = false
     /// Changes even when navigation leaves and later returns to the same id.
     private var selectionGeneration: UInt64 = 0
-    /// The computer whose saved window has already been offered to this launch.
-    /// One attempt per connection: a later session-list refresh must not reopen
-    /// a conversation the operator deliberately left.
-    private var restoredSelectionForHost: String?
     /// The session the conversation screen is showing.
     var selectedSessionId: String? {
         didSet {
@@ -1493,19 +1489,16 @@ final class AppModel {
     /// id. The session must still exist, or the app opens on the home page
     /// rather than on a conversation the host no longer has.
     private func restoreLastSessionIfNeeded() {
-        guard let host,
-              Self.launchSelectedSession == nil,
-              selectedSessionId == nil,
-              restoredSelectionForHost != host.hostId
-        else { return }
-        restoredSelectionForHost = host.hostId
+        guard let host, Self.launchSelectedSession == nil, selectedSessionId == nil else { return }
         let key = "lastSession." + host.hostId
-        guard let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty,
-              sessions.contains(where: { $0.sessionId == saved })
-        else {
-            UserDefaults.standard.removeObject(forKey: key)
-            return
-        }
+        guard let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty else { return }
+        // Do not require the first session list to contain it. The read that
+        // follows a relaunch can be empty, still in flight, or filtered to one
+        // engine while the saved conversation belongs to another; none of those
+        // is evidence that the conversation is gone. The detail screen can open
+        // a session by id and will say so if the host no longer has it, which is
+        // still a window, not a silent jump to the home page.
+        log.add(.app, "restoring the last session \(saved)")
         selectedSessionId = saved
     }
 
@@ -4221,6 +4214,7 @@ final class AppModel {
             }
             sessions = Self.scoped(result.items, to: engineScope)
             sessionsAreKnown = true
+            restoreLastSessionIfNeeded()
             await refreshWorkspaces()
             lastError = nil
             // Written after the workspaces, so the two halves of one answer land

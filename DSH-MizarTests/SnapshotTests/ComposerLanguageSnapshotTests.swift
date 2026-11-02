@@ -127,6 +127,9 @@ struct ComposerLanguageSnapshotTests {
         #expect(!atBottom(2000, 600, 0, 600))
         #expect(!atBottom(2000, 600, 2001, 2601))
         #expect(atBottom(200, 600, 0, 600))
+        // A short page pushed down a few points is still entirely on screen;
+        // the composer reserve used to make exactly this shape fail.
+        #expect(atBottom(200, 600, 10, 610))
         #expect(!atBottom(200, 600, 300, 900))
         #expect(!atBottom(0, 600, 0, 600))
         #expect(!atBottom(200, 0, 0, 200))
@@ -166,7 +169,9 @@ struct ComposerLanguageSnapshotTests {
         #expect(state == .placing(generation: 9))
         let acceptedTop = state.finishIfPositioned(top, tolerance: 4)
         #expect(!acceptedTop)
-        #expect(!state.isRevealed)
+        // A failed placement no longer gates the page: the conversation is
+        // revealed at the best position and corrected underneath.
+        #expect(state.isRevealed)
         let acceptedBottom = state.finishIfPositioned(bottom, tolerance: 4)
         #expect(acceptedBottom)
         #expect(state == .ready)

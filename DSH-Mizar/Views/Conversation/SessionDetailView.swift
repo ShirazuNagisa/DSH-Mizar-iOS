@@ -645,7 +645,7 @@ struct SessionDetailView: View {
         // to the bottom, each re-measure moved the page under the thumb, and a
         // scroll towards the newest message was pulled back again and again.
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(jumping || composerAnimating || userScrolling || typingBodies > 0 ? nil : .bottom, for: .sizeChanges)
+        .defaultScrollAnchor(jumping || composerAnimating || userScrolling ? nil : .bottom, for: .sizeChanges)
         .onScrollPhaseChange { _, phase in
             // Whatever the finger set going: a drag, the coast after it, and
             // the spring back from past either end. Not `.animating`, which
@@ -829,25 +829,16 @@ struct SessionDetailView: View {
     /// a local retry, separately from the network failure state in the log.
     @ViewBuilder
     private var placementPlaceholder: some View {
-        if placement == .positioningFailed {
-            ContentUnavailableView {
-                Label("Could not position the conversation", systemImage: "arrow.up.and.down")
-            } description: {
-                Text("Your messages are loaded. Try showing the latest message again.")
-            } actions: {
-                Button("Retry") {
-                    placementRound += 1
-                    placement = .placing(generation: placementRound)
-                }
-                .accessibilityIdentifier("session.placement.retry")
-            }
-            .accessibilityIdentifier("session.placement.failed")
-        } else {
-            ProgressView()
-                .controlSize(.regular)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityHidden(true)
-        }
+        // The failure card is gone on purpose. A position we could not verify
+        // is still a conversation: revealing it and correcting underneath is
+        // readable, while a full-screen "could not position" made the session
+        // impossible to read at all, and Retry just re-ran the same failing
+        // estimate. The page is revealed after the bounded attempt and the
+        // correction continues in the background.
+        ProgressView()
+            .controlSize(.regular)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityHidden(true)
     }
 
     /// The conversation itself.
@@ -1055,7 +1046,55 @@ struct SessionDetailView: View {
             }
             return
         }
-        Task { await travelToBottom(proxy: proxy) }
+        Task { await jumpToBottom(proxy: proxy) }
+    }
+
+    /// A long way back is a jump, not a journey.
+    ///
+    /// The old path ran its staging and its seek while the page was visible:
+    /// a fast facsimile of the operator scrolling through every turn. What was
+    /// asked for is "take me to the newest message", so the page fades out,
+    /// the scroll jumps with animations off, and the page fades in at the
+    /// bottom. The fade hides the jump; there is no travel to watch.
+    private func jumpToBottom(proxy: ScrollViewProxy) async {
+        jumpGeneration &+= 1
+        let generation = jumpGeneration
+        jumping = true
+        jumpShift = 0
+        withAnimation(Motion.pick(.easeOut(duration: 0.08))) {
+            jumpFade = 0.12
+        }
+        try? await Task.sleep(for: .milliseconds(90))
+        guard isCurrentJump(generation) else {
+            jumping = false
+            return
+        }
+        var transaction = Transaction()
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(Self.endAnchor, anchor: .bottom)
+        }
+        await settleLayout()
+        guard isCurrentJump(generation) else {
+            jumping = false
+            return
+        }
+        withTransaction(transaction) {
+            proxy.scrollTo(Self.endAnchor, anchor: .bottom)
+        }
+        _ = await seekBottom(proxy: proxy, attempts: 8, while: {
+            isCurrentJump(generation)
+        }, stopsWhenStill: true)
+        guard isCurrentJump(generation) else {
+            jumping = false
+            return
+        }
+        withAnimation(Motion.pick(.easeIn(duration: 0.16))) {
+            jumpFade = 1
+        }
+        try? await Task.sleep(for: .milliseconds(170))
+        jumping = false
     }
 
     /// The long way back to the newest message: the page dips, the scroll
@@ -1597,15 +1636,32 @@ struct SessionDetailView: View {
             finishInitialPlacement()
             return
         }
-        // Do not reveal an unverified position. Keep a stable, actionable
-        // placeholder; retrying positioning does not launch another network read.
+        // Reveal anyway. The conversation is already loaded; a position that
+        // did not converge in the budget is a reason to keep correcting under
+        // the operator, not to lock the session behind a card whose Retry
+        // re-runs the same failing estimate.
         guard !Task.isCancelled, placement == .placing(generation: generation) else { return }
-        placement = .positioningFailed
+        // One last aim with animations off, then reveal. The anchor keeps the
+        // page at the bottom as the rows settle; there is no second visible
+        // correction to watch.
+        var transaction = Transaction()
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(Self.endAnchor, anchor: .bottom)
+        }
+        await settleLayout()
+        placement = .ready
+        didReachBottom = true
     }
 
     /// Reveal the placed conversation, once.
     private func finishInitialPlacement() {
-        guard !Task.isCancelled, !shownItems.isEmpty, newestIsBuilt,
+        // Geometry alone, not "the newest row was reported realized": a row
+        // that the lazy stack has built but whose deferred callback has not
+        // landed yet is not evidence of a bad position. Requiring both was
+        // what kept a readable conversation behind the failure card.
+        guard !Task.isCancelled, !shownItems.isEmpty,
               placement.finishIfPositioned(placementGeometry.value, tolerance: Self.placementTolerance) else { return }
         // The one-shot claim the composer's corrections read: the placement
         // *is* the appearance's jump to the newest message.
@@ -1693,8 +1749,7 @@ struct SessionDetailView: View {
             guard (try? await Task.sleep(for: .milliseconds(Self.placementAttemptSpacing))) != nil,
                   !Task.isCancelled, wanted() else { return false }
             let current = placementGeometry.value
-            if newestIsBuilt,
-               current?.isAtBottom(tolerance: Self.placementTolerance) == true {
+            if current?.isAtBottom(tolerance: Self.placementTolerance) == true {
                 return true
             }
             // An explicit arrival can be parked at the bottom already (or the
@@ -1750,7 +1805,7 @@ struct SessionDetailView: View {
     /// a reader who has scrolled away.
     private func holdAtBottom(proxy: ScrollViewProxy) {
         guard placement == .ready, !jumping, !composerAnimating, !userScrolling,
-              typingBodies == 0, distanceFromBottom <= Self.pinnedDistance else { return }
+              distanceFromBottom <= Self.pinnedDistance else { return }
         bottomSeek &+= 1
         let seek = bottomSeek
         Task { @MainActor in
@@ -2500,8 +2555,8 @@ enum InitialPlacement: Equatable {
     /// Whether the message area may be shown and touched.
     var isRevealed: Bool {
         switch self {
-        case .ready, .navigating, .empty, .failed: return true
-        case .waitingForContent, .placing, .positioningFailed: return false
+        case .ready, .navigating, .empty, .failed, .positioningFailed: return true
+        case .waitingForContent, .placing: return false
         }
     }
 }
@@ -2546,6 +2601,15 @@ struct ConversationPlacementGeometry: Equatable {
         let usableHeight = usableMaxY - usableMinY
         guard usableHeight.isFinite, usableHeight > 0 else { return false }
         if abs(contentHeight - usableMaxY) <= tolerance { return true }
+        // A conversation shorter than the viewport has no scrollable bottom;
+        // where it sits is the bottom. Accept it unless the viewport is wholly
+        // past the content -- the shape that showed the blank page. The old
+        // check also demanded the page be at the very top, which a short page
+        // pushed down a few points by the composer reserve failed, so a
+        // readable three-turn session sat behind the failure card.
+        if contentHeight <= viewportHeight + tolerance {
+            return visibleMinY < contentHeight - tolerance
+        }
         // A short, top-aligned conversation is already entirely visible.
         // A viewport wholly below the content must not pass this branch.
         return contentHeight <= usableHeight + tolerance

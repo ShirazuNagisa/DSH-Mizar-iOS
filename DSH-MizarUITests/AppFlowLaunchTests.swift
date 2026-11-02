@@ -77,6 +77,44 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         expect(app.staticTexts["Mock Mac (fixture)"], "the paired computer is missing")
     }
 
+    /// The saved window is restored even when the first list read omits it.
+    ///
+    /// A relaunch's first `session.list` can be empty, still in flight, or
+    /// filtered to one engine; none of those means the conversation is gone.
+    /// The old restore deleted the remembered id when the list did not contain
+    /// it, which is why a background kill came back to the home page.
+    func testTheLastConversationIsRestoredEvenIfTheFirstListOmitsIt() {
+        let first = launch(session: "first", running: false, freshStart: true)
+        expect(first.textViews["composer.field"], "the first conversation never opened")
+        first.terminate()
+
+        let reopened = launch(
+            session: nil,
+            running: false,
+            hideSession: true,
+            freshStart: false,
+        )
+        expect(
+            reopened.textViews["composer.field"],
+            "the saved conversation was not restored when the list omitted it",
+        )
+    }
+
+    /// Suspending and returning (without the system ending the app) keeps the
+    /// conversation on screen.
+    func testReturningFromTheBackgroundKeepsTheConversation() {
+        let app = launch(session: "first", running: false)
+        expect(app.textViews["composer.field"], "the conversation never opened")
+        XCUIDevice.shared.press(.home)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        app.activate()
+        expect(app.textViews["composer.field"], "returning from the background lost the conversation")
+        XCTAssertFalse(
+            app.staticTexts["Pick up where you left off"].exists,
+            "returning from the background landed on the home page",
+        )
+    }
+
     func testAnUnpairedLaunchOffersPairing() throws {
         throw XCTSkip("migrated to snapshot: unpairedLaunch (HostListView golden + Sidebar contract); placeholder until map v2")
         let app = launch(pairing: false, session: nil)

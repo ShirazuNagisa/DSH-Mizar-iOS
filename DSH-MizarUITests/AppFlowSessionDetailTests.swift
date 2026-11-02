@@ -71,6 +71,123 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         XCTAssertTrue(app.textViews["composer.field"].isHittable, "the screen stopped responding after scrolling")
     }
 
+    /// Jumping between a long conversation and another one must always land
+    /// on the long one's newest turn -- no blank below it, no visible twitch.
+    ///
+    /// The fixture is the reader conversation (24 turns, long bodies) and the
+    /// orphan session next to it. The test switches back and forth three times
+    /// and checks the newest turn is on screen after each open. A screenshot
+    /// per arrival is attached for visual inspection.
+    func testSwitchingLongSessionsAlwaysLandsOnTheNewestTurn() {
+        let app = launch(pending: false, running: false)
+
+        let fixture = DispatchSemaphore(value: 0)
+        let request = URLSession.shared.dataTask(
+            with: URL(string: "http://127.0.0.1:\(Self.mockPort)/reader?long=1")!,
+        ) { _, _, _ in fixture.signal() }
+        request.resume()
+        XCTAssertEqual(fixture.wait(timeout: .now() + 5), .success, "the reader fixture did not load")
+        app.terminate()
+        app.launch()
+        expect(app.staticTexts["turn.24.usage"], "the long conversation did not open at its newest turn")
+
+        let demo = app.buttons["workspace./Users/you/projects/demo"]
+        let mock = sessionRow(in: app, titled: "Mock session", in: "demo")
+        let orphanGroup = app.buttons["workspace.not-in-a-workspace"]
+        let orphan = sessionRow(in: app, titled: "Orphan session", in: "deleted-workspace")
+
+        for round in 0..<3 {
+            openSidebar(app)
+            XCTAssertTrue(expand(orphanGroup, revealing: orphan), "the orphan session is missing")
+            orphan.tap()
+            expect(app.staticTexts["turn.24.usage"], "the orphan conversation did not open")
+            XCTAssertFalse(
+                app.descendants(matching: .any)["session.placement.failed"].exists,
+                "the orphan conversation could not be positioned",
+            )
+
+            openSidebar(app)
+            XCTAssertTrue(expand(demo, revealing: mock), "the long session is missing")
+            mock.tap()
+            let marker = app.staticTexts["turn.24.usage"]
+            expect(marker, "the long conversation did not return to its newest turn (round \(round))")
+            XCTAssertTrue(marker.isHittable, "the newest turn is off screen (round \(round))")
+            // The first 350 ms are where the late-row corrections used to be
+            // visible. Two samples in that window must agree.
+            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+            let early = marker.frame
+            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+            XCTAssertEqual(early, marker.frame, "the page moved within 350 ms of landing (round \(round))")
+            XCTAssertFalse(
+                app.descendants(matching: .any)["session.placement.failed"].exists,
+                "the long conversation could not be positioned (round \(round))",
+            )
+            // The page has landed. Give the settling corrections their full
+            // window, then measure the newest turn's frame twice: if the page
+            // is still moving, the operator sees the twitch.
+            RunLoop.current.run(until: Date().addingTimeInterval(1.6))
+            let settled = marker.frame
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            XCTAssertEqual(
+                marker.frame,
+                settled,
+                "the page kept moving after landing (round \(round))",
+            )
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "switch-round-\(round)"
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
+    }
+
+    /// The short conversations are the shape that used to fail placement.
+    ///
+    /// A three-turn page can be shorter than the viewport; the old acceptance
+    /// demanded the page be at the very top and refused a short page pushed
+    /// down by the composer reserve, which produced the "could not position"
+    /// card with no way in. Switch between the fixture's two short sessions and
+    /// require readable content and a still frame each time.
+    func testSwitchingShortSessionsAlwaysLandsOnTheNewestTurn() {
+        let app = launch(session: "first", running: false)
+
+        let demo = app.buttons["workspace./Users/you/projects/demo"]
+        let mock = sessionRow(in: app, titled: "Mock session", in: "demo")
+        let orphanGroup = app.buttons["workspace.not-in-a-workspace"]
+        let orphan = sessionRow(in: app, titled: "Orphan session", in: "deleted-workspace")
+
+        for round in 0..<3 {
+            openSidebar(app)
+            XCTAssertTrue(expand(orphanGroup, revealing: orphan), "the orphan session is missing")
+            orphan.tap()
+            let orphanText = app.staticTexts["A different session, a different answer."]
+            expect(orphanText, "the short orphan conversation did not open (round \(round))")
+            XCTAssertFalse(
+                app.descendants(matching: .any)["session.placement.failed"].exists,
+                "the short orphan conversation could not be positioned",
+            )
+
+            openSidebar(app)
+            XCTAssertTrue(expand(demo, revealing: mock), "the short session is missing")
+            mock.tap()
+            let newest = app.staticTexts["Two files changed, and it still fails."]
+            expect(newest, "the short conversation did not open (round \(round))")
+            XCTAssertFalse(
+                app.descendants(matching: .any)["session.placement.failed"].exists,
+                "the short conversation could not be positioned",
+            )
+
+            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+            let early = newest.frame
+            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+            XCTAssertEqual(early, newest.frame, "the short page moved after landing (round \(round))")
+
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "short-round-\(round)"
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
+    }
+
     func testBalanceSupportMatrixAndExplicitRefresh() {
         let app = launch(pending: false, running: false, contentSizeCategory: "UICTContentSizeCategoryAccessibilityXXXL")
         openSidebar(app)
@@ -798,6 +915,16 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
         XCTAssertTrue(landed, "the way-back button left the page away from the newest turn")
+        // Immediately after the jump the page must already be still.
+        let early = newest.frame
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertEqual(early, newest.frame, "the page moved right after the jump landed")
+        // A jump owns the page until it lands, then it must be still: two
+        // measurements after the fade are the same frame.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        let settled = newest.frame
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(newest.frame, settled, "the page kept moving after the jump landed")
     }
 
     func testRepeatedScrollingNeverLocksTheConversation() {
