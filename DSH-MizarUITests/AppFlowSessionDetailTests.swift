@@ -242,6 +242,44 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         )
     }
 
+    /// A bad bottom anchor must not produce a blank page.
+    ///
+    /// The launch flag adds 5000 pt to the end spacer, which is exactly the
+    /// class of bad end estimate that used to park the viewport in empty space.
+    /// The entry invariant must still leave a turn row on screen.
+    func testABadBottomAnchorStillShowsATurn() {
+        let app = launch(pending: false, running: false, hugeSpacer: true)
+        let newest = app.staticTexts["Two files changed, and it still fails."]
+        expect(newest, "a bad bottom anchor left the conversation blank")
+        XCTAssertTrue(newest.isHittable, "the newest turn was loaded but not on screen")
+
+        // The way-back button is legitimate here: the true end is 5000 pt down.
+        // Tapping it must not park the page in that empty space either.
+        let jump = app.buttons["conversation.jumpToLatest"]
+        expect(jump, "the way-back button is missing while far from the true end")
+        jump.tap()
+        expect(newest, "the way-back button left the page in the empty end spacer")
+        XCTAssertTrue(newest.isHittable, "the way back landed off screen")
+
+        // And the bad end must not blank a session switch either.
+        let demo = app.buttons["workspace./Users/you/projects/demo"]
+        let mock = sessionRow(in: app, titled: "Mock session", in: "demo")
+        let orphanGroup = app.buttons["workspace.not-in-a-workspace"]
+        let orphan = sessionRow(in: app, titled: "Orphan session", in: "deleted-workspace")
+        openSidebar(app)
+        XCTAssertTrue(expand(orphanGroup, revealing: orphan), "the orphan session is missing")
+        orphan.tap()
+        let orphanText = app.staticTexts["A different session, a different answer."]
+        expect(orphanText, "a bad anchor blanked the orphan session")
+        XCTAssertTrue(orphanText.isHittable, "the orphan content is off screen")
+
+        openSidebar(app)
+        XCTAssertTrue(expand(demo, revealing: mock), "the session is missing")
+        mock.tap()
+        expect(newest, "a bad anchor blanked the conversation on return")
+        XCTAssertTrue(newest.isHittable, "the returned conversation is off screen")
+    }
+
     func testBalanceSupportMatrixAndExplicitRefresh() {
         let app = launch(pending: false, running: false, contentSizeCategory: "UICTContentSizeCategoryAccessibilityXXXL")
         openSidebar(app)

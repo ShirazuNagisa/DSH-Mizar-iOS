@@ -592,6 +592,7 @@ class AppFlowTestBase: XCTestCase {
         longStates: Bool = false,
         hideSession: Bool = false,
         slowPlacement: Bool = false,
+        hugeSpacer: Bool = false,
         naming: Bool = true,
         freshStart: Bool = true,
         pairingURIs: [String]? = nil,
@@ -620,6 +621,9 @@ class AppFlowTestBase: XCTestCase {
         )
         if slowPlacement {
             app.launchArguments += ["-mizarSlowPlacement"]
+        }
+        if hugeSpacer {
+            app.launchArguments += ["-mizarHugeBottomSpacer"]
         }
         if let contentSizeCategory {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategory]

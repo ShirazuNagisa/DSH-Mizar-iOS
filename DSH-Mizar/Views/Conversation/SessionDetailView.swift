@@ -179,6 +179,9 @@ struct SessionDetailView: View {
     /// aim has run against the settled rows.
     @State private var revealScheduled = false
     @State private var revealRequest = 0
+    /// The loaded page exists but no row is on screen. Shows a reload banner
+    /// instead of a silent black message area.
+    @State private var displayStalled = false
     /// The signed distance from the newest message: positive when it is still
     /// below the viewport, negative when the page sits past the end of the
     /// content. The placement's acceptance test, because a page parked *under*
@@ -560,7 +563,8 @@ struct SessionDetailView: View {
     /// every bottom aim names.
     private var endSpacer: some View {
         Color.clear
-            .frame(height: (composerReservedHeight ?? composerHeight) + 16)
+            .frame(height: (composerReservedHeight ?? composerHeight) + 16
+                + (ProcessInfo.processInfo.arguments.contains("-mizarHugeBottomSpacer") ? 5000 : 0))
             .id(Self.endAnchor)
             .onGeometryChange(for: CGFloat.self) { geometry in
                 geometry.frame(in: .named(Self.space)).minY
@@ -845,6 +849,29 @@ struct SessionDetailView: View {
                 placementPlaceholder
             }
         }
+        .overlay(alignment: .top) {
+            if displayStalled {
+                HStack(spacing: 10) {
+                    Label("This conversation is not showing its messages.", systemImage: "exclamationmark.triangle")
+                    Spacer(minLength: 8)
+                    Button("Reload") { retryDisplay() }
+                        .buttonStyle(.borderless)
+                }
+                .font(.caption.weight(.medium))
+                .padding(10)
+                .background(.regularMaterial, in: .rect(cornerRadius: 12))
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .accessibilityIdentifier("session.display.stalled")
+            }
+        }
+    }
+
+    private func retryDisplay() {
+        displayStalled = false
+        placementRound += 1
+        placement = .placing(generation: placementRound)
+        Task { await reload() }
     }
 
     /// What the message area shows while the initial placement runs.
@@ -1069,6 +1096,7 @@ struct SessionDetailView: View {
                 // body is revealing -- exactly the two states a bad landing
                 // leaves behind.
                 settleAtBottom(proxy: proxy)
+                Task { await ensureVisibleTurn(proxy: proxy) }
             }
             return
         }
@@ -1147,6 +1175,11 @@ struct SessionDetailView: View {
         _ = await seekBottom(proxy: proxy, attempts: 8, while: {
             isCurrentJump(generation)
         }, stopsWhenStill: true)
+        guard isCurrentJump(generation) else {
+            jumping = false
+            return
+        }
+        await ensureVisibleTurn(proxy: proxy)
         guard isCurrentJump(generation) else {
             jumping = false
             return
@@ -1773,14 +1806,42 @@ struct SessionDetailView: View {
             revealScheduled = false
             return
         }
+        // The anchor may be a valid id and still be empty space. Never lift
+        // the cover onto a viewport with no turn in it.
+        await ensureVisibleTurn(proxy: proxy)
+        guard !Task.isCancelled, case .placing = placement else {
+            revealScheduled = false
+            return
+        }
+        // Last chance to notice a page that has data but nothing visible. A
+        // black message area with no explanation is the worst answer; the
+        // banner names it and offers a reload. Only a page with nothing
+        // visible pays the extra wait; a normal landing reveals immediately.
+        if turnIndex.visible.isEmpty, !shownTurns.isEmpty {
+            try? await Task.sleep(for: .milliseconds(250))
+            displayStalled = turnIndex.visible.isEmpty
+        } else {
+            displayStalled = false
+        }
         placement = .ready
         didReachBottom = true
         revealScheduled = false
         // The page was far from the bottom by construction while it was being
-        // placed. Reset the chrome so the way-back button does not flash on
-        // entry; the next real scroll reports the truth.
-        chrome.farFromBottom = false
-        chrome.unseen = 0
+        // placed. Re-derive the chrome from the geometry the page actually
+        // landed at; zeroing it would hide a legitimate way-back button when
+        // the anchor was wrong and the last turn sits far above the true end.
+        synchroniseChromeFromGeometry()
+    }
+
+    private func synchroniseChromeFromGeometry() {
+        guard let geometry = placementGeometry.value else {
+            chrome.farFromBottom = false
+            chrome.unseen = 0
+            return
+        }
+        let distance = max(0, geometry.contentHeight - (geometry.visibleMaxY - geometry.bottomInset))
+        chrome.farFromBottom = distance > max(320, scrollViewportHeight * 0.8)
+        if !chrome.farFromBottom { chrome.unseen = 0 }
     }
 
     /// Arrive at the bottom after an explicit move, and keep correcting.
@@ -2045,6 +2106,7 @@ struct SessionDetailView: View {
         try? await Task.sleep(for: .milliseconds(120))
         jumping = false
         await correctJumpLanding(to: target, anchor: anchor, proxy: proxy, generation: generation)
+        await ensureVisibleTurn(proxy: proxy)
     }
 
     /// Undo a jump that was overtaken before it could land.
@@ -2177,6 +2239,59 @@ struct SessionDetailView: View {
         }
     }
 
+    /// The last turn that can draw anything, preferred over a bare anchor.
+    private var lastReadableTurnId: String? {
+        if let turn = shownTurns.last(where: { !$0.items.isEmpty }) { return turn.id }
+        if let turn = shownTurns.last { return turn.id }
+        // A flat conversation has no turns to name; its rows are the items.
+        return shownItems.last?.id
+    }
+
+    /// If the viewport is not showing a single turn, put one under it.
+    ///
+    /// Anchors are positions, not content. A bad end estimate, a spacer, or an
+    /// anchor outside the lazy hierarchy can leave the viewport in empty space
+    /// even though the conversation is loaded -- the blank page that needed a
+    /// manual upward swipe. This is the invariant after every entry and jump:
+    /// at least one turn row is intersecting the viewport; if not, stage and
+    /// scroll to the last turn that has content.
+    private func ensureVisibleTurn(proxy: ScrollViewProxy) async {
+        for _ in 0..<3 {
+            if !turnIndex.visible.isEmpty { return }
+            guard let target = lastReadableTurnId else { return }
+            var transaction = Transaction()
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+            if !realized.ids.contains(target) {
+                withTransaction(transaction) { stagedTurn = target }
+                await settleLayout()
+                guard !Task.isCancelled else {
+                    stagedTurn = nil
+                    return
+                }
+                withTransaction(transaction) {
+                    proxy.scrollTo(target, anchor: .bottom)
+                }
+                await settleLayout()
+                guard !Task.isCancelled else {
+                    stagedTurn = nil
+                    return
+                }
+                withTransaction(transaction) {
+                    stagedTurn = nil
+                    proxy.scrollTo(target, anchor: .bottom)
+                }
+            } else {
+                withTransaction(transaction) {
+                    proxy.scrollTo(target, anchor: .bottom)
+                }
+            }
+            await settleLayout()
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+    }
+
+    /// Let the lazy stack build and lay out what it was just given.
     /// Let the lazy stack build and lay out what it was just given.
     ///
     /// A scheduler yield is not enough: a row exists after the runloop has taken
