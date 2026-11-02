@@ -179,9 +179,10 @@ struct SessionDetailView: View {
     /// aim has run against the settled rows.
     @State private var revealScheduled = false
     @State private var revealRequest = 0
-    /// The loaded page exists but no row is on screen. Shows a reload banner
-    /// instead of a silent black message area.
-    @State private var displayStalled = false
+    /// Whether the operator has taken the page since it opened. A fresh page
+    /// that lands under a reader must not yank them; a fresh page that lands
+    /// during entry (the host replacing the cached copy) must be placed.
+    @State private var userHasScrolled = false
     /// The signed distance from the newest message: positive when it is still
     /// below the viewport, negative when the page sits past the end of the
     /// content. The placement's acceptance test, because a page parked *under*
@@ -275,20 +276,6 @@ struct SessionDetailView: View {
     /// The same, grouped into turns.
     private var shownTurns: [ConversationTurn] {
         conversationSessionId == sessionId ? turns : []
-    }
-
-    /// Whether the lazy stack has built the newest turn.
-    ///
-    /// The bottom of a lazy conversation is only where the stack *estimates*
-    /// it is until the rows down there exist: a turn here can be one line or
-    /// thirty screens, and an aim at the end of the page against estimated
-    /// heights lands in space the stack has not filled -- the blank page that
-    /// a swipe or two by hand used to fix. Being at the bottom is only
-    /// believed once the newest turn is built. A flat list has no turn to ask
-    /// about and goes by the geometry alone.
-    private var newestIsBuilt: Bool {
-        guard let newest = shownTurns.last?.id else { return true }
-        return realized.ids.contains(newest)
     }
 
     /// A number that moves whenever the live stream gains text, a block or its
@@ -481,6 +468,7 @@ struct SessionDetailView: View {
             // A different session is a different conversation, and the typewriter
             // state belongs to the one that was on screen.
             settledAnswerIds = []
+            userHasScrolled = false
             // And a different stream: the turn this screen watched in the last
             // session is history now, drawn by its own row.
             stream = TurnStream()
@@ -563,8 +551,7 @@ struct SessionDetailView: View {
     /// every bottom aim names.
     private var endSpacer: some View {
         Color.clear
-            .frame(height: (composerReservedHeight ?? composerHeight) + 16
-                + (ProcessInfo.processInfo.arguments.contains("-mizarHugeBottomSpacer") ? 5000 : 0))
+            .frame(height: (composerReservedHeight ?? composerHeight) + 16)
             .id(Self.endAnchor)
             .onGeometryChange(for: CGFloat.self) { geometry in
                 geometry.frame(in: .named(Self.space)).minY
@@ -674,7 +661,10 @@ struct SessionDetailView: View {
             // the spring back from past either end. Not `.animating`, which
             // is this screen's own scrolls.
             userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
-            if userScrolling { bottomSeek &+= 1 }
+            if userScrolling {
+                userHasScrolled = true
+                bottomSeek &+= 1
+            }
         }
         // Dragging the conversation puts the keyboard away, which is what
         // every messaging app does and what a thumb already expects.
@@ -801,13 +791,6 @@ struct SessionDetailView: View {
                 proxy.scrollTo(Self.endAnchor, anchor: .bottom)
             }
         }
-        .onChange(of: turnIndex.visible) { _, visible in
-            // Content arrived (a scroll, a reload, a late layout): the page is
-            // no longer stalled, so take the banner away.
-            if !visible.isEmpty, displayStalled {
-                displayStalled = false
-            }
-        }
         .onChange(of: turnIndex.jumpCount) { _, _ in
             // A turn chosen in the index: go there, then let it glow once
             // so the eye finds it.
@@ -856,30 +839,8 @@ struct SessionDetailView: View {
                 placementPlaceholder
             }
         }
-        .overlay(alignment: .top) {
-            if displayStalled {
-                HStack(spacing: 10) {
-                    Label("This conversation is not showing its messages.", systemImage: "exclamationmark.triangle")
-                    Spacer(minLength: 8)
-                    Button("Reload") { retryDisplay() }
-                        .buttonStyle(.borderless)
-                }
-                .font(.caption.weight(.medium))
-                .padding(10)
-                .background(.regularMaterial, in: .rect(cornerRadius: 12))
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .accessibilityIdentifier("session.display.stalled")
-            }
-        }
     }
 
-    private func retryDisplay() {
-        displayStalled = false
-        placementRound += 1
-        placement = .placing(generation: placementRound)
-        Task { await reload() }
-    }
 
     /// What the message area shows while the initial placement runs.
     ///
@@ -1092,21 +1053,12 @@ struct SessionDetailView: View {
     ///
     /// - Parameter proxy: the conversation's scroll view.
     private func returnToLatest(proxy: ScrollViewProxy) {
-        guard chrome.distance > max(600, scrollViewportHeight * 2) else {
-            withAnimation(Motion.pick(.mizarSmooth)) {
-                proxy.scrollTo(Self.endAnchor, anchor: .bottom)
-            } completion: {
-                // The spring aimed at where the end was when it started; the
-                // rows it brought into view may have moved the end since. This
-                // is an explicit arrival, so it does not use `holdAtBottom`:
-                // that one refuses when the page is far from the bottom or a
-                // body is revealing -- exactly the two states a bad landing
-                // leaves behind.
-                settleAtBottom(proxy: proxy)
-                Task { await ensureVisibleTurn(proxy: proxy) }
-            }
-            return
-        }
+        // The button only appears when the page is far enough to be missing
+        // the newest turn, so this is always a jump. The old near branch did a
+        // bare `scrollTo(endAnchor)` -- and for a lazy page whose end is not
+        // built that is a no-op, leaving the button on screen and the page
+        // where it was. The staged jump below is the only path that has a real
+        // row to aim at.
         Task { await jumpToBottom(proxy: proxy) }
     }
 
@@ -1139,34 +1091,34 @@ struct SessionDetailView: View {
         // the page blank. Stage the newest turn first so there is a real row
         // to aim at, restore the list, then aim at the end.
         if let newest = shownTurns.last?.id {
-            if !newestIsBuilt {
-                withTransaction(transaction) { stagedTurn = newest }
-                await settleLayout()
-                guard isCurrentJump(generation) else {
-                    stagedTurn = nil
-                    jumping = false
-                    return
-                }
-                withTransaction(transaction) {
-                    proxy.scrollTo(newest, anchor: .bottom)
-                }
-                await settleLayout()
-                guard isCurrentJump(generation) else {
-                    stagedTurn = nil
-                    jumping = false
-                    return
-                }
-                withTransaction(transaction) {
-                    stagedTurn = nil
-                    proxy.scrollTo(newest, anchor: .bottom)
-                }
-                await settleLayout()
-            } else {
-                withTransaction(transaction) {
-                    proxy.scrollTo(newest, anchor: .bottom)
-                }
-                await settleLayout()
+            // Always stage. A realized row can still be out of the lazy stack's
+            // built range at the moment of the scroll; a staged turn cannot.
+            withTransaction(transaction) { stagedTurn = newest }
+            await settleLayout()
+            guard isCurrentJump(generation) else {
+                stagedTurn = nil
+                jumping = false
+                return
             }
+            // Aim at the top edge while staged; the turn's bottom does not
+            // exist until the lazy stack builds the row.
+            for _ in 0..<10 where !realized.ids.contains(newest) {
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            withTransaction(transaction) {
+                proxy.scrollTo(newest, anchor: .top)
+            }
+            await settleLayout()
+            guard isCurrentJump(generation) else {
+                stagedTurn = nil
+                jumping = false
+                return
+            }
+            withTransaction(transaction) {
+                stagedTurn = nil
+                proxy.scrollTo(newest, anchor: .bottom)
+            }
+            await settleLayout()
         }
         withTransaction(transaction) {
             proxy.scrollTo(Self.endAnchor, anchor: .bottom)
@@ -1182,11 +1134,7 @@ struct SessionDetailView: View {
         _ = await seekBottom(proxy: proxy, attempts: 8, while: {
             isCurrentJump(generation)
         }, stopsWhenStill: true)
-        guard isCurrentJump(generation) else {
-            jumping = false
-            return
-        }
-        await ensureVisibleTurn(proxy: proxy)
+        await recoverIfPastContent(proxy: proxy)
         guard isCurrentJump(generation) else {
             jumping = false
             return
@@ -1195,6 +1143,18 @@ struct SessionDetailView: View {
             jumpFade = 1
         }
         try? await Task.sleep(for: .milliseconds(170))
+        // The rows above the target realize after the jump; give them one
+        // settle and one exact correction while the jump still owns the page,
+        // so the movement is not a visible second twitch.
+        try? await Task.sleep(for: .milliseconds(220))
+        await settleLayout()
+        var settle = Transaction()
+        settle.animation = nil
+        settle.disablesAnimations = true
+        withTransaction(settle) {
+            proxy.scrollTo(Self.endAnchor, anchor: .bottom)
+        }
+        await settleLayout()
         jumping = false
     }
 
@@ -1728,23 +1688,17 @@ struct SessionDetailView: View {
         // The first frame's anchor can land, like the long way back, on an
         // end the stack has built nothing for. Then the newest turn is staged
         // first, as it is there.
-        if !newestIsBuilt {
-            await stageNewest(proxy: proxy) { placement == .placing(generation: generation) }
-        }
+        await stageNewest(proxy: proxy) { placement == .placing(generation: generation) }
         if await seekBottom(proxy: proxy, attempts: Self.placementAttempts, while: {
             placement == .placing(generation: generation)
         }) {
             finishInitialPlacement()
             return
         }
-        // Reveal anyway. The conversation is already loaded; a position that
-        // did not converge in the budget is a reason to keep correcting under
-        // the operator, not to lock the session behind a card whose Retry
-        // re-runs the same failing estimate.
-        guard !Task.isCancelled, placement == .placing(generation: generation) else { return }
-        // The budget did not accept, but the loaded page must not be held
-        // hostage. Schedule the same deferred reveal: it makes a final aim
-        // under the cover, then shows the conversation wherever it is.
+        // The end may be an anchor outside the lazy hierarchy. The reveal will
+        // make one final aim under the cover and recover if it is still past
+        // the content.
+        guard !Task.isCancelled, case .placing = placement else { return }
         scheduleInitialReveal()
     }
 
@@ -1779,16 +1733,12 @@ struct SessionDetailView: View {
             revealScheduled = false
             return
         }
-        // The end anchor lives after the last row; far away the lazy stack
-        // has not built it, and `scrollTo` on an id outside the hierarchy is
-        // a no-op. Put the newest turn in the stack first, from behind the
-        // cover, then aim at the true end.
-        if !newestIsBuilt {
-            await stageNewest(proxy: proxy, while: {
-                if case .placing = placement { return true }
-                return false
-            })
-        }
+        // Put a real turn under the viewport, from behind the cover. No
+        // endAnchor aim: an unbuilt end is the source of the blank page.
+        await stageNewest(proxy: proxy, while: {
+            if case .placing = placement { return true }
+            return false
+        })
         guard !Task.isCancelled, case .placing = placement else {
             revealScheduled = false
             return
@@ -1809,29 +1759,10 @@ struct SessionDetailView: View {
             proxy.scrollTo(Self.endAnchor, anchor: .bottom)
         }
         await settleLayout()
+        await recoverIfPastContent(proxy: proxy)
         guard !Task.isCancelled, case .placing = placement else {
             revealScheduled = false
             return
-        }
-        // The anchor may be a valid id and still be empty space. Never lift
-        // the cover onto a viewport with no turn in it.
-        await ensureVisibleTurn(proxy: proxy)
-        guard !Task.isCancelled, case .placing = placement else {
-            revealScheduled = false
-            return
-        }
-        // Last chance to notice a page that has data but nothing visible. A
-        // black message area with no explanation is the worst answer; the
-        // banner names it and offers a reload. Only a page with nothing
-        // visible pays the extra wait; a normal landing reveals immediately.
-        if turnIndex.visible.isEmpty, !shownTurns.isEmpty {
-            try? await Task.sleep(for: .milliseconds(250))
-            displayStalled = turnIndex.visible.isEmpty
-        } else {
-            displayStalled = false
-        }
-        if ProcessInfo.processInfo.arguments.contains("-mizarForceStalledBanner"), !didReachBottom {
-            displayStalled = true
         }
         placement = .ready
         didReachBottom = true
@@ -1842,6 +1773,7 @@ struct SessionDetailView: View {
         // the anchor was wrong and the last turn sits far above the true end.
         synchroniseChromeFromGeometry()
     }
+
 
     private func synchroniseChromeFromGeometry() {
         guard let geometry = placementGeometry.value else {
@@ -1962,17 +1894,26 @@ struct SessionDetailView: View {
     ///   - proxy: the conversation's scroll view.
     ///   - wanted: whether the move is still wanted.
     private func stageNewest(proxy: ScrollViewProxy, while wanted: () -> Bool) async {
-        guard !newestIsBuilt, let newest = shownTurns.last?.id else { return }
+        // Always stage, even when the row was reported realized. "Realized"
+        // can be true while the end anchor is outside the lazy hierarchy; a
+        // real turn id is the only target that can be trusted to scroll.
+        guard let newest = shownTurns.last?.id else { return }
         var transaction = Transaction()
         transaction.animation = nil
         transaction.disablesAnimations = true
         withTransaction(transaction) { stagedTurn = newest }
         await settleLayout()
+        // A row taller than the viewport cannot be built by aiming at its
+        // bottom: the bottom is not in the lazy stack yet. Aim at its top,
+        // which is the edge that exists when the row is created.
+        for _ in 0..<10 where !realized.ids.contains(newest) {
+            try? await Task.sleep(for: .milliseconds(16))
+        }
         guard wanted() else {
             stagedTurn = nil
             return
         }
-        withTransaction(transaction) { proxy.scrollTo(newest, anchor: .bottom) }
+        withTransaction(transaction) { proxy.scrollTo(newest, anchor: .top) }
         await settleLayout()
         withTransaction(transaction) {
             stagedTurn = nil
@@ -2116,7 +2057,7 @@ struct SessionDetailView: View {
         try? await Task.sleep(for: .milliseconds(120))
         jumping = false
         await correctJumpLanding(to: target, anchor: anchor, proxy: proxy, generation: generation)
-        await ensureVisibleTurn(proxy: proxy)
+        await recoverIfPastContent(proxy: proxy)
     }
 
     /// Undo a jump that was overtaken before it could land.
@@ -2257,47 +2198,44 @@ struct SessionDetailView: View {
         return shownItems.last?.id
     }
 
-    /// If the viewport is not showing a single turn, put one under it.
+    /// If the viewport is past the content, put it back on a real turn.
     ///
-    /// Anchors are positions, not content. A bad end estimate, a spacer, or an
-    /// anchor outside the lazy hierarchy can leave the viewport in empty space
-    /// even though the conversation is loaded -- the blank page that needed a
-    /// manual upward swipe. This is the invariant after every entry and jump:
-    /// at least one turn row is intersecting the viewport; if not, stage and
-    /// scroll to the last turn that has content.
-    private func ensureVisibleTurn(proxy: ScrollViewProxy) async {
+    /// This is geometry, not `TurnIndex.visible`: on a real cached page the
+    /// visibility callbacks can stay empty even while rows are on screen, and a
+    /// recovery based on that set scrolled a correct landing back to the top.
+    /// The viewport is blank only when it does not intersect the content
+    /// rectangle at all.
+    private func recoverIfPastContent(proxy: ScrollViewProxy) async {
         for _ in 0..<3 {
-            if !turnIndex.visible.isEmpty { return }
+            await settleLayout()
+            try? await Task.sleep(for: .milliseconds(120))
+            guard let geometry = placementGeometry.value else { return }
+            let top = geometry.visibleMinY + geometry.topInset
+            let bottom = geometry.visibleMaxY - geometry.bottomInset
+            if bottom > 0, top < geometry.contentHeight - 2 { return }
             guard let target = lastReadableTurnId else { return }
             var transaction = Transaction()
             transaction.animation = nil
             transaction.disablesAnimations = true
-            if !realized.ids.contains(target) {
-                withTransaction(transaction) { stagedTurn = target }
-                await settleLayout()
-                guard !Task.isCancelled else {
-                    stagedTurn = nil
-                    return
-                }
-                withTransaction(transaction) {
-                    proxy.scrollTo(target, anchor: .bottom)
-                }
-                await settleLayout()
-                guard !Task.isCancelled else {
-                    stagedTurn = nil
-                    return
-                }
-                withTransaction(transaction) {
-                    stagedTurn = nil
-                    proxy.scrollTo(target, anchor: .bottom)
-                }
-            } else {
-                withTransaction(transaction) {
-                    proxy.scrollTo(target, anchor: .bottom)
-                }
+            withTransaction(transaction) { stagedTurn = target }
+            await settleLayout()
+            guard !Task.isCancelled else {
+                stagedTurn = nil
+                return
+            }
+            withTransaction(transaction) {
+                proxy.scrollTo(target, anchor: .top)
             }
             await settleLayout()
-            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else {
+                stagedTurn = nil
+                return
+            }
+            withTransaction(transaction) {
+                stagedTurn = nil
+                proxy.scrollTo(target, anchor: .bottom)
+            }
+            await settleLayout()
         }
     }
 
@@ -2765,6 +2703,14 @@ struct SessionDetailView: View {
             // this is the first content the page has, and the placement runs
             // against it exactly as it does against the cached copy.
             beginInitialPlacementIfNeeded()
+            // The host replacing the cached copy after the cache was placed is
+            // a different page: the scroll offset can reset to the top, and a
+            // `.ready` placement will not re-run. Re-arm it while the operator
+            // has not taken the page; a reader who scrolled is left alone.
+            if !userHasScrolled, placement == .ready {
+                placementRound += 1
+                placement = .placing(generation: placementRound)
+            }
         }
         // The cache again, for the turns: the page was just folded into it.
         //

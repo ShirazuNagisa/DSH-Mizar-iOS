@@ -754,7 +754,3 @@
 "The computer reported an error: %@" = "The computer reported an error: %@";
 
 "Loading the conversation" = "Loading the conversation";
-
-"This conversation is not showing its messages." = "This conversation is not showing its messages.";
-
-"Reload" = "Reload";

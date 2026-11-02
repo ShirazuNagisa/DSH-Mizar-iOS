@@ -754,7 +754,3 @@
 "The computer reported an error: %@" = "电脑报告了一个错误：%@";
 
 "Loading the conversation" = "正在加载会话";
-
-"This conversation is not showing its messages." = "此会话没有显示任何消息。";
-
-"Reload" = "重新加载";

@@ -171,6 +171,7 @@ struct ConversationView: View {
                         typing: item.id == typingAnswerId,
                         onTypingStarted: { onAnswerTypingStarted(item.id) },
                     )
+                    .id(item.id)
                     .transition(.rise)
                 }
             } else {
@@ -187,6 +188,11 @@ struct ConversationView: View {
                         suppressBody: turn.id == suppressedTurnId,
                         onRealized: onTurnRealized,
                     )
+                    // An explicit id, not merely the ForEach identity: the
+                    // screen scrolls to turn ids from a lazy stack, and a target
+                    // that only exists as a diffing identity is not guaranteed
+                    // to be in `ScrollViewReader`'s table.
+                    .id(turn.id)
                     .transition(.rise)
                 }
             }
