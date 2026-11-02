@@ -161,6 +161,7 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
             orphan.tap()
             let orphanText = app.staticTexts["A different session, a different answer."]
             expect(orphanText, "the short orphan conversation did not open (round \(round))")
+            XCTAssertTrue(orphanText.isHittable, "the short orphan content is off screen (round \(round))")
             XCTAssertFalse(
                 app.descendants(matching: .any)["session.placement.failed"].exists,
                 "the short orphan conversation could not be positioned",
@@ -171,6 +172,7 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
             mock.tap()
             let newest = app.staticTexts["Two files changed, and it still fails."]
             expect(newest, "the short conversation did not open (round \(round))")
+            XCTAssertTrue(newest.isHittable, "the short conversation's newest content is off screen (round \(round))")
             XCTAssertFalse(
                 app.descendants(matching: .any)["session.placement.failed"].exists,
                 "the short conversation could not be positioned",
