@@ -132,9 +132,34 @@ struct ConversationView: View {
         staged.isEmpty ? turns : staged
     }
 
+    /// Pages with only a handful of turns are laid out eagerly.
+    ///
+    /// The lazy stack can drop every row from a short page during a staged
+    /// jump; the scroll offset then sits at the bottom of content with nothing
+    /// built there -- a blank conversation that needs a swipe. Eager layout is
+    /// cheap for a page this small and cannot lose the rows.
+    private var usesEagerStack: Bool {
+        if turns.isEmpty { return items.count <= 40 }
+        return turns.count <= 6
+    }
+
     var body: some View {
-        // Lazy, not eager: a conversation can hold hundreds of items.
-        LazyVStack(alignment: .leading, spacing: 14) {
+        Group {
+            if usesEagerStack {
+                VStack(alignment: .leading, spacing: 14) {
+                    conversationRows
+                }
+            } else {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    conversationRows
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var conversationRows: some View {
+
             // Not while a jump is staged: the row sits at the very top and
             // would ask for a page of history the screen is in the middle of
             // leaving.
@@ -201,7 +226,6 @@ struct ConversationView: View {
             Color.clear
                 .frame(height: 1)
                 .id(Self.bottomAnchor)
-        }
     }
 
     /// The top of the list, where older messages arrive.
