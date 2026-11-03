@@ -32,20 +32,37 @@ enum ProcessCategory: Int, CaseIterable, Sendable {
     case background
     case compacting
 
-    /// DSH's completed-tense label.
+    /// DSH's completed-tense label, in the app's language.
     var label: String {
         switch self {
-        case .thinking: return "已完成分析"
-        case .read: return "已读取文件"
-        case .edit: return "修改了文件"
-        case .commands: return "执行了命令"
-        case .search: return "已搜索代码"
-        case .subagents: return "已协调子智能体"
-        case .plan: return "更新了计划"
-        case .questions: return "向用户提出了问题"
-        case .tools: return "已调用工具"
-        case .background: return "交给了后台任务"
-        case .compacting: return "压缩了上下文"
+        case .thinking: return String(localized: "Analysed")
+        case .read: return String(localized: "Read files")
+        case .edit: return String(localized: "Edited files")
+        case .commands: return String(localized: "Ran commands")
+        case .search: return String(localized: "Searched code")
+        case .subagents: return String(localized: "Coordinated subagents")
+        case .plan: return String(localized: "Updated the plan")
+        case .questions: return String(localized: "Asked questions")
+        case .tools: return String(localized: "Called tools")
+        case .background: return String(localized: "Handed to the background")
+        case .compacting: return String(localized: "Compacted the context")
+        }
+    }
+
+    /// A small glyph that names the same state as the word.
+    var symbol: String {
+        switch self {
+        case .thinking: return "brain"
+        case .read: return "doc.text"
+        case .edit: return "pencil"
+        case .commands: return "terminal"
+        case .search: return "magnifyingglass"
+        case .subagents: return "person.2"
+        case .plan: return "list.bullet"
+        case .questions: return "questionmark.bubble"
+        case .tools: return "wrench.and.screwdriver"
+        case .background: return "clock.arrow.circlepath"
+        case .compacting: return "arrow.down.right.and.arrow.up.left"
         }
     }
 
@@ -56,17 +73,17 @@ enum ProcessCategory: Int, CaseIterable, Sendable {
     /// after the fact, which is the moment the answer starts arriving.
     var runningLabel: String {
         switch self {
-        case .thinking: return "正在分析"
-        case .read: return "正在读取文件"
-        case .edit: return "正在修改文件"
-        case .commands: return "正在执行命令"
-        case .search: return "正在搜索代码"
-        case .subagents: return "正在协调子智能体"
-        case .plan: return "正在更新计划"
-        case .questions: return "正在向你提问"
-        case .tools: return "正在调用工具"
-        case .background: return "等待后台任务"
-        case .compacting: return "正在压缩上下文"
+        case .thinking: return String(localized: "Analysing")
+        case .read: return String(localized: "Reading files")
+        case .edit: return String(localized: "Editing files")
+        case .commands: return String(localized: "Running commands")
+        case .search: return String(localized: "Searching code")
+        case .subagents: return String(localized: "Coordinating subagents")
+        case .plan: return String(localized: "Updating the plan")
+        case .questions: return String(localized: "Asking you questions")
+        case .tools: return String(localized: "Calling tools")
+        case .background: return String(localized: "Waiting for the background")
+        case .compacting: return String(localized: "Compacting the context")
         }
     }
 
@@ -92,15 +109,26 @@ enum ProcessCategory: Int, CaseIterable, Sendable {
 enum ProcessWording {
     static func compose(_ categories: Set<ProcessCategory>) -> String {
         let ordered = categories.sorted { $0.rawValue < $1.rawValue }
-        guard let first = ordered.first else { return "已完成分析" }
+        guard let first = ordered.first else { return String(localized: "Analysed") }
         let labels = ordered.map(\.label)
         if labels.count == 1 { return first.label }
-        if labels.count == 2 {
-            return "\(labels[0])并\(continuation(labels[1], after: labels[0]))"
+        if isChinese {
+            if labels.count == 2 {
+                return "\(labels[0])并\(continuation(labels[1], after: labels[0]))"
+            }
+            let rest = labels.dropFirst().map { continuation($0, after: labels[0]) }
+            let title = ([labels[0]] + rest).joined(separator: "，")
+            return labels.count > 3 ? "\(title)等" : title
         }
-        let rest = labels.dropFirst().map { continuation($0, after: labels[0]) }
-        let title = ([labels[0]] + rest).joined(separator: "，")
-        return labels.count > 3 ? "\(title)等" : title
+        if labels.count == 2 {
+            return "\(labels[0]) and \(labels[1])"
+        }
+        let title = labels.dropLast().joined(separator: ", ") + " and " + labels[labels.count - 1]
+        return labels.count > 3 ? title + " etc." : title
+    }
+
+    private static var isChinese: Bool {
+        Locale.current.language.languageCode?.identifier == "zh"
     }
 
     /// "已读取文件" after "已完成分析" becomes "读取文件": one "已" is enough.
@@ -132,29 +160,29 @@ struct LiveTurnBlock: View {
 
     private var headline: String {
         if text.isEmpty {
-            return running?.runningLabel ?? "正在分析"
+            return running?.runningLabel ?? String(localized: "Analysing")
         }
         return ProcessWording.compose(done)
     }
 
+    /// The category whose glyph and wording lead the line.
+    private var headlineCategory: ProcessCategory {
+        if text.isEmpty { return running ?? .thinking }
+        return done.sorted { $0.rawValue < $1.rawValue }.first ?? .thinking
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Group {
-                if text.isEmpty {
-                    Text(headline)
-                        .font(.subheadline.weight(.medium))
-                        // The accent, not the success green: this line is the
-                        // app's own voice while it works, and DSH draws its
-                        // running text in the accent too. Green is reserved for
-                        // a turn that finished well.
-                        .foregroundStyle(Color.accentColor)
-                        .shimmering()
-                } else {
-                    Text(headline)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: headlineCategory.symbol)
+                    .font(.subheadline.weight(.medium))
+                Text(headline)
+                    .font(.subheadline)
             }
+            // Done lines stay quiet; the running line is the one that moves
+            // and takes the accent.
+            .foregroundStyle(text.isEmpty ? Color.accentColor : Color.secondary)
+            .modifier(LiveShimmer(active: text.isEmpty))
             // Swapped in place, not animated as layout: the line is the same
             // line with a new sentence, and a cross-fade is what "it changed its
             // mind about what it is doing" should look like.
@@ -164,12 +192,23 @@ struct LiveTurnBlock: View {
 
             if !text.isEmpty {
                 Text(text)
-                    .font(.callout)
+                    .font(.body)
+                    .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity)
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
+    }
+}
+
+/// The sweep on the running line, applied to the whole row so the glyph moves
+/// with the words instead of staying still beside them.
+private struct LiveShimmer: ViewModifier {
+    let active: Bool
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if active { content.shimmering() } else { content }
     }
 }

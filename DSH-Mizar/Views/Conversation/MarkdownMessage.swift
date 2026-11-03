@@ -74,6 +74,10 @@ struct MarkdownBlocksView: View {
 
     /// Where a tapped local link goes, when this screen has somewhere to send it.
     @Environment(\.openDeliveredFile) private var openDeliveredFile
+    /// Dark mode draws links in white, the accent colour, which is the same
+    /// colour as body text there. An underline is the only thing left that says
+    /// "this is a file that opens".
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm + 2) {
@@ -175,7 +179,7 @@ struct MarkdownBlocksView: View {
     /// styled, and every newline inside the run stays a newline. A string the
     /// system parser refuses is drawn verbatim rather than dropped.
     private func inline(_ string: String) -> Text {
-        inlineMarkdown(string)
+        inlineMarkdown(string, underlinePreviewLinks: colorScheme == .dark)
     }
 
     private func headingFont(_ level: Int) -> Font {
@@ -364,11 +368,25 @@ struct MarkdownTableGrid: View {
 /// whitespace: emphasis, code spans and links are styled, and every newline
 /// inside the run stays a newline. A string the system parser refuses is drawn
 /// verbatim rather than dropped.
-private func inlineMarkdown(_ string: String) -> Text {
-    if let attributed = try? AttributedString(
+private func inlineMarkdown(_ string: String, underlinePreviewLinks: Bool = false) -> Text {
+    if var attributed = try? AttributedString(
         markdown: string,
         options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace),
     ) {
+        if underlinePreviewLinks {
+            // File links are the app's accent colour. In dark mode the accent
+            // is white, so the link and the sentence look identical; the
+            // underline is the affordance, not decoration.
+            let ranges = attributed.runs.compactMap { run -> Range<AttributedString.Index>? in
+                guard let link = run.link,
+                      let path = LocalFileLink.path(in: link),
+                      PreviewKind(fileName: path).isPreviewable else { return nil }
+                return run.range
+            }
+            for range in ranges {
+                attributed[range].underlineStyle = .single
+            }
+        }
         return Text(attributed)
     }
     return Text(string)

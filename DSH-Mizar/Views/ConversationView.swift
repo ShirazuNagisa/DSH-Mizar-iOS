@@ -316,34 +316,64 @@ private struct TurnSection: View {
     @Environment(SidePlaneState.self) private var plane
     @Environment(\.horizontalSizeClass) private var sizeClass
 
+    /// A status-less group of notices: a settlement that woke an idle parent,
+    /// or an orphan notice at the end of a page. It gets its lines, not a
+    /// "turn finished" header.
+    private var isNoticeOnly: Bool {
+        turn.prompts.isEmpty && !turn.steps.isEmpty && turn.steps.allSatisfy { item in
+            if case .notice = item { return true }
+            return false
+        }
+    }
+
+    /// A body row: what the stream owns when this turn is live.
+    private func isAssistantMessage(_ item: ConversationItem) -> Bool {
+        if case .message(_, .assistant, _, _) = item { return true }
+        return false
+    }
+
+    /// Whether the item is part of the agent's work, which is where the
+    /// activity row belongs, rather than an operator prompt.
+    private func isStep(_ item: ConversationItem) -> Bool {
+        switch item {
+        case .message(_, .assistant, _, _), .message(_, .system, _, _), .failure, .notice:
+            return true
+        case .message(_, .user, _, _):
+            return false
+        }
+    }
+
     var body: some View {
-        let steps = ConversationNoticeFold.fold(turn.steps)
+        let items = ConversationNoticeFold.fold(turn.orderedItems)
+        // When the live stream owns this turn's body, it owns the answer, not
+        // the conversation's own rows: a steering message and a settlement
+        // notice are still history the stream never carried. Hiding the whole
+        // body made those rows appear only when the screen was reopened.
+        let visible = suppressBody ? items.filter { !isAssistantMessage($0) } : items
+        let showsSummary = !suppressBody && !isNoticeOnly
+        let summaryIndex = visible.firstIndex(where: isStep) ?? visible.count
+
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(turn.prompts.enumerated()), id: \.element.id) { index, item in
-                ConversationRow(item: item, isLastPrompt: index == turn.prompts.count - 1)
+            ForEach(Array(visible.enumerated()), id: \.element.id) { index, item in
+                if showsSummary, index == summaryIndex {
+                    TurnActivitySummary(turn: turn, sessionId: sessionId)
+                }
+                ConversationRow(
+                    item: item,
+                    isLastPrompt: item.id == turn.prompts.last?.id,
+                    typing: item.id == typingAnswerId,
+                    onTypingStarted: { onAnswerTypingStarted(item.id) },
+                )
+                .transition(.rise(distance: 14, blur: 6))
             }
 
-            // Prompt, row, answer -- and the row does not move. The answer was
-            // once drawn above the row and once hidden inside it; both made the
-            // row jump or hid the one thing a monitoring app must show. The paid
-            // full-detail area is added *below* the row for the same reason:
-            // opening it must never move or replace the status row.
-            //
-            // A turn the live stream below the list owns draws none of this:
-            // the stream has the same answer already, plus the status lines the
-            // history never carried. See ``ConversationStreamView``.
-            if !suppressBody {
+            // No step (a prompt-only turn): the row still belongs after the
+            // prompt, not above it.
+            if showsSummary, summaryIndex >= visible.count {
                 TurnActivitySummary(turn: turn, sessionId: sessionId)
+            }
 
-                ForEach(steps) { item in
-                    ConversationRow(
-                        item: item,
-                        isLastPrompt: false,
-                        typing: item.id == typingAnswerId,
-                        onTypingStarted: { onAnswerTypingStarted(item.id) },
-                    )
-                    .transition(.rise(distance: 14, blur: 6))
-                }
+            if !suppressBody {
                 // The files this turn declared, between the answer and its actions:
                 // the prose says what was done, the card is what was produced, and
                 // the toolbar belongs to the message. Drawn whether or not the turn
@@ -361,6 +391,7 @@ private struct TurnSection: View {
                 }
             }
         }
+        // A link in the prose that names a file on the computer opens the same
         // A link in the prose that names a file on the computer opens the same
         // preview a card does. Set here, around the whole turn, because the
         // links are drawn deep inside the typewriter and the handler needs this

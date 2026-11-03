@@ -104,11 +104,22 @@ struct SubagentSnapshot: Equatable {
     }
 
     private static func name(from frame: SessionStatsFrame?, turns: [ConversationTurn]) -> String? {
-        if let title = frame?.title, !title.isEmpty { return title }
+        if let title = frame?.title, !title.isEmpty { return localizeKnownHostTitle(title) }
         for turn in turns {
             if let line = turn.promptLine { return line }
         }
         return nil
+    }
+
+    /// DSH names delegated children "Background subagent <name>" on the host.
+    /// Those titles are data, not UI copy -- but this one prefix is a product
+    /// label, and leaving it in English in a Chinese app is the report. Keep the
+    /// child's own suffix, translate only the prefix.
+    static func localizeKnownHostTitle(_ raw: String) -> String {
+        let prefix = "Background subagent"
+        guard raw.hasPrefix(prefix) else { return raw }
+        let suffix = raw.dropFirst(prefix.count)
+        return String(localized: "Background subagent") + suffix
     }
 }
 

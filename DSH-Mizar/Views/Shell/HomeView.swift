@@ -28,7 +28,11 @@ struct HomeView: View {
                     Image(systemName: "desktopcomputer")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(model.host?.displayName ?? String(localized: "This iPhone"))
+                    Text(
+                        model.host.flatMap { model.accountLabel(for: $0.hostId) }
+                            ?? model.host?.displayName
+                            ?? String(localized: "This iPhone"),
+                    )
                         .font(.headline)
                         .lineLimit(1)
                     Spacer(minLength: 4)
@@ -121,12 +125,12 @@ private struct UsageReadings: View {
 
     var body: some View {
         LazyVGrid(columns: columns, spacing: 10) {
-            reading("Sessions", sessions)
-            reading("Messages", messages)
-            reading("Total tokens", tokens)
-            reading("Active days", activeDays)
-            reading("Busiest hour", busiestHour)
-            reading("Top model", topModel, compact: true)
+            reading("Sessions", id: "Sessions", sessions)
+            reading("Messages", id: "Messages", messages)
+            reading("Total tokens", id: "Total tokens", tokens)
+            reading("Active days", id: "Active days", activeDays)
+            reading("Busiest hour", id: "Busiest hour", busiestHour)
+            reading("Top model", id: "Top model", topModel, compact: true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.readings")
@@ -139,7 +143,12 @@ private struct UsageReadings: View {
     ///   - value: the figure, formatted for reading.
     ///   - compact: whether the value is a name rather than a number, which is
     ///     set smaller so a long model id fits its card.
-    private func reading(_ title: String, _ value: String, compact: Bool = false) -> some View {
+    private func reading(
+        _ title: LocalizedStringKey,
+        id: String,
+        _ value: String,
+        compact: Bool = false,
+    ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .font(.caption2)
@@ -161,7 +170,7 @@ private struct UsageReadings: View {
             in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous),
         )
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("home.reading.\(title)")
+        .accessibilityIdentifier("home.reading.\(id)")
     }
 
     private var sessions: String {

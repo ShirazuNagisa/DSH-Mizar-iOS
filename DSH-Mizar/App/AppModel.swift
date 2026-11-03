@@ -1881,6 +1881,35 @@ final class AppModel {
     ///   - desktop: the computer, as `/account/v1/desktops` listed it.
     ///   - connection: the room and token `/account/v1/connect` handed back.
     ///   - origin: the account relay's origin, without a path.
+    /// A name the operator gave an account computer on this phone.
+    private func accountLabelKey(_ deviceId: String) -> String {
+        "mizar.hostLabel.\(deviceId)"
+    }
+
+    /// The local name for an account computer, when one was set.
+    func accountLabel(for deviceId: String) -> String? {
+        let value = UserDefaults.standard.string(forKey: accountLabelKey(deviceId)) ?? ""
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Rename an account computer on this phone, and keep any matching paired
+    /// record in step so the conversation header and the next launch agree.
+    func renameAccountComputer(deviceId: String, to name: String?) async {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: accountLabelKey(deviceId))
+        } else {
+            UserDefaults.standard.set(trimmed, forKey: accountLabelKey(deviceId))
+        }
+        if let index = hosts.firstIndex(where: { $0.hostId == deviceId }) {
+            let updated = hosts[index].renamed(to: trimmed.isEmpty ? nil : trimmed)
+            hosts[index] = updated
+            if host?.hostId == deviceId { host = updated }
+            try? await credentials.save(updated)
+        }
+    }
+
     func openAccountDesktop(
         _ desktop: AccountDesktop,
         using connection: DesktopConnection,
@@ -1904,6 +1933,7 @@ final class AppModel {
             deviceId: desktop.deviceId,
             deviceToken: connection.token,
             baseURL: baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL,
+            label: accountLabel(for: desktop.deviceId),
             // The relay already minted this token for the agent, so the computer
             // will answer only that agent's rows. Storing the choice is what
             // makes the phone's own filters agree with it on the next launch.
@@ -6040,7 +6070,7 @@ final class AppModel {
                         localized: "The transport switches are off, so there is no route to this computer. Turn on the local network or the direct connection to reconnect.",
                     ),
                 )
-            phase = .failed(error.message)
+            phase = .failed(Self.displayMessage(for: error))
             throw error
         }
 
@@ -6597,6 +6627,19 @@ final class AppModel {
     /// code this build knows, the app owns the sentence; an unknown code (a
     /// newer host) keeps the host's detail rather than inventing a meaning.
     static func displayMessage(for error: MizarError) -> String {
+        // Codes this app raises itself are not in the host's protocol table.
+        // They used to fall into the unknown-code tail, so a Chinese app showed
+        // "The computer reported an error: not connected to the computer."
+        switch error.code {
+        case "NO_CONNECTION", "SOCKET_CLOSED":
+            return String(localized: "Not connected to the computer.")
+        case "PREVIEW_LOCKED":
+            return String(localized: "The file preview is not available right now.")
+        case "NO_ENDPOINT":
+            return String(localized: "This pairing has no address to dial.")
+        default:
+            break
+        }
         guard let known = error.known else {
             // A newer host's code: keep its detail, inside a sentence the
             // operator can read. The detail itself is the host's English.

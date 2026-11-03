@@ -36,6 +36,8 @@ struct HostListView: View {
     @State private var choosingEngine: AgentChoice?
     /// Which connection is being opened, so the sheet can show a spinner.
     @State private var openingEngine: AgentEngine?
+    /// The account computer whose local name is being edited.
+    @State private var renamingAccount: AccountDesktop?
     /// Whether the computer list is being read again.
     @State private var refreshing = false
 
@@ -84,12 +86,23 @@ struct HostListView: View {
         } label: {
             AccountDesktopRow(
                 desktop: desktop,
-                label: model.hosts.first { $0.hostId == desktop.deviceId }?.label,
+                label: model.accountLabel(for: desktop.deviceId)
+                    ?? model.hosts.first { $0.hostId == desktop.deviceId }?.label,
             )
         }
         .buttonStyle(.pressable(scale: 0.98))
         .disabled(!desktop.online)
         .accessibilityIdentifier("host.account.\(desktop.deviceId)")
+        .contextMenu {
+            Button {
+                renamingAccount = desktop
+            } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
+        }
+        .accessibilityAction(named: Text("Rename…")) {
+            renamingAccount = desktop
+        }
     }
 
     /// Choose an agent on a computer and open it.
@@ -262,6 +275,11 @@ struct HostListView: View {
                     case .paired(let host):
                         Task { await model.chooseEngine(engine, for: host.hostId) }
                     }
+                }
+            }
+            .sheet(item: $renamingAccount) { desktop in
+                AccountRenameForm(desktop: desktop, current: model.accountLabel(for: desktop.deviceId)) { name in
+                    Task { await model.renameAccountComputer(deviceId: desktop.deviceId, to: name) }
                 }
             }
         }
@@ -483,6 +501,71 @@ private struct HostBadges: View {
 /// operator still knows which machine they just scanned -- out of the
 /// computer's name at the top of the sidebar, where the name will be. Offered
 /// again from the row's menu when they have thought of a better one.
+/// Rename an account computer on this phone.
+///
+/// Same rule as a paired host's name: it is local, never sent, and leaving it
+/// empty falls back to the host name. Account computers have no `PairedHost`
+/// row in the product, so the name lives in UserDefaults under the device id.
+struct AccountRenameForm: View {
+    let desktop: AccountDesktop
+    let current: String?
+    let onSave: (String?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Name this computer")
+                .font(.headline)
+            TextField(desktop.name, text: $name)
+                .textInputAutocapitalization(.words)
+                .focused($focused)
+                .submitLabel(.done)
+                .onSubmit { save() }
+                .padding(.horizontal, 14)
+                .frame(height: 44)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+                .accessibilityIdentifier("rename.account.field")
+            Text("Shown only on this phone. Leave it empty to use the machine's own name, \(desktop.name).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Button {
+                    onSave(nil)
+                    dismiss()
+                } label: {
+                    Text("Cancel").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glass)
+                .accessibilityIdentifier("rename.account.cancel")
+                Button {
+                    save()
+                } label: {
+                    Text("Save").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glassProminent)
+                .accessibilityIdentifier("rename.account.save")
+            }
+            .controlSize(.large)
+            .padding(.top, 4)
+        }
+        .padding(18)
+        .frame(width: 320)
+        .onAppear {
+            name = current ?? ""
+            focused = true
+        }
+    }
+
+    private func save() {
+        onSave(name)
+        dismiss()
+    }
+}
+
 struct RenameForm: View {
     let host: PairedHost
     /// "Skip" right after pairing, "Cancel" from the menu.

@@ -1443,3 +1443,88 @@ struct TurnMergeTests {
         #expect(merged.first?.stepCount == 7)
     }
 }
+
+
+@Suite("Turn ordering")
+struct TurnOrderingTests {
+    private func page(_ payload: String) throws -> SessionMessagesResult {
+        try JSONDecoder().decode(SessionMessagesResult.self, from: Data(payload.utf8))
+    }
+
+    @Test("a mid-turn steer keeps its place between two answers")
+    func steeringStaysInline() throws {
+        let result = try page("""
+        {"sessionId":"s1","asOfSeq":6,"hasMore":false,"records":[
+          {"type":"event","event":{"type":"turn/start","seq":1,"time":1000,"data":{"turn":1}}},
+          {"type":"event","event":{"type":"user/message","seq":2,"time":1100,
+            "data":{"content":[{"type":"text","text":"first"}],"source":{"kind":"user"}}}},
+          {"type":"event","event":{"type":"assistant/message","seq":3,"time":1200,
+            "data":{"turn":1,"message":{"role":"assistant","content":[{"type":"text","text":"one"}]}}}},
+          {"type":"event","event":{"type":"user/message","seq":4,"time":1300,
+            "data":{"content":[{"type":"text","text":"second"}],"source":{"kind":"user"}}}},
+          {"type":"event","event":{"type":"assistant/message","seq":5,"time":1400,
+            "data":{"turn":1,"message":{"role":"assistant","content":[{"type":"text","text":"two"}]}}}},
+          {"type":"event","event":{"type":"turn/end","seq":6,"time":1500,
+            "data":{"turn":1,"reason":{"kind":"completed"}}}}
+        ]}
+        """)
+        let turn = try #require(result.conversationTurns().first)
+        #expect(turn.prompts.count == 2)
+        #expect(turn.steps.count == 2)
+        #expect(turn.orderedItems.count == 4)
+        let texts = turn.orderedItems.compactMap { item -> String? in
+            if case .message(_, _, let text, _) = item { return text }
+            return nil
+        }
+        #expect(texts == ["first", "one", "second", "two"])
+    }
+
+    @Test("an orphan notice is a notice, never a user bubble")
+    func orphanNoticeIsNotAPrompt() throws {
+        let result = try page("""
+        {"sessionId":"s1","asOfSeq":5,"hasMore":false,"records":[
+          {"type":"event","event":{"type":"turn/start","seq":1,"time":1000,"data":{"turn":1}}},
+          {"type":"event","event":{"type":"user/message","seq":2,"time":1100,
+            "data":{"content":[{"type":"text","text":"go"}],"source":{"kind":"user"}}}},
+          {"type":"event","event":{"type":"assistant/message","seq":3,"time":1200,
+            "data":{"turn":1,"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}}},
+          {"type":"event","event":{"type":"turn/end","seq":4,"time":1300,
+            "data":{"turn":1,"reason":{"kind":"completed"}}}},
+          {"type":"event","event":{"type":"notice","seq":5,"time":1400,
+            "data":{"text":"Background subagent obage-1 finished"}}}
+        ]}
+        """)
+        let turns = result.conversationTurns()
+        #expect(turns.count == 2)
+        #expect(turns[0].prompts.count == 1)
+        #expect(turns[0].steps.count == 1)
+        #expect(turns[1].turn == nil)
+        #expect(turns[1].prompts.isEmpty)
+        #expect(turns[1].steps.count == 1)
+        #expect(turns.allSatisfy { turn in
+            !turn.prompts.contains { item in
+                if case .notice = item { return true }
+                return false
+            }
+        })
+    }
+
+    @Test("a notice in a page cut mid-turn lands with the answer")
+    func noticeInCutPageIsAStep() throws {
+        let result = try page("""
+        {"sessionId":"s1","asOfSeq":3,"hasMore":false,"records":[
+          {"type":"event","event":{"type":"user/message","seq":1,"time":1000,
+            "data":{"content":[{"type":"text","text":"go"}],"source":{"kind":"user"}}}},
+          {"type":"event","event":{"type":"notice","seq":2,"time":1100,
+            "data":{"text":"Background subagent obage-1 started"}}},
+          {"type":"event","event":{"type":"assistant/message","seq":3,"time":1200,
+            "data":{"turn":1,"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}}}
+        ]}
+        """)
+        let turn = try #require(result.conversationTurns().first)
+        #expect(turn.prompts.count == 1)
+        #expect(turn.steps.count == 2)
+        #expect(turn.orderedItems.count == 3)
+        if case .notice = turn.orderedItems[1] {} else { Issue.record("notice was not second") }
+    }
+}

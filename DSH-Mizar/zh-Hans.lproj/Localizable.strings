@@ -762,3 +762,67 @@
 "Sign in to find the computers on your account." = "登录后可以找到你账户里的电脑。";
 
 "The same account is the only way in." = "只能通过同一个账号进入。";
+
+"Analysed" = "已完成分析";
+
+"Read files" = "已读取文件";
+
+"Edited files" = "修改了文件";
+
+"Ran commands" = "执行了命令";
+
+"Searched code" = "已搜索代码";
+
+"Coordinated subagents" = "已协调子智能体";
+
+"Updated the plan" = "更新了计划";
+
+"Asked questions" = "向用户提出了问题";
+
+"Called tools" = "已调用工具";
+
+"Handed to the background" = "交给了后台任务";
+
+"Compacted the context" = "压缩了上下文";
+
+"Analysing" = "正在分析";
+
+"Reading files" = "正在读取文件";
+
+"Editing files" = "正在修改文件";
+
+"Running commands" = "正在执行命令";
+
+"Searching code" = "正在搜索代码";
+
+"Coordinating subagents" = "正在协调子智能体";
+
+"Updating the plan" = "正在更新计划";
+
+"Asking you questions" = "正在向你提问";
+
+"Calling tools" = "正在调用工具";
+
+"Waiting for the background" = "等待后台任务";
+
+"Compacting the context" = "正在压缩上下文";
+
+"Background subagent" = "后台子代理";
+
+"1 commit" = "1 次提交";
+
+"%lld commits" = "%lld 次提交";
+
+"1 co-authored" = "1 次共同署名";
+
+"%lld co-authored" = "%lld 次共同署名";
+
+"Contributor" = "贡献者";
+
+"The contributor list is unavailable right now." = "贡献者列表暂时不可用。";
+
+"The file preview is not available right now." = "文件预览暂时不可用。";
+
+"This pairing has no address to dial." = "这个配对没有可拨号的地址。";
+
+"request" = "请求";

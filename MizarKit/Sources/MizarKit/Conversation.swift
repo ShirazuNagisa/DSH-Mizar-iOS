@@ -185,6 +185,13 @@ public enum ConversationItem: Sendable, Equatable, Identifiable {
     ///   - right: the other.
     /// - Returns: whether `left` comes first.
     public static func precedes(_ left: ConversationItem, _ right: ConversationItem) -> Bool {
+        // The log's own counter is the position; `time` only breaks records
+        // that have no seq. It used to be the other way round, which let two
+        // records stamped in the same millisecond (one turn emits many) swap
+        // when a page arrived out of order.
+        if let leftSeq = left.seq, let rightSeq = right.seq, leftSeq != rightSeq {
+            return leftSeq < rightSeq
+        }
         if left.at != right.at { return left.at < right.at }
         return (left.seq ?? .max) < (right.seq ?? .max)
     }
@@ -1002,6 +1009,17 @@ public struct ConversationTurn: Sendable, Equatable, Identifiable, Codable {
 
     /// Everything in the turn, for a caller that wants a flat list.
     public var items: [ConversationItem] { prompts + steps }
+
+    /// Everything the turn contains, in the order the log wrote it.
+    ///
+    /// ``prompts`` and ``steps`` are storage buckets, not a running order. DSH
+    /// writes a steer message and an injected notice *inside* the turn, between
+    /// two assistant messages, and the desktop draws them there; drawing every
+    /// prompt first moved those rows above an answer that came before them.
+    /// `seq` is the only stable position, and it is already on the item.
+    public var orderedItems: [ConversationItem] {
+        items.sorted(by: ConversationItem.precedes)
+    }
 }
 
 extension SessionMessagesResult {
@@ -1071,7 +1089,10 @@ extension SessionMessagesResult {
         /// does not stand in for anything.
         var firstAt: [Int?: Date] = [:]
         /// Prompts seen before the turn they started.
-        var pending: [ConversationItem] = []
+        var pendingPrompts: [ConversationItem] = []
+        /// Notices seen before the turn they belong to. They are steps, never
+        /// prompts: a notice drawn as a user bubble is the wrong voice.
+        var pendingNotices: [ConversationItem] = []
         /// The turn that is open: a `turn/start` has been read and no
         /// `turn/end` for it has. This is the turn a prompt written now began.
         var open: Int?
@@ -1105,6 +1126,22 @@ extension SessionMessagesResult {
         var deliverables: [Int?: [DeliveredFile]] = [:]
         var placedIds: [Int?: Set<String>] = [:]
         var placedStepIds: [Int?: Set<String>] = [:]
+
+        /// The turn whose seq range contains a record, when one has closed
+        /// around it. Used for notices whose wire `turn` is missing (DSH's
+        /// `user/message` has no turn field) and for a page cut mid-turn.
+        func containingTurn(seq: Int) -> Int? {
+            for candidate in order.reversed() {
+                guard let candidate else { continue }
+                guard let start = firstSeq[candidate], start <= seq else { continue }
+                if let end = endSeqs[candidate] {
+                    if seq <= end { return candidate }
+                } else if candidate == open {
+                    return candidate
+                }
+            }
+            return nil
+        }
 
         /// Put a record's items on its turn, keeping the first of any repeated id.
         ///
@@ -1144,9 +1181,13 @@ extension SessionMessagesResult {
                 note(turn, seq: seq, at: at)
                 open = turn
                 openIsSet = true
-                if !pending.isEmpty {
-                    place(pending, for: turn, as: false)
-                    pending.removeAll()
+                if !pendingPrompts.isEmpty {
+                    place(pendingPrompts, for: turn, as: false)
+                    pendingPrompts.removeAll()
+                }
+                if !pendingNotices.isEmpty {
+                    place(pendingNotices, for: turn, as: true)
+                    pendingNotices.removeAll()
                 }
             case "step/start":
                 // A marker, not content. It still names its turn -- unlike a
@@ -1205,10 +1246,14 @@ extension SessionMessagesResult {
                 guard !items.isEmpty else { continue }
                 if let turn, order.contains(turn) {
                     place(items, for: turn, as: true)
+                } else if let seq, let containing = containingTurn(seq: seq) {
+                    place(items, for: containing, as: true)
                 } else if openIsSet {
                     place(items, for: open, as: true)
                 } else {
-                    pending.append(contentsOf: items)
+                    // A notice is not a prompt. Holding it separately keeps a
+                    // settlement notice from waking as a user bubble.
+                    pendingNotices.append(contentsOf: items)
                 }
             case "user/message", "assistant/message":
                 let items = record.conversationItems()
@@ -1220,10 +1265,12 @@ extension SessionMessagesResult {
                     // been read yet.
                     if let turn, order.contains(turn) {
                         place(items, for: turn, as: false)
+                    } else if let seq, let containing = containingTurn(seq: seq) {
+                        place(items, for: containing, as: false)
                     } else if openIsSet {
                         place(items, for: open, as: false)
                     } else {
-                        pending.append(contentsOf: items)
+                        pendingPrompts.append(contentsOf: items)
                     }
                     continue
                 }
@@ -1233,9 +1280,13 @@ extension SessionMessagesResult {
                 // whose oldest record is the prompt, with the turn's envelope in
                 // the page before it -- so it is claimed by whichever of the two
                 // is read first.
-                if !pending.isEmpty {
-                    place(pending, for: turn, as: false)
-                    pending.removeAll()
+                if !pendingPrompts.isEmpty {
+                    place(pendingPrompts, for: turn, as: false)
+                    pendingPrompts.removeAll()
+                }
+                if !pendingNotices.isEmpty {
+                    place(pendingNotices, for: turn, as: true)
+                    pendingNotices.removeAll()
                 }
                 place(items, for: turn, as: true)
             default:
@@ -1243,10 +1294,13 @@ extension SessionMessagesResult {
             }
         }
 
-        // A prompt with nothing after it still has to be on screen.
-        if !pending.isEmpty {
+        // A record with nothing after it still has to be on screen. Prompts
+        // stay prompts; notices stay notices -- the trailing group is a
+        // transcript, not a user message.
+        if !pendingPrompts.isEmpty || !pendingNotices.isEmpty {
             order.append(nil)
-            place(pending, for: nil, as: false)
+            if !pendingPrompts.isEmpty { place(pendingPrompts, for: nil, as: false) }
+            if !pendingNotices.isEmpty { place(pendingNotices, for: nil, as: true) }
         }
 
         return order.map { turn in

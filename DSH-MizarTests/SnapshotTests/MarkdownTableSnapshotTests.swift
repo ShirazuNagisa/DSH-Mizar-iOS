@@ -46,4 +46,7 @@ struct MarkdownTableSnapshotTests {
         #expect(snapshot.pixelWidth == 1008)
         #expect(snapshot.pixelHeight == 1040)
     }
+
+
+
 }

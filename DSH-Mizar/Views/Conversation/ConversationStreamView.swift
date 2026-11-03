@@ -259,8 +259,8 @@ struct ConversationStreamView: View {
                 },
                 onStopped: onTypingStopped,
             )
-            .font(block.isFinal ? .body : .callout)
-            .foregroundStyle(block.isFinal ? Color.primary : Color.secondary)
+            .font(.body)
+            .foregroundStyle(.primary)
             .accessibilityIdentifier(block.isFinal ? "conversation.stream.answer" : "conversation.stream.narration")
         }
     }
@@ -349,6 +349,7 @@ private struct StreamClock: View {
 
 /// One line of the state machine, running or settled.
 private struct StreamStatusLine: View {
+    @Environment(\.colorScheme) private var colorScheme
     let states: [SessionState]
     /// Whether this is the line that is still changing.
     let running: Bool
@@ -367,14 +368,32 @@ private struct StreamStatusLine: View {
         return StreamWording.completion(states)
     }
 
+    /// The glyph the state machine's current (or last) category implies.
+    private var category: ProcessCategory? {
+        if let waiting, let category = ProcessCategory.from(state: waiting) { return category }
+        if let current, let category = ProcessCategory.from(state: current) { return category }
+        return states.compactMap(ProcessCategory.from).last
+    }
+
     var body: some View {
-        Text(text)
-            .font(.subheadline.weight(running ? .medium : .regular))
-            .foregroundStyle(running ? Color.accentColor : Color.secondary)
-            .contentTransition(.opacity)
-            .animation(.snappy(duration: 0.18), value: text)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier(running ? "conversation.stream.status.running" : "conversation.stream.status")
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if let symbol = category?.symbol {
+                Image(systemName: symbol)
+                    .font(.subheadline.weight(.medium))
+            }
+            Text(text)
+                .font(.subheadline.weight(running ? .medium : .regular))
+                // In dark mode the accent is white, i.e. the body colour: a
+                // quiet underline is what still says "this line is the app's
+                // live voice", not another paragraph.
+                .underline(running && colorScheme == .dark)
+        }
+        .foregroundStyle(running ? Color.accentColor : Color.secondary)
+        .contentTransition(.opacity)
+        .animation(.snappy(duration: 0.18), value: text)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(running ? "conversation.stream.status.running" : "conversation.stream.status")
     }
 }
 

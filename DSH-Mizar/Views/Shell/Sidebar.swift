@@ -605,7 +605,9 @@ struct SidebarView: View {
 /// not a name, but still a way to tell one row from the next.
 enum SessionTitle {
     static func display(for session: SessionRow, title: String?) -> String {
-        if let title, !title.isEmpty { return title }
+        if let title, !title.isEmpty {
+            return SubagentSnapshot.localizeKnownHostTitle(title)
+        }
         if let cwd = session.cwd {
             let name = (cwd as NSString).lastPathComponent
             return "\(name) · \(session.sessionId.prefix(8))"

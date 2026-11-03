@@ -783,7 +783,10 @@ struct SettingsView: View {
     /// What an empty list says, by state.
     private var creditsEmptyText: String {
         switch model.credits.state {
-        case .failed(let message): message
+        case .failed:
+            // The technical detail is for the log, not for a settings row: it
+            // is raw GitHub English and says nothing the operator can act on.
+            String(localized: "The contributor list is unavailable right now.")
         case .loading: String(localized: "Loading contributors…")
         default: String(localized: "No contributors to show yet.")
         }
@@ -807,6 +810,29 @@ struct ContributorRow: View {
     let contributor: Contributor
     let avatar: UIImage?
 
+    /// Built as `Text`, not `String`: the row has to follow the environment's
+    /// language (the snapshot suite renders both), while `String(localized:)`
+    /// follows the process locale and returned Chinese inside an English view.
+    private var detailText: Text {
+        var parts: [Text] = []
+        if contributor.commits > 0 {
+            parts.append(
+                contributor.commits == 1
+                    ? Text("1 commit")
+                    : Text("\(contributor.commits) commits"),
+            )
+        }
+        if contributor.coAuthored > 0 {
+            parts.append(
+                contributor.coAuthored == 1
+                    ? Text("1 co-authored")
+                    : Text("\(contributor.coAuthored) co-authored"),
+            )
+        }
+        guard let first = parts.first else { return Text("Contributor") }
+        return parts.dropFirst().reduce(first) { $0 + Text(" · ") + $1 }
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             avatarView
@@ -817,9 +843,9 @@ struct ContributorRow: View {
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(contributor.name == nil
-                    ? contributor.detail
-                    : "@\(contributor.login) · \(contributor.detail)")
+                (contributor.name == nil
+                    ? detailText
+                    : Text(verbatim: "@\(contributor.login) · ") + detailText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

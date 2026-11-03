@@ -762,3 +762,67 @@
 "Sign in to find the computers on your account." = "Sign in to find the computers on your account.";
 
 "The same account is the only way in." = "The same account is the only way in.";
+
+"Analysed" = "Analysed";
+
+"Read files" = "Read files";
+
+"Edited files" = "Edited files";
+
+"Ran commands" = "Ran commands";
+
+"Searched code" = "Searched code";
+
+"Coordinated subagents" = "Coordinated subagents";
+
+"Updated the plan" = "Updated the plan";
+
+"Asked questions" = "Asked questions";
+
+"Called tools" = "Called tools";
+
+"Handed to the background" = "Handed to the background";
+
+"Compacted the context" = "Compacted the context";
+
+"Analysing" = "Analysing";
+
+"Reading files" = "Reading files";
+
+"Editing files" = "Editing files";
+
+"Running commands" = "Running commands";
+
+"Searching code" = "Searching code";
+
+"Coordinating subagents" = "Coordinating subagents";
+
+"Updating the plan" = "Updating the plan";
+
+"Asking you questions" = "Asking you questions";
+
+"Calling tools" = "Calling tools";
+
+"Waiting for the background" = "Waiting for the background";
+
+"Compacting the context" = "Compacting the context";
+
+"Background subagent" = "Background subagent";
+
+"1 commit" = "1 commit";
+
+"%lld commits" = "%lld commits";
+
+"1 co-authored" = "1 co-authored";
+
+"%lld co-authored" = "%lld co-authored";
+
+"Contributor" = "Contributor";
+
+"The contributor list is unavailable right now." = "The contributor list is unavailable right now.";
+
+"The file preview is not available right now." = "The file preview is not available right now.";
+
+"This pairing has no address to dial." = "This pairing has no address to dial.";
+
+"request" = "Request";
