@@ -397,7 +397,8 @@ struct TurnIndexPanel: View {
                 ForEach(Array(turns.enumerated()), id: \.element.id) { offset, turn in
                     TurnIndexRow(
                         turn: turn,
-                        number: number(of: turn),
+                        title: turn.promptLine ?? String(format: String(localized: "Turn %lld"), turn.turn ?? (offset + 1)),
+                        number: turn.turn ?? (offset + 1),
                         spent: turn.spent(asOf: now),
                         longest: longest,
                         onScreen: index.visible.contains(turn.id),
@@ -486,10 +487,6 @@ struct TurnIndexPanel: View {
         }
     }
 
-    private func number(of turn: ConversationTurn) -> Int {
-        turn.turn ?? ((index.turns.firstIndex { $0.id == turn.id } ?? 0) + 1)
-    }
-
     /// Put the timeline at its newest turn.
     ///
     /// The anchor is the bottom rather than a computed offset: the last row is
@@ -549,6 +546,9 @@ struct TurnIndexPanel: View {
 /// One turn on the timeline.
 private struct TurnIndexRow: View {
     let turn: ConversationTurn
+    /// Precomputed by the list: `promptLine` splits the prompt string, and a
+    /// row body can be re-evaluated for focus and growth many times.
+    let title: String
     let number: Int
     let spent: TimeInterval?
     let longest: TimeInterval
@@ -570,7 +570,7 @@ private struct TurnIndexRow: View {
             HStack(alignment: .top, spacing: 12) {
                 rail
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(turn.promptLine ?? String(format: String(localized: "Turn %lld"), number))
+                    Text(title)
                         .font(.subheadline.weight(onScreen ? .semibold : .regular))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
