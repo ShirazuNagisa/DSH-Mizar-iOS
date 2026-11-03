@@ -534,7 +534,8 @@ struct AccountRenameForm: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 Button {
-                    onSave(nil)
+                    // Cancel is not "clear the name": a rename sheet that
+                    // erases a label on its way out is a trap.
                     dismiss()
                 } label: {
                     Text("Cancel").frame(maxWidth: .infinity)

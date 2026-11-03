@@ -116,8 +116,9 @@ struct SubagentSnapshot: Equatable {
     /// label, and leaving it in English in a Chinese app is the report. Keep the
     /// child's own suffix, translate only the prefix.
     static func localizeKnownHostTitle(_ raw: String) -> String {
-        let prefix = "Background subagent"
-        guard raw.hasPrefix(prefix) else { return raw }
+        let prefixes = ["background subagent", "background sub-agent"]
+        let lower = raw.lowercased()
+        guard let prefix = prefixes.first(where: { lower.hasPrefix($0) }) else { return raw }
         let suffix = raw.dropFirst(prefix.count)
         return String(localized: "Background subagent") + suffix
     }
