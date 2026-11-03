@@ -332,6 +332,7 @@ private struct StreamClock: View {
                 Text(String(localized: "DeepSeeking"))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
+                    .shimmering()
             }
         }
         .accessibilityElement(children: .combine)
@@ -342,6 +343,10 @@ private struct StreamClock: View {
         Text(String(format: String(localized: "DeepSeeking for %@"), StreamDuration.spell(elapsed)))
             .font(.subheadline.weight(.medium))
             .foregroundStyle(.secondary)
+            // This is the same running headline that carried the old sweep
+            // before the stream was rebuilt: it is the clock the whole live
+            // footer is named after, not the finished turn above it.
+            .shimmering()
             .contentTransition(.numericText(countsDown: false))
             .animation(.mizarSnappy, value: Int(elapsed))
     }

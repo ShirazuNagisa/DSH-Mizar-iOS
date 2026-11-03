@@ -1046,6 +1046,7 @@ extension View {
 private struct Shimmer: ViewModifier {
     let active: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     /// Held while a drawer is being dragged or settles: the sweep redraws
     /// -- and re-masks -- every frame it runs, and those frames belong to
     /// the card.
@@ -1058,7 +1059,13 @@ private struct Shimmer: ViewModifier {
                     GeometryReader { geometry in
                         let width = geometry.size.width
                         LinearGradient(
-                            colors: [.clear, Color.accentColor.opacity(0.95), .white.opacity(0.9), Color.accentColor.opacity(0.95), .clear],
+                            colors: [
+                                .clear,
+                                Color.accentColor.opacity(0.95),
+                                (colorScheme == .dark ? Color(red: 0.28, green: 0.68, blue: 1.0) : .white).opacity(0.9),
+                                Color.accentColor.opacity(0.95),
+                                .clear,
+                            ],
                             startPoint: .leading,
                             endPoint: .trailing,
                         )
