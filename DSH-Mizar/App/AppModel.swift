@@ -1285,6 +1285,10 @@ final class AppModel {
     }
 
     func loadUsageOverview() async {
+        // Which computer this read is about. A host switch while the request is
+        // in flight must not let the old computer's numbers land under the new
+        // one's cache key.
+        let requestedHostId = host?.hostId
         // The stored copy is shown before the network is asked, so a cold start
         // or an unreachable computer never empties the top half of the home
         // page. A different computer is a different cache: the figures must not
@@ -1332,6 +1336,7 @@ final class AppModel {
         }
 
         guard !readings.isEmpty else { return }
+        guard host?.hostId == requestedHostId else { return }
         let merged = UsageOverview.merged(readings)
         usageOverview = merged
         if let host { saveCachedUsage(merged, hostId: host.hostId) }
