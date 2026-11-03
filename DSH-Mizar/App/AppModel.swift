@@ -1482,26 +1482,6 @@ final class AppModel {
     /// makes the app drivable from `simctl launch` and from a UI test without
     /// typing into fields or tapping through an alert. It is the same payload
     /// the QR carries, so the path exercised is the real one.
-    /// Reopen the conversation the last run was showing, once per host.
-    ///
-    /// Only when nothing else has claimed the window: a notification tap, a
-    /// debug launch argument and a deliberate home page all win over the saved
-    /// id. The session must still exist, or the app opens on the home page
-    /// rather than on a conversation the host no longer has.
-    private func restoreLastSessionIfNeeded() {
-        guard let host, Self.launchSelectedSession == nil, selectedSessionId == nil else { return }
-        let key = "lastSession." + host.hostId
-        guard let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty else { return }
-        // Do not require the first session list to contain it. The read that
-        // follows a relaunch can be empty, still in flight, or filtered to one
-        // engine while the saved conversation belongs to another; none of those
-        // is evidence that the conversation is gone. The detail screen can open
-        // a session by id and will say so if the host no longer has it, which is
-        // still a window, not a silent jump to the home page.
-        log.add(.app, "restoring the last session \(saved)")
-        selectedSessionId = saved
-    }
-
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
@@ -1813,7 +1793,7 @@ final class AppModel {
     }
 
     /// Tear the live connection down without touching what is stored.
-    private func disconnectCurrent() {
+    private func disconnectCurrent(preserveSelection: Bool = false) {
         if connection != nil { log.add(.connection, "closing the connection") }
         // Every path that drops a connection drops the mode with it: a pairing,
         // a forget and a switch all end whatever this phone was connected to,
@@ -1841,7 +1821,9 @@ final class AppModel {
         linkFailure = nil
         sessions = []
         sessionsAreKnown = false
-        selectedSessionId = nil
+        if !preserveSelection {
+            selectedSessionId = nil
+        }
         statsError = nil
         conversationError = nil
         // Per-machine facts, cleared with the machine. `workspaces` is that
@@ -3954,7 +3936,10 @@ final class AppModel {
         if !onLocalNetwork, let host {
             // 2. Nothing we know answered: replace whatever socket the return
             //    inherited and race the routes the switches allow.
-            disconnectCurrent()
+            // A redial is not a different computer. Keep the conversation on
+            // screen through it; clearing the selection here wrote an empty
+            // lastSession and made a return look like a deliberate home tap.
+            disconnectCurrent(preserveSelection: true)
             let adopted = (try? await connect(using: host)) != nil
             if adopted {
                 // 3. A socket exists now, so the host can be asked for the
@@ -4214,7 +4199,6 @@ final class AppModel {
             }
             sessions = Self.scoped(result.items, to: engineScope)
             sessionsAreKnown = true
-            restoreLastSessionIfNeeded()
             await refreshWorkspaces()
             lastError = nil
             // Written after the workspaces, so the two halves of one answer land
@@ -6145,7 +6129,6 @@ final class AppModel {
         if let requested = Self.launchSelectedSession {
             selectedSessionId = requested == "first" ? sessions.first?.sessionId : requested
         }
-        restoreLastSessionIfNeeded()
         // The home page's figures are about the computer we just reached; load
         // them now rather than waiting for the home screen to appear.
         Task { await loadUsageOverview() }

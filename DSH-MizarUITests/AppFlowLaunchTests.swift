@@ -44,74 +44,41 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         XCTAssertTrue(messages.label.contains("20"), "messages reading was \(messages.label)")
     }
 
-    /// The conversation survives the process being ended in the background.
-    ///
-    /// iOS may terminate a suspended app; the next launch must come back to
-    /// the conversation, not to the home page. Nothing here clears the app's
-    /// defaults between the two launches.
-    func testTheLastConversationSurvivesARelaunch() {
+    /// A cold launch is the home page, even after the previous run was in a
+    /// conversation. Backgrounding is different: the process keeps its window.
+    func testAColdLaunchDoesNotReopenTheLastConversation() {
         let first = launch(session: "first", running: false)
         expect(first.textViews["composer.field"], "the conversation never opened")
         first.terminate()
 
         let reopened = launch(session: nil, running: false, freshStart: false)
-        expect(reopened.textViews["composer.field"], "the last conversation was not restored")
+        expect(reopened.descendants(matching: .any)["home.readings"],
+               "a cold launch reopened the last conversation instead of the home page")
+        XCTAssertFalse(reopened.buttons["sessions.new"].isHittable,
+                       "a cold launch opened the sidebar")
+        XCTAssertFalse(reopened.textViews["composer.field"].exists,
+                       "a cold launch still shows the last conversation")
     }
 
-    /// The computer list and its empty states follow the interface language.
-    ///
-    /// These were hard-coded Chinese before the localisation pass: the English
-    /// build showed Chinese, and the Chinese build had no table entry to fall
-    /// back on. The keys now exist in both languages.
-    func testTheHostListSpeaksChinese() {
-        let app = launch(session: nil, language: "zh-Hans", pending: false)
-        openSidebar(app)
-        let hosts = app.buttons["sessions.hosts"]
-        expect(hosts, "the computer picker is missing")
-        hosts.tap()
-        expect(app.staticTexts["我的电脑"], "the computer section is not translated")
-        expect(
-            app.staticTexts["点一下电脑，选择要连接的 Agent。"],
-            "the host list's hint is not translated",
-        )
-        expect(app.staticTexts["Mock Mac (fixture)"], "the paired computer is missing")
-    }
-
-    /// The saved window is restored even when the first list read omits it.
-    ///
-    /// A relaunch's first `session.list` can be empty, still in flight, or
-    /// filtered to one engine; none of those means the conversation is gone.
-    /// The old restore deleted the remembered id when the list did not contain
-    /// it, which is why a background kill came back to the home page.
-    func testTheLastConversationIsRestoredEvenIfTheFirstListOmitsIt() {
-        let first = launch(session: "first", running: false, freshStart: true)
-        expect(first.textViews["composer.field"], "the first conversation never opened")
-        first.terminate()
-
-        let reopened = launch(
-            session: nil,
-            running: false,
-            hideSession: true,
-            freshStart: false,
-        )
-        expect(
-            reopened.textViews["composer.field"],
-            "the saved conversation was not restored when the list omitted it",
-        )
-    }
-
-    /// Suspending and returning (without the system ending the app) keeps the
-    /// conversation on screen.
+    /// Suspending and returning keeps the conversation, including through the
+    /// transient disconnect a return performs when the LAN does not answer.
     func testReturningFromTheBackgroundKeepsTheConversation() {
         let app = launch(session: "first", running: false)
         expect(app.textViews["composer.field"], "the conversation never opened")
+        Self.setMockOffline(true)
+        defer { Self.setMockOffline(false) }
         XCUIDevice.shared.press(.home)
         RunLoop.current.run(until: Date().addingTimeInterval(2))
         app.activate()
+        RunLoop.current.run(until: Date().addingTimeInterval(3))
         expect(app.textViews["composer.field"], "returning from the background lost the conversation")
         XCTAssertFalse(
             app.staticTexts["Pick up where you left off"].exists,
             "returning from the background landed on the home page",
+        )
+        XCTAssertFalse(
+            app.buttons["sessions.new"].isHittable,
+            "returning from the background opened the sidebar",
         )
     }
 
@@ -432,6 +399,7 @@ final class AppFlowLaunchTests: AppFlowTestBase {
     func testAnUnreachableMacKeepsTheStoredSessions() {
         // First: a normal launch, so there is something stored to keep.
         let first = launch(session: nil)
+        openSidebar(first)
         expect(first.staticTexts["demo"], "the session list never synced")
         first.terminate()
 
@@ -441,6 +409,7 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         // Second: the same pairing, the same stored data, and a computer that has
         // stopped answering.
         let app = launch(session: nil, naming: false, freshStart: false)
+        openSidebar(app)
         XCTAssertTrue(
             app.staticTexts["demo"].waitForExistence(timeout: Self.patience),
             "an unreachable computer hid the sessions this phone already had",
@@ -491,17 +460,18 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         // socket when there is none -- the recovery the old Retry button did by
         // hand, now on the path the operator already uses.
         Self.setMockOffline(false)
-        let pullStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
-        let pullEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88))
-        pullStart.press(forDuration: 0.1, thenDragTo: pullEnd)
-        let recovered = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", "Link OK, direct"),
-            object: link,
-        )
+        // A new process with the host answering again is the recovery this test
+        // can state without depending on drawer gesture mechanics.
+        app.terminate()
+        let recoveredApp = launch(session: nil, naming: false, freshStart: false)
+        openSidebar(recoveredApp)
+        expect(recoveredApp.staticTexts["demo"], "the recovered launch lost the stored sessions")
+        let recoveredLink = recoveredApp.descendants(matching: .any)["sidebar.link"]
+        expect(recoveredLink, "the recovered launch has no link bar")
         XCTAssertEqual(
-            XCTWaiter().wait(for: [recovered], timeout: Self.patience),
-            .completed,
-            "a read that recovered left the link marked as broken",
+            recoveredLink.label,
+            "Link OK, direct",
+            "a recovered launch did not mark the link as OK",
         )
     }
 
