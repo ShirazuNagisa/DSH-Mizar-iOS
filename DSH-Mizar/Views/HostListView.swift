@@ -27,10 +27,6 @@ import MizarKit
 struct HostListView: View {
     @Environment(AppModel.self) private var model
     @State private var path: [HostRoute] = []
-    /// Whether the pairing card is up. A sheet rather than a page pushed into
-    /// this window: the camera it opens is as tall as the screen is wide, and
-    /// only a sheet can grow for it. See ``PairingSheet``.
-    @State private var pairing = false
     /// The computer whose agent is being chosen, if any.
     ///
     /// Both kinds of row end here: a computer the account found, and one this
@@ -86,7 +82,10 @@ struct HostListView: View {
         Button {
             choosingEngine = .account(desktop)
         } label: {
-            AccountDesktopRow(desktop: desktop)
+            AccountDesktopRow(
+                desktop: desktop,
+                label: model.hosts.first { $0.hostId == desktop.deviceId }?.label,
+            )
         }
         .buttonStyle(.pressable(scale: 0.98))
         .disabled(!desktop.online)
@@ -140,6 +139,10 @@ struct HostListView: View {
                     .accessibilityIdentifier("host.row.local")
 
                     sectionHeader("My computers")
+                    // Manual pairings are no longer an entrance. In a debug
+                    // build launched with a pairing URI they are still drawn
+                    // for the UI suite; the product shows the account's list.
+                    if AppModel.showsManualPairing {
                     ForEach(model.hosts, id: \.hostId) { host in
                         Button {
                             // A computer that serves three agents is asked which
@@ -171,6 +174,7 @@ struct HostListView: View {
                                 Label("Rename…", systemImage: "pencil")
                             }
                         }
+                    }
                     }
 
                     // The account's computers, in the same section as the
@@ -259,9 +263,6 @@ struct HostListView: View {
                         Task { await model.chooseEngine(engine, for: host.hostId) }
                     }
                 }
-            }
-            .sheet(isPresented: $pairing) {
-                PairingSheet()
             }
         }
     }
@@ -603,11 +604,14 @@ struct UnpairedView<Mark: View>: View {
                     mark
                         .frame(width: 112)
                         .padding(.bottom, 36)
-                    Text("Install the plugin, then scan")
+                    Text(AppModel.showsManualPairing
+                        ? "Install the plugin, then scan"
+                        : "Choose a computer")
                         .font(.largeTitle.weight(.bold))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
+                        .accessibilityIdentifier("unpaired.choose")
                     if signedIn {
                         // Who this phone thinks it is: a wrong account is the
                         // one failure this screen cannot otherwise show.
@@ -654,44 +658,44 @@ struct UnpairedView<Mark: View>: View {
                         .buttonStyle(.pressable(scale: 0.97, dims: true))
                         .accessibilityIdentifier("unpaired.refresh")
                     } else {
-                        Text("In DSH's plugin panel, enter dsh-mizar to install the plugin, then restart DSH. When the panel shows a code, come back here and scan it.")
+                        Text("Sign in to find the computers on your account.")
                             .font(.body)
                             .foregroundStyle(.white.opacity(0.7))
                             .multilineTextAlignment(.center)
                             .padding(.top, 12)
                             .padding(.horizontal, 30)
-                        Text("dsh plugin --profile desktop add dsh-mizar")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.white.opacity(0.62))
-                            .textSelection(.enabled)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.white.opacity(0.08), in: Capsule())
-                            .padding(.top, 14)
                     }
                     Spacer()
-                    Button {
-                        showingPairing = true
-                    } label: {
-                        Label("Scan the code", systemImage: "qrcode.viewfinder")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
+                    if AppModel.showsManualPairing {
+                        Button {
+                            showingPairing = true
+                        } label: {
+                            Label("Scan the code", systemImage: "qrcode.viewfinder")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.extraLarge)
+                        .accessibilityIdentifier("unpaired.scan")
+                        // A card over the navy, which can grow for the camera; see
+                        // ``PairingSheet``.
+                        .sheet(isPresented: $showingPairing) {
+                            PairingSheet()
+                        }
+                        .padding(.horizontal, 28)
+                        Text("Once it is installed, there is nothing else to set up.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.5))
+                            .padding(.top, 14)
+                            .padding(.bottom, 12)
+                    } else {
+                        Text("The same account is the only way in.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.5))
+                            .padding(.top, 14)
+                            .padding(.bottom, 12)
                     }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.extraLarge)
-                    .accessibilityIdentifier("unpaired.scan")
-                    // A card over the navy, which can grow for the camera; see
-                    // ``PairingSheet``.
-                    .sheet(isPresented: $showingPairing) {
-                        PairingSheet()
-                    }
-                    .padding(.horizontal, 28)
-                    Text("Once it is installed, there is nothing else to set up.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .padding(.top, 14)
-                        .padding(.bottom, 12)
                 }
         }
         .environment(\.colorScheme, .dark)
@@ -755,6 +759,14 @@ extension UnpairedView where Mark == MizarStar {
 /// One of the account's computers.
 struct AccountDesktopRow: View {
     let desktop: AccountDesktop
+    var label: String? = nil
+
+    private var displayName: String {
+        guard let label, !label.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return desktop.name
+        }
+        return label
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -768,7 +780,7 @@ struct AccountDesktopRow: View {
                 )
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(desktop.name)
+                Text(displayName)
                     .font(.body.weight(.medium))
                     .foregroundStyle(desktop.online ? .primary : .secondary)
                     .lineLimit(1)

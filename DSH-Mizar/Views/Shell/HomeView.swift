@@ -24,6 +24,26 @@ struct HomeView: View {
             // describe. Anything taller pushes the way back into the work off
             // the bottom of the screen.
             VStack(spacing: 16) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(model.host?.displayName ?? String(localized: "This iPhone"))
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if model.usageFromCache, let at = model.usageCachedAt {
+                        Text(String(
+                            format: String(localized: "Updated %@."),
+                            at.formatted(.relative(presentation: .named)),
+                        ))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("home.computer")
                 UsageReadings(
                     overview: model.usageOverview,
                     loading: model.usageLoading,
@@ -65,8 +85,8 @@ struct HomeView: View {
         .frame(maxWidth: .infinity)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            Task { await model.loadUsageOverview() }
+        .task(id: model.host?.hostId) {
+            await model.loadUsageOverview()
         }
     }
 

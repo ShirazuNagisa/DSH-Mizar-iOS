@@ -37,11 +37,9 @@ struct RootView: View {
         }
         .animation(.mizarSmooth, value: phaseKey)
         .animation(.mizarSmooth, value: requiresLogin)
-        // The splash lives in its own window, above the app's: an overlay and a
-        // cover both draw under the hosted shell, which is why the mark was
-        // rendered and never seen. See ``SplashWindow``.
-        // The mark is drawn by the shell, which is the only place it can be
-        // above the hosted controllers. Nothing to do here.
+        // One launch screen only: `LaunchingView` covers the wait, and the
+        // shell is the page once the phase is an answer. The old turning-mark
+        // window was a second animation after this one.
         // The first connect waits for a signed-in account. Connecting behind the
         // gate would put bytes on the relay as a `guest:` identity, which is the
         // one thing the gate exists to prevent.

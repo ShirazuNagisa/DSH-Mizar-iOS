@@ -2,18 +2,14 @@
 //  UnpairedLaunchSnapshotTests.swift
 //  DSH-MizarTests
 //
-//  The screen a never-paired phone lands on: the navy first-run screen with
-//  the searching mark and the one button that fixes it. This is the state
-//  `AppFlowLaunchTests.testAnUnpairedLaunchOffersPairing` launched the whole
-//  app to reach; what it asserted is that the launch ends on the scanner
-//  (`unpaired.scan`) or, once paired, the session list (`sessions.new`) --
-//  and never on neither.
+//  The screen a signed-in phone with no computer lands on: the navy first-run
+//  screen with the searching mark and the account's computers. Manual QR/code
+//  pairing is no longer an entrance; the scanner identifier is deliberately
+//  gone from the product.
 //
-//  The golden pins the unpaired half, which is the stronger of the two: this
-//  is the exact view `RootView` presents for `.unpaired`, with the scan button
-//  on it, and the contract pins both identifiers in both sources. A launch
-//  that reached neither screen can only come back by failing this test or the
-//  contract, without a 20-second launch.
+//  The golden pins this state; the contract pins the account-only title and
+//  the session list's new-session control. A launch that reached neither screen
+//  can only come back by failing this test or the contract.
 //
 //  `MizarStar`'s loop runs on a repeating keyframe animator, which no
 //  transaction can stop, and `accessibilityReduceMotion` is a get-only
@@ -40,7 +36,7 @@ struct UnpairedLaunchSnapshotTests {
         // What the UI test asked for: the unpaired screen's way forward, and
         // the paired fallback's new-session control, still declared in source.
         try AppSourceContract.expectIdentifiers(
-            ["unpaired.scan"],
+            ["unpaired.choose"],
             in: "DSH-Mizar/Views/HostListView.swift",
         )
         try AppSourceContract.expectIdentifiers(

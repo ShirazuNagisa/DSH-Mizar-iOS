@@ -81,7 +81,9 @@ struct SettingsView: View {
                 aboutSection
                 communitySection
                 creditsSection
-                developerSection
+                if AppModel.showsManualPairing {
+                    developerSection
+                }
             }
             .navigationTitle(Text("Settings"))
             // A small window keeps its title small.

@@ -82,6 +82,46 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         )
     }
 
+    /// The home figures survive a failed refresh: the stored copy is shown,
+    /// with when it was read, instead of six dashes.
+    func testTheHomePageFallsBackToCachedFiguresWhenRefreshFails() {
+        let first = launch(session: nil, running: false)
+        let sessions = first.descendants(matching: .any)["home.reading.Sessions"]
+        expect(sessions, "the home readings never arrived")
+        XCTAssertNotEqual(sessions.label, "—", "the first read showed a placeholder, not figures")
+        let firstComputer = first.descendants(matching: .any)["home.computer"]
+        expect(firstComputer, "the home page has no current-computer header")
+        first.terminate()
+
+        Self.setMockOffline(true)
+        defer { Self.setMockOffline(false) }
+        let reopened = launch(session: nil, running: false, freshStart: false)
+        let cached = reopened.descendants(matching: .any)["home.reading.Sessions"]
+        expect(cached, "the cached home figures never appeared")
+        XCTAssertNotEqual(cached.label, "—", "an offline refresh cleared the cached figures")
+        let computer = reopened.descendants(matching: .any)["home.computer"]
+        XCTAssertTrue(computer.exists, "the current-computer header disappeared with the failed refresh")
+        XCTAssertTrue(
+            computer.label.contains("Updated"),
+            "the cached figures do not say when they were read: \(computer.label)",
+        )
+   }
+
+    /// The product no longer offers QR/code pairing. Whatever the launch's
+    /// account state, the scanner identifier must be absent.
+    func testTheUnpairedScreenNoLongerOffersScanning() {
+        let app = launch(pairing: false, session: nil)
+        let scanGone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.buttons["unpaired.scan"],
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [scanGone], timeout: 10),
+            .completed,
+            "the QR pairing entrance is still in the product",
+        )
+    }
+
     func testAnUnpairedLaunchOffersPairing() throws {
         throw XCTSkip("migrated to snapshot: unpairedLaunch (HostListView golden + Sidebar contract); placeholder until map v2")
         let app = launch(pairing: false, session: nil)

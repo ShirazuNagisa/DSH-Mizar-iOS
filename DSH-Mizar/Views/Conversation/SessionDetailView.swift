@@ -1080,10 +1080,13 @@ struct SessionDetailView: View {
         let generation = jumpGeneration
         jumping = true
         jumpShift = 0
-        withAnimation(Motion.pick(.easeOut(duration: 0.08))) {
-            jumpFade = 0.12
+        // Go all the way to zero before anything moves. A page at twelve
+        // percent opacity still shows its rows sliding, which is the
+        // frame-by-frame stutter this transition had.
+        withAnimation(Motion.pick(.easeOut(duration: 0.18))) {
+            jumpFade = 0
         }
-        try? await Task.sleep(for: .milliseconds(90))
+        try? await Task.sleep(for: .milliseconds(200))
         guard isCurrentJump(generation) else {
             jumping = false
             return
@@ -1145,13 +1148,10 @@ struct SessionDetailView: View {
             jumping = false
             return
         }
-        withAnimation(Motion.pick(.easeIn(duration: 0.16))) {
-            jumpFade = 1
-        }
-        try? await Task.sleep(for: .milliseconds(170))
-        // The rows above the target realize after the jump; give them one
-        // settle and one exact correction while the jump still owns the page,
-        // so the movement is not a visible second twitch.
+        // Still fully hidden: let the rows above the target realize and do
+        // the one exact correction here, not after the page is back on screen.
+        // The old order faded in first and then scrolled again, which read as
+        // a second, visible twitch.
         try? await Task.sleep(for: .milliseconds(220))
         await settleLayout()
         var settle = Transaction()
@@ -1164,6 +1164,14 @@ struct SessionDetailView: View {
         if turnIndex.visible.isEmpty {
             await forceEagerAndLand(proxy: proxy)
         }
+        guard isCurrentJump(generation) else {
+            jumping = false
+            return
+        }
+        withAnimation(Motion.pick(.easeIn(duration: 0.20))) {
+            jumpFade = 1
+        }
+        try? await Task.sleep(for: .milliseconds(220))
         jumping = false
     }
 

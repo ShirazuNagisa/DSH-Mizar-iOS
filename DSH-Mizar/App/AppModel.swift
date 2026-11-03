@@ -768,6 +768,8 @@ final class AppModel {
     /// existence, and a token that waits for the next time somebody opens the app
     /// is a card that cannot be ended remotely until then.
     @ObservationIgnored private var liveActivityTokenObserver: (any NSObjectProtocol)?
+    /// Ends the card when the phone's own link is still gone after the grace.
+    @ObservationIgnored private var liveActivityDisconnectTask: Task<Void, Never>?
 
     /// The observer on the push-to-start token.
     ///
@@ -1019,7 +1021,30 @@ final class AppModel {
     /// period is the screen's, not this method's: it calls here only once the
     /// disconnect has outlived a network handover.
     func endLiveActivitiesForDisconnect() async {
+        cancelLiveActivityDisconnectSweep()
         await liveActivity.endForDisconnect()
+    }
+
+    /// The link is gone; give a handover three seconds, then take the card down.
+    ///
+    /// A Live Activity is a window onto a computer. Once the phone has no link
+    /// it can neither confirm the turn nor receive its end, so a card left up is
+    /// a clock nobody can stop. The grace covers the lift/handover reconnect;
+    /// a real disconnect has outlived it.
+    private func scheduleLiveActivityDisconnectSweep() {
+        guard !isLocalAgentMode else { return }
+        liveActivityDisconnectTask?.cancel()
+        liveActivityDisconnectTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, let self else { return }
+            guard !self.isConnected else { return }
+            await self.liveActivity.endForDisconnect()
+        }
+    }
+
+    private func cancelLiveActivityDisconnectSweep() {
+        liveActivityDisconnectTask?.cancel()
+        liveActivityDisconnectTask = nil
     }
 
     func refreshLiveActivity() async {
@@ -1191,6 +1216,10 @@ final class AppModel {
     /// this is a picture of the past, and a picture that redraws itself while
     /// somebody is looking at it is a picture they cannot finish reading.
     private(set) var usageOverview: UsageOverview?
+    /// When the figures on screen were last read from a computer.
+    private(set) var usageCachedAt: Date?
+    /// Whether those figures are the stored copy, not an answer from this run.
+    private(set) var usageFromCache = false
     /// Whether that read is on the socket.
     private(set) var usageLoading = false
     /// A read asked for while one was already in flight.
@@ -1199,6 +1228,8 @@ final class AppModel {
     /// travelling; dropping that second request would leave the figures from
     /// before the connection on screen until the operator left and came back.
     private var usageReloadPending = false
+    /// Which computer `usageOverview` belongs to.
+    private var usageCacheHostId: String?
 
     /// Whether the launch mark has left, for this run of the app.
     ///
@@ -1206,7 +1237,6 @@ final class AppModel {
     /// drawer container replaces its roots when the first read lands, and a
     /// `@State` inside it starts over -- which is why the mark appeared a second
     /// time, as a second animation, after the app had already loaded.
-    var launchMarkDone = false
 
     /// Read the usage history for the home page, from every computer the
     /// account knows.
@@ -1222,7 +1252,54 @@ final class AppModel {
     /// than a stalled refresh. Silent on failure: the chart keeps the last
     /// picture it had, and the connection window is where a link problem is
     /// reported.
+    /// One computer's last successful figures, on this phone.
+    private struct CachedUsage: Codable {
+        var overview: UsageOverview
+        var savedAt: Date
+    }
+
+    private static func usageCacheKey(_ hostId: String) -> String {
+        "usage.overview.\(hostId)"
+    }
+
+    private func loadCachedUsage(hostId: String) {
+        let key = Self.usageCacheKey(hostId)
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let cached = try? JSONDecoder().decode(CachedUsage.self, from: data) else {
+            usageOverview = nil
+            usageCachedAt = nil
+            usageFromCache = false
+            return
+        }
+        usageOverview = cached.overview
+        usageCachedAt = cached.savedAt
+        usageFromCache = true
+    }
+
+    private func saveCachedUsage(_ overview: UsageOverview, hostId: String) {
+        let cached = CachedUsage(overview: overview, savedAt: Date())
+        guard let data = try? JSONEncoder().encode(cached) else { return }
+        UserDefaults.standard.set(data, forKey: Self.usageCacheKey(hostId))
+        usageCachedAt = cached.savedAt
+        usageFromCache = false
+    }
+
     func loadUsageOverview() async {
+        // The stored copy is shown before the network is asked, so a cold start
+        // or an unreachable computer never empties the top half of the home
+        // page. A different computer is a different cache: the figures must not
+        // carry over.
+        if let host {
+            if usageCacheHostId != host.hostId {
+                usageCacheHostId = host.hostId
+                loadCachedUsage(hostId: host.hostId)
+            }
+        } else if usageCacheHostId != nil {
+            usageCacheHostId = nil
+            usageOverview = nil
+            usageCachedAt = nil
+            usageFromCache = false
+        }
         guard !usageLoading else {
             usageReloadPending = true
             return
@@ -1255,7 +1332,9 @@ final class AppModel {
         }
 
         guard !readings.isEmpty else { return }
-        usageOverview = UsageOverview.merged(readings)
+        let merged = UsageOverview.merged(readings)
+        usageOverview = merged
+        if let host { saveCachedUsage(merged, hostId: host.hostId) }
     }
 
     /// One computer's usage, over a socket of its own that is closed again.
@@ -1476,6 +1555,44 @@ final class AppModel {
         }
     }
 
+    /// The manual pairing entrance is gone from the product; it survives for
+    /// UI tests and local development only, behind the launch argument that
+    /// already creates the pairing.
+    static var showsManualPairing: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-mizarPairURI")
+        #else
+        false
+        #endif
+    }
+
+    /// Remove legacy QR pairings, except those the account still lists.
+    ///
+    /// The account is now the only way in. A pairing whose host id is one of
+    /// the account's computers is the same machine and stays (hidden from the
+    /// list, used for a launch connection); every other pairing is deleted
+    /// with its index, remembered session and cached figures.
+    private func reconcileLegacyHosts() async {
+        guard !Self.showsManualPairing,
+              !account.desktops.isEmpty else { return }
+        let known = Set(account.desktops.map(\.deviceId))
+        var kept: [PairedHost] = []
+        for host in hosts {
+            if known.contains(host.hostId) {
+                kept.append(host)
+                continue
+            }
+            try? await credentials.remove(hostId: host.hostId)
+            await indexStore.remove(hostId: host.hostId)
+            UserDefaults.standard.removeObject(forKey: "lastSession.\(host.hostId)")
+            UserDefaults.standard.removeObject(forKey: Self.usageCacheKey(host.hostId))
+        }
+        if kept.count != hosts.count {
+            log.add(.app, "account-only: removed \(hosts.count - kept.count) legacy pairing(s)")
+            hosts = kept
+        }
+    }
+
     /// Load any stored pairing and, if there is one, connect.
     ///
     /// A pairing URI passed on the command line takes precedence, which is what
@@ -1538,7 +1655,11 @@ final class AppModel {
             return
         }
         do {
+            if account.isLoggedIn, account.desktops.isEmpty {
+                await account.loadDesktops()
+            }
             hosts = try await credentials.loadAll().sorted { $0.pairedAt < $1.pairedAt }
+            await reconcileLegacyHosts()
             // The machine the operator last opened, not the one paired last:
             // with several computers paired, "paired last" is a fact about a past
             // setup step, and opening it leaves the session list, the pending
@@ -1824,6 +1945,7 @@ final class AppModel {
         if !preserveSelection {
             selectedSessionId = nil
         }
+        scheduleLiveActivityDisconnectSweep()
         statsError = nil
         conversationError = nil
         // Per-machine facts, cleared with the machine. `workspaces` is that
@@ -2213,6 +2335,7 @@ final class AppModel {
         // still the model's is this method's to forget.
         guard connection === closed else { return }
         connection = nil
+        scheduleLiveActivityDisconnectSweep()
         log.add(.connection, "the socket closed; the next read reconnects")
 
         // The one close the operator must see rather than infer: the relay
@@ -3950,6 +4073,15 @@ final class AppModel {
         }
         await refreshSessions(reconnectingIfNeeded: false)
         await refreshInteractions()
+        // A return that did not get a socket back is not a handover; the card
+        // describes a computer this phone cannot reach, and it goes now rather
+        // than waiting for another grace period.
+        if connection == nil {
+            cancelLiveActivityDisconnectSweep()
+            await liveActivity.endForDisconnect()
+        } else {
+            cancelLiveActivityDisconnectSweep()
+        }
         // A return is a new link to the computer, so the home page's figures
         // are read again; in the background, so the screen is usable first.
         Task { await loadUsageOverview() }
@@ -5774,6 +5906,7 @@ final class AppModel {
     ///   - error: what the dial failed with.
     ///   - authority: the address that was being dialled, when known.
     private func failConnection(_ error: any Error, authority: String? = nil) {
+        scheduleLiveActivityDisconnectSweep()
         let message = Self.describe(error, authority: authority)
         connectionError = message.isEmpty ? nil : message
         linkFailure = linkStatus(for: error, authority: authority)
@@ -6102,6 +6235,7 @@ final class AppModel {
         // what is wrong.
         connectionError = nil
         linkFailure = nil
+        cancelLiveActivityDisconnectSweep()
         phase = .ready
         // A launch's first read, and a reconnect's -- both automatic. The button
         // that a person would have tapped instead shows itself working; see

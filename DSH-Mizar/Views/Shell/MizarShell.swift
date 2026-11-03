@@ -87,17 +87,11 @@ struct MizarShell: View {
                 .onChange(of: trailing, initial: true) { _, width in shell.trailingWidth = width }
                 .onChange(of: size.width, initial: true) { _, width in shell.containerWidth = width }
                 .onChange(of: compact, initial: true) { _, compact in layers.compact = compact }
-                // The launch mark covers the shell, and only the shell: an
-                // overlay on the root draws *under* this container's hosted
-                // controllers, which is why the mark was rendered and never
-                // seen. Inside the shell it is above everything the app shows
-                // once it has something to show.
-                .overlay {
-                    if !model.launchMarkDone {
-                        SplashView { model.launchMarkDone = true }
-                            .transition(.opacity)
-                    }
-                }
+                // No second launch animation. The root's `LaunchingView`
+                // already covers the wait; once the phase is an answer the
+                // shell is the page, directly. The old turning mark here was a
+                // second, unrelated animation after "connecting", which read
+                // as the app loading twice.
         }
         .environment(shell)
         .environment(turnIndex)
