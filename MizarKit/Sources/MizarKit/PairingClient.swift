@@ -233,7 +233,15 @@ public struct PairingClient: Sendable {
                     deviceName: deviceName,
                     deviceModel: deviceModel,
                 )
-                return PairingOutcome(host: host, route: route)
+                // The answered route is the first one to dial, not the only one
+                // the pairing may know: a QR that also carried the relay must
+                // keep it, or a phone paired on Wi-Fi can never return from
+                // cellular.
+                let stored = host.recordingRoutes(
+                    authority: target.authority,
+                    baseURL: target.baseURL,
+                )
+                return PairingOutcome(host: stored, route: route)
             } catch let failure as RouteAttemptFailure {
                 switch failure {
                 case .unanswered(let error):

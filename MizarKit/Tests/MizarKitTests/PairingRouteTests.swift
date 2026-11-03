@@ -114,8 +114,14 @@ struct PairingFallbackTests {
         )
 
         #expect(outcome.route == .relay(baseURL: Self.relay))
-        #expect(outcome.host.authority == nil)
+        // The pairing was made over the relay, but the QR's direct address is
+        // kept as the faster fallback when the phone is back on the LAN.
+        #expect(outcome.host.authority == Self.direct)
         #expect(outcome.host.baseURL == Self.relay)
+        #expect(outcome.host.endpoints == [
+            .direct(authority: Self.direct),
+            .relay(baseURL: Self.relay),
+        ])
         #expect(outcome.host.deviceToken == "mz_abc")
 
         let requests = await transport.recorded()
@@ -247,7 +253,13 @@ struct PairingFallbackTests {
 
         #expect(outcome.route == .direct(authority: Self.direct))
         #expect(outcome.host.authority == Self.direct)
-        #expect(outcome.host.baseURL == nil)
+        // The relay from the same QR survives the LAN pairing. Without it the
+        // phone has no route at all once it leaves Wi-Fi.
+        #expect(outcome.host.baseURL == Self.relay)
+        #expect(outcome.host.endpoints == [
+            .direct(authority: Self.direct),
+            .relay(baseURL: Self.relay),
+        ])
         let requests = await transport.recorded()
         #expect(requests.count == 1)
     }

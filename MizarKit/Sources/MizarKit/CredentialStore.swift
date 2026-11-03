@@ -119,6 +119,30 @@ public struct PairedHost: Codable, Sendable, Equatable {
         return hostName
     }
 
+    /// A copy that also records the other route the QR carried.
+    ///
+    /// A pairing attempt dials one route, but the code may carry two: the LAN
+    /// address and the relay. Storing only the route that answered leaves a
+    /// phone that paired on Wi-Fi with no relay endpoint, so the same pairing
+    /// cannot reconnect from cellular. The QR is the only place the second
+    /// route is known; keep it while the pairing is being stored.
+    public func recordingRoutes(authority: String?, baseURL: String?) -> PairedHost {
+        PairedHost(
+            hostId: hostId,
+            hostName: hostName,
+            authority: authority ?? self.authority,
+            deviceId: deviceId,
+            deviceToken: deviceToken,
+            pairedAt: pairedAt,
+            baseURL: baseURL ?? self.baseURL,
+            label: label,
+            netEndpointId: netEndpointId,
+            desktop: desktop,
+            engine: engine,
+            knownEngines: knownEngines,
+        )
+    }
+
     /// A copy with a new operator-chosen name, keeping the credential.
     ///
     /// - Parameter label: the name to show, or `nil` to go back to the host's.
