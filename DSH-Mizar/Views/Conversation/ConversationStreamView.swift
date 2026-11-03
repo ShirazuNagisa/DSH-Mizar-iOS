@@ -389,6 +389,12 @@ private struct StreamStatusLine: View {
                 .underline(running && colorScheme == .dark)
         }
         .foregroundStyle(running ? Color.accentColor : Color.secondary)
+        // The live state machine keeps the old left-to-right sweep: this line
+        // is the one thing on the page that is still doing something, and a
+        // settled status line must not keep moving. The line is outside the
+        // conversation's lazy stack, so the mask animation cannot drag a lazy
+        // layout through a text-measurement loop.
+        .shimmering(active: running)
         .contentTransition(.opacity)
         .animation(.snappy(duration: 0.18), value: text)
         .frame(maxWidth: .infinity, alignment: .leading)
