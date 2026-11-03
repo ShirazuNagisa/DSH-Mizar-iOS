@@ -257,6 +257,7 @@ struct TurnIndexPanel: View {
     /// clock, like the conversation screen does, so the rows are not a
     /// `TimelineView` and the stack stays the scroll view's own content.
     @State private var now = Date()
+    @Environment(\.horizontalSizeClass) private var sizeClass
     /// How tall the list is, and how tall the window showing it is.
     ///
     /// A landing is only wanted when the first is the larger of the two: a list
@@ -270,6 +271,16 @@ struct TurnIndexPanel: View {
     /// first row rests under the floating chrome with air to spare, and every
     /// row after it is free to travel beneath the glass on the way past.
     private static let chromeContentTop: CGFloat = 100
+
+    /// Whether this page is actually in front of the operator.
+    ///
+    /// The plane keeps all three pages mounted so a page switch is a
+    /// translation rather than a rebuild. That is right for the transition,
+    /// but the turn index's one-second clock does not need to run while the
+    /// drawer is closed.
+    private var isOnScreen: Bool {
+        shell.trailingOpen || (sizeClass == .regular && shell.indexPinnedVisible)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -461,9 +472,13 @@ struct TurnIndexPanel: View {
             guard open else { return }
             land(again: true)
         }
-        .task {
+        .task(id: isOnScreen) {
             // One ticker for the page, not one per row: the times under each
-            // prompt are the only figures that move on their own.
+            // prompt are the only figures that move on their own. The page is
+            // built even while the drawer is shut, and ticking there rebuilt
+            // its whole timeline -- and the long session's rows -- once a
+            // second for nobody.
+            guard isOnScreen else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 now = Date()

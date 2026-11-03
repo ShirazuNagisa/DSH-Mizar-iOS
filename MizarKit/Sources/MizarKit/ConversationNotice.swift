@@ -51,7 +51,30 @@ public enum ConversationNoticeKind: Sendable, Equatable {
 /// settlement and job notices; an unrecognised text falls back to `.other`
 /// and is drawn unchanged, which is the safe failure.
 public enum ConversationNoticeClassifier {
+    /// A turn body is re-evaluated many times while the page lays out and the
+    /// list scrolls. Classification is a pile of substring scans; repeating it
+    /// for the same notice was measurable (about a tenth of a second in one
+    /// long-session launch). The text is the key, the answer is pure.
+    private final class CachedKind {
+        let kind: ConversationNoticeKind
+        init(_ kind: ConversationNoticeKind) { self.kind = kind }
+    }
+
+    nonisolated(unsafe) private static let cache: NSCache<NSString, CachedKind> = {
+        let cache = NSCache<NSString, CachedKind>()
+        cache.countLimit = 2048
+        return cache
+    }()
+
     public static func kind(of text: String) -> ConversationNoticeKind {
+        let key = text as NSString
+        if let cached = cache.object(forKey: key) { return cached.kind }
+        let kind = classify(text)
+        cache.setObject(CachedKind(kind), forKey: key)
+        return kind
+    }
+
+    private static func classify(_ text: String) -> ConversationNoticeKind {
         let lower = text.lowercased()
 
         // A notice body is free text; require the harness's own phrase rather

@@ -177,7 +177,6 @@ final class ShellState {
     }
 
     func beginDrag() {
-        NSLog("MIZARDRAG begin goal=%.3f progress=%.3f", goal, progress) // TEMP PROBE
         isDragging = true
         dragOrigin = goal
         // The finger takes the card over from the spring.
@@ -222,7 +221,6 @@ final class ShellState {
     ///
     /// - Parameter velocity: the finger's speed in points per second.
     func endDrag(velocity: CGFloat) {
-        NSLog("MIZARDRAG end goal=%.3f progress=%.3f velocity=%.1f", goal, progress, velocity) // TEMP PROBE
         isDragging = false
         let speed = fraction(velocity)
         // Where a flick would carry it, a tenth of a second on. Deciding on the

@@ -142,9 +142,30 @@ struct ConversationView: View {
     /// built there -- a blank conversation that needs a swipe. Eager layout is
     /// cheap for a page this small and cannot lose the rows.
     private var usesEagerStack: Bool {
-        if forceEager { return true }
-        if turns.isEmpty { return items.count <= 40 }
-        return turns.count <= 6
+        // A staged jump draws only the newest turn (or three) so a real row
+        // exists to scroll to. That window must be eager even when the full
+        // conversation is not: it is a handful of rows, and a lazy window whose
+        // one enormous turn has not been built is exactly the blank first
+        // frame this staging exists to prevent.
+        if !staged.isEmpty { return true }
+        let rows = turns.isEmpty ? items.count : turns.reduce(0) { $0 + $1.items.count }
+        // The lazy rows can be evicted during a staged jump; the recovery may
+        // rebuild them eagerly, but only while that is still cheaper than the
+        // freeze it is recovering from.
+        if forceEager { return rows <= 80 }
+        return Self.canUseEagerStack(turnCount: turns.count, rowCount: rows)
+    }
+
+    /// Whether the page is small enough to lay out eagerly.
+    ///
+    /// The old rule was `turns.count <= 6`, which described a four-turn
+    /// conversation with 123 rows and 196k characters as small. It built every
+    /// Markdown block at once; the long-session launch and the drawer swipe
+    /// paid for it. `forceEager` cannot override this: on a long page it is
+    /// not a recovery, it is the same freeze.
+    static func canUseEagerStack(turnCount: Int, rowCount: Int) -> Bool {
+        if turnCount == 0 { return rowCount <= 40 }
+        return turnCount <= 6 && rowCount <= 40
     }
 
     var body: some View {

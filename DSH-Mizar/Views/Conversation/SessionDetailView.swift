@@ -1395,6 +1395,10 @@ struct SessionDetailView: View {
     /// - Parameter incoming: the turns the screen is about to draw.
     private func show(turns incoming: [ConversationTurn]) {
         let turns = settlingStaleRuns(in: incoming)
+        // `load()` shows the cache, the network answer and the cache again.
+        // Republishing the same array invalidates the whole screen and the turn
+        // index for nothing; a long conversation paid for that three times.
+        guard turns != self.turns || conversationSessionId != sessionId else { return }
         self.turns = turns
         conversationSessionId = sessionId
         model.noteConversationTurns(turns, for: sessionId)
@@ -2267,6 +2271,12 @@ struct SessionDetailView: View {
     /// behind. The final aim runs after the eager rows exist.
     private func forceEagerAndLand(proxy: ScrollViewProxy) async {
         guard !forceEager else { return }
+        // Eager layout is only a recovery for a page small enough to afford it.
+        // On the long page it would build every turn and block the main thread.
+        let rows = shownTurns.isEmpty
+            ? shownItems.count
+            : shownTurns.reduce(0) { $0 + $1.items.count }
+        guard rows <= 80 else { return }
         forceEager = true
         await settleLayout()
         try? await Task.sleep(for: .milliseconds(120))
@@ -2737,6 +2747,7 @@ struct SessionDetailView: View {
         // populated screen is what "pull to refresh loses my history" was.
         let fresh = conversationResult.items
         if !fresh.isEmpty {
+            let oldNewest = items.last?.id
             items = fresh
             conversationSessionId = sessionId
             // The host's answer is also a first frame's source: with no cache
@@ -2747,7 +2758,11 @@ struct SessionDetailView: View {
             // a different page: the scroll offset can reset to the top, and a
             // `.ready` placement will not re-run. Re-arm it while the operator
             // has not taken the page; a reader who scrolled is left alone.
-            if !userHasScrolled, placement == .ready {
+            // Only a page whose newest message actually moved needs the
+            // first-frame placement again. Re-arming on every successful
+            // incremental refresh made a cached long session run its whole
+            // aim/fade sequence twice on open.
+            if !userHasScrolled, placement == .ready, oldNewest != fresh.last?.id {
                 placementRound += 1
                 placement = .placing(generation: placementRound)
             }

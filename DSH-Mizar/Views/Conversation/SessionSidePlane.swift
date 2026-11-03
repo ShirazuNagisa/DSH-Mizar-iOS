@@ -31,16 +31,12 @@
 //      card's edge instead of passing under it.
 //    - A page to the **right** is still in view -- fully inside it mid-slide,
 //      hanging off the screen's edge at rest -- and reads as the one not being
-//      looked at: a small blur, in proportion to how far off focus it is. See
-//      ``PageFocus``. There is no dark veil over it: the veil read as a
-//      different surface and made the three tabs feel like three screens.
+//      looked at from its position alone. There is no dark veil over it: the
+//      veil read as a different surface and made the three tabs feel like
+//      three screens.
 //
-//  The scrub is driven by the plane's *presentation* offset, not by the page
-//  selection: a `@State` selection flips the moment the finger leaves the
-//  control, and an effect computed from it would snap to its final value
-//  while the plane was still travelling. ``PageFocus`` is animatable over the
-//  distance instead, so one spring moves the offset and the blur together and
-//  a second tap mid-flight retargets both without a jump.
+//  The plane's offset is the presentation: it is animated with one spring, so
+//  a second tap mid-flight retargets the travel without a jump.
 //
 //  There is deliberately no drag gesture on the plane. The drawer's own pan
 //  owns horizontal drags -- a drag on the open drawer puts the conversation
@@ -77,9 +73,8 @@ struct SessionSidePlane: View {
     /// The page in front, as the shared state has it.
     private var selection: SidePlanePage { plane.page }
     /// Where the plane is right now, in points. Animated to
-    /// `-selection * pageWidth` on every switch, and read by every page's
-    /// ``PageFocus`` -- which is why this is a number rather than a derived
-    /// value: the focus effects need the travelled position, not the target.
+    /// `-selection * pageWidth` on every switch. Keeping it as a number lets
+    /// one spring retarget a second tap mid-flight without rebuilding a page.
     @State private var planeOffset: CGFloat = 0
     /// The viewport's width, measured, because the pages are exactly one
     /// viewport wide and the plane's travel is counted in them.
@@ -180,28 +175,19 @@ struct SessionSidePlane: View {
         HStack(alignment: .top, spacing: 0) {
             TurnIndexPanel(onPick: onPick)
                 .frame(width: width, height: height, alignment: .top)
-                .pageFocus(distance: distance(of: 0, width: width))
+                .allowsHitTesting(selection == .turns)
                 .accessibilityHidden(selection != .turns)
             SubagentBoard(focused: selection == .subagents)
                 .frame(width: width, height: height, alignment: .top)
-                .pageFocus(distance: distance(of: 1, width: width))
+                .allowsHitTesting(selection == .subagents)
                 .accessibilityHidden(selection != .subagents)
             PreviewPane()
                 .frame(width: width, height: height, alignment: .top)
-                .pageFocus(distance: distance(of: 2, width: width))
+                .allowsHitTesting(selection == .preview)
                 .accessibilityHidden(selection != .preview)
         }
         .offset(x: planeOffset)
         .allowsHitTesting(pageWidth > 0)
-    }
-
-    /// A page's signed distance from focus, in page widths: `0` for the page
-    /// showing, `-1` for the one to its left (under the card), `+1` for the
-    /// one to its right. Both the offset and this travel on the same spring,
-    /// because the distance is computed from the offset.
-    private func distance(of page: Int, width: CGFloat) -> CGFloat {
-        guard width > 0 else { return 0 }
-        return CGFloat(page) + planeOffset / width
     }
 
     // MARK: The control
@@ -210,7 +196,7 @@ struct SessionSidePlane: View {
     ///
     /// One transaction carries both halves of the switch: the selection (the
     /// control's lens slides as UIKit animates it) and the offset (the
-    /// plane travels, and every page's focus scrub travels with it).
+    /// plane travels with it).
     private func select(_ page: SidePlanePage) {
         guard page != selection, pageWidth > 0 else { return }
         withMizarAnimation(.mizarSmooth) {
@@ -318,57 +304,5 @@ private struct PageSwitcher: UIViewRepresentable {
             guard let page = SidePlanePage(rawValue: sender.selectedSegmentIndex) else { return }
             selection.wrappedValue = page
         }
-    }
-}
-
-// MARK: - The focus scrub
-
-/// What a page looks like when it is not the one being read.
-///
-/// Animatable over the signed distance from focus, so the spring that carries
-/// the plane carries this too -- the blur arrives and leaves as part of the
-/// travel rather than as a step at either end of it.
-///
-/// Only the **right** side is treated. A page to the left is on its way under
-/// the conversation card, and the card is the effect there: occlusion, by
-/// z-order, in the shell.
-///
-/// There is deliberately no dimming. A black veil over the neighbouring page
-/// read as a different surface rather than as the same one further away, and it
-/// made the three tabs feel like three screens instead of one plane; the small
-/// blur is the only focus cue left.
-struct PageFocus: ViewModifier {
-    /// Signed distance from focus, in page widths.
-    var distance: CGFloat
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var animatableData: CGFloat {
-        get { distance }
-        set { distance = newValue }
-    }
-
-    /// Blur at a full page off focus. Small on purpose: the defocused page is
-    /// a neighbour sliding past, not a background, and a heavy blur would turn
-    /// the drawer's edge into fog.
-    private static let maximumBlur: CGFloat = 3
-
-    func body(content: Content) -> some View {
-        // Clamped: the third page sits two widths from the first, and a blur
-        // that kept growing past the first width would be work spent on a
-        // page the screen edge has already taken.
-        let beyond = max(0, min(1, distance))
-        content
-            .blur(radius: reduceMotion ? 0 : Self.maximumBlur * beyond)
-            // A page the operator is not reading takes no taps. Half a page is
-            // the midpoint of the flight: past it, the incoming page is the
-            // one under the finger.
-            .allowsHitTesting(abs(distance) < 0.5)
-    }
-}
-
-extension View {
-    func pageFocus(distance: CGFloat) -> some View {
-        modifier(PageFocus(distance: distance))
     }
 }
