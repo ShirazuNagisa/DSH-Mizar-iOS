@@ -103,12 +103,34 @@ struct TurnResponseToolbar: View {
     private var usage: some View {
         Group {
             if let count = turn.tokenUsage?.totalTokens {
-                Text("\(count.formatted(.number.grouping(.never))) tokens")
+                Text("\(Self.compactTokens(count)) tokens")
             } else {
                 Text("Token usage unavailable")
             }
         }
         .accessibilityIdentifier("\(prefix).usage")
+    }
+
+    /// `26.6M tokens`, not `26,600,000 tokens`.
+    ///
+    /// The footer is read at a glance and the raw figure was the widest thing
+    /// on it. One decimal at most: the unit changes at a thousand, and a
+    /// trailing `.0` is dropped so a round million reads `26M`, not `26.0M`.
+    static func compactTokens(_ count: Int) -> String {
+        guard abs(count) >= 1_000 else { return "\(count)" }
+        let units: [(value: Double, suffix: String)] = [
+            (1_000_000_000_000_000_000, "E"),
+            (1_000_000_000_000_000, "P"),
+            (1_000_000_000_000, "T"),
+            (1_000_000_000, "B"),
+            (1_000_000, "M"),
+            (1_000, "K"),
+        ]
+        let unit = units.first { Double(abs(count)) >= $0.value }!
+        let scaled = Double(count) / unit.value
+        var text = String(format: "%.1f", scaled)
+        if text.hasSuffix(".0") { text.removeLast(2) }
+        return text + unit.suffix
     }
 
     private var clock: some View {

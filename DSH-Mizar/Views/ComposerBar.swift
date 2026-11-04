@@ -56,6 +56,9 @@ struct ComposerBar: View {
     /// is tapped: the account screen, where the plan can be bought. Not a silent
     /// no-op -- a locked button that does nothing is a bug report.
     var onLockedAttachment: () -> Void = {}
+    /// Called after a compaction, so the screen that owns `stats` can re-read
+    /// the frame behind the figure above the composer.
+    var onContextChanged: () async -> Void = {}
 
     /// DSH's own commands. The slash forms are what the host parses; the titles
     /// are what the operator is choosing between. They are catalogue keys
@@ -134,7 +137,11 @@ struct ComposerBar: View {
         .fixedSize()
         .disabled(stats?.context == nil)
         .mizarPopover(isPresented: $showingContext, arrowEdge: .bottom) {
-            ContextDetail(stats: stats)
+            ContextDetail(
+                stats: stats,
+                sessionId: sessionId,
+                onChanged: onContextChanged,
+            )
         }
         .accessibilityLabel("Context, \(contextLabel)")
         .accessibilityIdentifier("composer.context")
@@ -394,17 +401,25 @@ private struct Breathing: ViewModifier {
     }
 }
 
-/// What the context figure is made of.
+/// The context dial, and the one action that belongs to it.
 private struct ContextDetail: View {
     let stats: SessionStatsFrame?
+    let sessionId: String
+    let onChanged: () async -> Void
+
+    @Environment(AppModel.self) private var model
+    @State private var current: SessionStatsFrame?
+    @State private var compacting = false
+    @State private var completed = false
+    @State private var failure: String?
+
+    private var context: ContextPressure? { (current ?? stats)?.context }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let context = stats?.context {
-                // The window opens with the figure the chip shows, large, and
-                // the dial it came from -- then what it is made of.
+        VStack(alignment: .leading, spacing: 14) {
+            if let context {
                 HStack(spacing: 14) {
-                    ContextRing(percent: context.percent, size: 44, lineWidth: 5)
+                    ContextRing(percent: context.percent, size: 52, lineWidth: 6)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(context.percent.map { "\($0)%" } ?? "—")
                             .font(.title2.monospacedDigit().weight(.bold))
@@ -413,33 +428,38 @@ private struct ContextDetail: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .padding(.bottom, 4)
-                // Looked up before `Text` sees them. `Text(String)` is the
-                // verbatim initialiser, not the localisable one, so passing
-                // these words through a `String` parameter is how the Chinese
-                // interface showed "Window", "Pressure" and "Messages".
-                row(String(localized: "Window"), context.window.map { $0.formatted(.number.grouping(.automatic)) } ?? "—")
-                row(String(localized: "Pressure"), context.pressureTokens.map { $0.formatted(.number.grouping(.automatic)) } ?? "—")
-                row(String(localized: "Projected"), context.projectedTokens.map { $0.formatted(.number.grouping(.automatic)) } ?? "—")
-                if let breakdown = context.breakdown {
-                    Divider()
-                    row(String(localized: "System"), breakdown.systemTokens.formatted(.number.grouping(.automatic)))
-                    row(String(localized: "Tools"), breakdown.toolsTokens.formatted(.number.grouping(.automatic)))
-                    row(String(localized: "Messages"), breakdown.messageTokens.formatted(.number.grouping(.automatic)))
+
+                Button {
+                    Task { await compact() }
+                } label: {
+                    HStack(spacing: 7) {
+                        if compacting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                        Text(compacting ? "Compacting…" : "Compact context")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                Divider()
-                // No button, because there is nothing for it to call. DSH's
-                // compaction is a command its own window runs before the next
-                // turn; neither the protocol nor the plugin exposes it, so a
-                // button here could only send the text "/compact" as a prompt --
-                // which the model reads and the conversation does not compact.
-                // A control that types a magic word at the model is worse than
-                // no control: it reports success and changes nothing.
-                Text("To compact, use /compact in DSH on the computer.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("context.compactHint")
+                .buttonStyle(.borderedProminent)
+                .disabled(compacting)
+                .accessibilityIdentifier("context.compact")
+
+                if let failure {
+                    Text(failure)
+                        .font(.caption)
+                        .foregroundStyle(Theme.failed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("context.compact.error")
+                } else if completed {
+                    Text("Context compacted.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("context.compact.done")
+                }
             } else {
                 Text("No context figure yet.")
                     .font(.caption)
@@ -448,21 +468,24 @@ private struct ContextDetail: View {
         }
         .padding(18)
         .frame(width: 280)
+        .onAppear { current = stats }
+        .onChange(of: stats) { _, next in current = next }
     }
 
-    /// One label and its figure.
-    ///
-    /// - Parameters:
-    ///   - title: already localised; `Text`'s `String` initialiser is verbatim.
-    ///   - value: the host's figure, formatted for reading rather than translated.
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 16)
-            Text(value)
-                .font(.caption.monospacedDigit().weight(.medium))
+    private func compact() async {
+        guard !compacting else { return }
+        compacting = true
+        completed = false
+        failure = nil
+        defer { compacting = false }
+        do {
+            try await model.compactSession(sessionId)
+            await onChanged()
+            current = await model.stats(for: sessionId) ?? current
+            completed = true
+        } catch {
+            failure = (error as? MizarError).map(AppModel.displayMessage(for:))
+                ?? error.localizedDescription
         }
     }
 }

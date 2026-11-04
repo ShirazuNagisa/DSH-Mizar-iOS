@@ -5606,6 +5606,28 @@ final class AppModel {
         }
     }
 
+    private struct CompactSessionResult: Decodable, Sendable {
+        let compacted: Bool?
+    }
+
+    /// Ask the host to compact this session's context.
+    ///
+    /// The host owns the per-agent mechanism: DSH executes its compaction
+    /// command, Claude Code runs the same local `/compact` command a person
+    /// would type in its own window, Codex asks its app server to start a
+    /// compaction thread. This method deliberately does not type `/compact`
+    /// into the conversation.
+    func compactSession(_ sessionId: String) async throws {
+        guard connection != nil else {
+            throw MizarError(code: "NO_CONNECTION", message: "not connected to the computer")
+        }
+        _ = try await call(
+            "session.compact",
+            payload: JSONValue.object(["sessionId": .string(sessionId)]),
+            as: CompactSessionResult.self,
+        )
+    }
+
     /// Read one session's usage frame.
     /// - Parameter sessionId: the session to read.
     /// - Returns: the frame, or `nil` when it could not be read.

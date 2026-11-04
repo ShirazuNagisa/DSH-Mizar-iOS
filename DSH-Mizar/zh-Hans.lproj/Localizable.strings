@@ -826,3 +826,6 @@
 "This pairing has no address to dial." = "这个配对没有可拨号的地址。";
 
 "request" = "请求";
+"Compact context" = "压缩上下文";
+"Compacting…" = "正在压缩…";
+"Context compacted." = "上下文已压缩。";

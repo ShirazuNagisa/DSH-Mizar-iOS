@@ -66,6 +66,8 @@ struct ComposerView: View {
     /// The measured resting shell height, even while the editor is expanded.
     /// The screen reserves this space without waiting for collapse to finish.
     var onCollapsedHeightChanged: ((CGFloat) -> Void)? = nil
+    /// Re-read the usage frame after the context page compacts it.
+    var onContextChanged: () async -> Void = {}
 
     @Environment(AppModel.self) private var model
     @State private var sending = false
@@ -168,6 +170,7 @@ struct ComposerView: View {
                         showingPhotoPicker: $showingPhotoPicker,
                         showingFileImporter: $showingFileImporter,
                         onLockedAttachment: { showingPaywall = true },
+                        onContextChanged: onContextChanged,
                     )
                     Spacer(minLength: 4)
                     // Put the keyboard away. Only there while the keyboard is up:

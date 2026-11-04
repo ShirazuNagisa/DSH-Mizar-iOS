@@ -997,6 +997,12 @@ struct SessionDetailView: View {
                                 composerReservedHeight = height + extra
                             }
                         },
+                        onContextChanged: {
+                            if let fresh = await model.stats(for: sessionId) {
+                                stats = fresh
+                                statsSessionId = sessionId
+                            }
+                        },
                     )
                     // Expanded, the composer fills the overlay up to just under
                     // the title; at rest it wraps its content.

@@ -826,3 +826,6 @@
 "This pairing has no address to dial." = "This pairing has no address to dial.";
 
 "request" = "Request";
+"Compact context" = "Compact context";
+"Compacting…" = "Compacting…";
+"Context compacted." = "Context compacted.";
