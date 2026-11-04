@@ -348,6 +348,26 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
 
     public var id: String { sessionId }
 
+    public init(
+        sessionId: String,
+        updatedAt: Double,
+        running: Bool,
+        blank: Bool,
+        agentAvailable: Bool,
+        cwd: String?,
+        parentSessionId: String? = nil,
+        origin: String? = nil,
+    ) {
+        self.sessionId = sessionId
+        self.updatedAt = updatedAt
+        self.running = running
+        self.blank = blank
+        self.agentAvailable = agentAvailable
+        self.cwd = cwd
+        self.parentSessionId = parentSessionId
+        self.origin = origin
+    }
+
     /// Last activity as a date.
     public var updatedDate: Date { Date(timeIntervalSince1970: updatedAt / 1000) }
 
