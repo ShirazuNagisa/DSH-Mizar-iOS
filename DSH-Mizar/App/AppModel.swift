@@ -5356,6 +5356,31 @@ final class AppModel {
         }
     }
 
+    /// Walk the page window back until the history reaches its start or the
+    /// page budget runs out.
+    ///
+    /// The host trims a page to a window of the newest records. An incremental
+    /// read that starts after a gap therefore returns only the newest window,
+    /// and the turns before the gap are not on screen at all. The cache's
+    /// `hasMore` is the host's own statement that an older page exists; asking
+    /// for it is the same read scrolling to the top would make, just without
+    /// requiring the operator to discover the missing history.
+    ///
+    /// Bounded per pass: a conversation with years of history should become
+    /// complete over a few passes, not hold a request loop for minutes.
+    @discardableResult
+    private func backfillHistory(for sessionId: String, maxPages: Int = 8) async -> Int {
+        var added = 0
+        for _ in 0..<maxPages {
+            guard let cached = await conversations.load(sessionId: sessionId), cached.hasMore else {
+                break
+            }
+            guard let count = await loadOlder(sessionId: sessionId), count > 0 else { break }
+            added += count
+        }
+        return added
+    }
+
     /// Fetch one session's page and fold it into the cache.
     ///
     /// - Parameter sessionId: the session to sync.
@@ -5424,6 +5449,19 @@ final class AppModel {
             lastError = nil
             conversationError = nil
             log.add(.cache, "session \(sessionId): stored \(stored.items.count) items")
+            // The host's page is a window over the newest records. If it says
+            // older records exist, walk back now: a phone that was away while
+            // several turns ran would otherwise see only the newest window, and
+            // no later incremental read would ever ask for the skipped history.
+            // This is the read scrolling to the top makes, without making the
+            // operator discover that the history is missing.
+            let backfilled = await backfillHistory(for: sessionId)
+            if backfilled > 0 {
+                log.add(
+                    .cache,
+                    "session \(sessionId): paged back \(backfilled) older items after an incremental window",
+                )
+            }
             // A page can begin after records this phone never received -- the
             // host trims a page to its newest few hundred messages -- and a
             // `turn/end` among the skipped ones leaves a turn the screen draws
@@ -5439,10 +5477,12 @@ final class AppModel {
             // A repair folded older records in, and the screen draws the cache:
             // return what is on disk now rather than the page before the repair,
             // so "what is on screen and what is stored" stay the same answer.
-            let known = repaired ? await conversations.load(sessionId: sessionId) : nil
+            let refreshed = backfilled > 0 || repaired
+                ? await conversations.load(sessionId: sessionId)
+                : nil
             return SyncedConversation(
-                items: known?.items ?? stored.items,
-                stats: known?.stats ?? stored.stats,
+                items: refreshed?.items ?? stored.items,
+                stats: refreshed?.stats ?? stored.stats,
                 succeeded: true,
             )
         } catch {

@@ -1475,6 +1475,12 @@ struct SessionDetailView: View {
     private func watchStream() async {
         var sawState = false
         var generation = model.connectionGeneration
+        // The state channel is the primary source, not the only one. If it goes
+        // quiet while the history still says a turn is running, ask the page
+        // itself; otherwise a dropped terminal frame leaves the clock counting
+        // until the screen is reopened. Eight seconds is one heartbeat and a
+        // little slack, not another polling loop while frames are arriving.
+        var lastFrameAt = Date()
 
         if let newest = shownTurns.last, newest.isRunning {
             await replayTurnInFlight()
@@ -1497,6 +1503,7 @@ struct SessionDetailView: View {
                 let turnRunning = streamTurn?.isRunning
                     ?? shownTurns.last?.isRunning
                     ?? false
+                lastFrameAt = Date()
                 if stream.apply(frame) {
                     sawState = true
                     if turnRunning {
@@ -1540,6 +1547,28 @@ struct SessionDetailView: View {
             }
             associateStream()
             sweepCardsForDisconnect()
+            // A terminal frame can be lost without the socket dying. The
+            // history is the durable source of "this turn ended"; the page
+            // reload is the same read the running poll would make, but it does
+            // not depend on the poll having started from a session-list row.
+            if shownTurns.last?.isRunning == true,
+               Date().timeIntervalSince(lastFrameAt) >= 8,
+               !reloading {
+                let synced = await model.syncConversation(for: sessionId)
+                let cached = await model.cachedConversation(for: sessionId)
+                if !synced.items.isEmpty {
+                    items = synced.items
+                    conversationSessionId = sessionId
+                }
+                if let cached {
+                    show(turns: cached.turns ?? [])
+                }
+                if let frame = synced.stats {
+                    stats = frame
+                    statsSessionId = sessionId
+                }
+                lastFrameAt = Date()
+            }
             try? await Task.sleep(for: .milliseconds(110))
         }
     }
