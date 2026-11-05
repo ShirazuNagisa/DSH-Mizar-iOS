@@ -27,6 +27,14 @@ struct AgentTargetTests {
         #expect(AgentTarget.all.filter { $0.surface == nil }.map(\.engine) == [.dsh])
     }
 
+    @Test func fourTargetsAreMarkedExperimental() {
+        #expect(AgentTarget.all.filter(\.isExperimental).count == 4)
+        #expect(AgentTarget.all.first?.isExperimental == false)
+        let gui = AgentTarget(engine: .claude, surface: .gui)
+        #expect(gui.experimentalTitle.contains(gui.experimentalSuffix))
+        #expect(gui.experimentalTitle.hasPrefix("CC GUI"))
+    }
+
     @Test func sourceDecodesFromTheHostRow() throws {
         let json = """
         {"sessionId":"claude:s1","updatedAt":1,"running":false,"blank":false,

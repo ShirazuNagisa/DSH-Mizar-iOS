@@ -209,7 +209,7 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.pressable(scale: 0.96))
                 .accessibilityIdentifier("sessions.agent")
-                .accessibilityValue(Text(model.agentTarget?.title ?? "Agent"))
+                .accessibilityValue(Text(model.agentTarget?.experimentalTitle ?? "Agent"))
                 .mizarPopover(isPresented: $showingAgentPicker) {
                     AgentSwitcher()
                 }
@@ -227,9 +227,9 @@ struct SidebarView: View {
     /// `nil` when no target is known yet; there is no mixed list to name.
     private var agentTitle: String? {
         if model.agentChoices.count > 1 {
-            return model.agentTarget?.shortTitle
+            return model.agentTarget?.capsuleTitle
         }
-        return model.agentTarget?.shortTitle
+        return model.agentTarget?.capsuleTitle
     }
 
     private func agentCapsuleLabel(_ title: String, showsChevron: Bool) -> some View {

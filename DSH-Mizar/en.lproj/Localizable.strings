@@ -650,6 +650,8 @@
 "Codex threads on this computer" = "Codex threads on this computer";
 "Connect to which agent" = "Connect to which agent";
 "Which agent this connection is for" = "Which agent this connection is for";
+
+"(Experimental)" = "(Experimental)";
 "Choose Agent…" = "Choose Agent…";
 "Can't reach the desktop. Try reconnecting." = "Can't reach the desktop. Try reconnecting.";
 "Refresh computers" = "Refresh computers";

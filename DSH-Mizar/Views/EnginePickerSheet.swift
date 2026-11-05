@@ -45,7 +45,7 @@ struct EnginePickerSheet: View {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 1) {
                                 HStack(spacing: 5) {
-                                    Text(target.title)
+                                    Text(target.experimentalTitle)
                                         .font(.body.weight(.medium))
                                         .foregroundStyle(.primary)
                                     if target.surface == .cli {

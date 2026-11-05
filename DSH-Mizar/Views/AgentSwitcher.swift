@@ -30,7 +30,7 @@ struct AgentSwitcher: View {
                 .padding(.bottom, 4)
 
             ForEach(model.agentChoices) { target in
-                row(title: target.title, detail: target.detail, target: target)
+                row(title: target.experimentalTitle, detail: target.detail, target: target)
             }
         }
         .padding(.bottom, 6)

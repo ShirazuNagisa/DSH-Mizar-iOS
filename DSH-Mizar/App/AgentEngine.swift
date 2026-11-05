@@ -120,6 +120,17 @@ struct AgentTarget: Hashable, Identifiable, Sendable {
         }
     }
 
+    /// GUI/CLI split targets are still experimental.
+    var isExperimental: Bool { engine != .dsh }
+
+    /// The localized marker appended to every experimental target.
+    var experimentalSuffix: String { String(localized: "(Experimental)") }
+
+    /// The name the picker rows draw, with the marker to its right.
+    var experimentalTitle: String {
+        isExperimental ? "\(title) \(experimentalSuffix)" : title
+    }
+
     /// The shorter label a workspace capsule can use.
     var shortTitle: String {
         switch (engine, surface) {
@@ -131,6 +142,11 @@ struct AgentTarget: Hashable, Identifiable, Sendable {
         case (.claude, nil): return "Claude"
         case (.codex, nil): return "Codex"
         }
+    }
+
+    /// The capsule label, marked when this target is experimental.
+    var capsuleTitle: String {
+        isExperimental ? "\(shortTitle) \(experimentalSuffix)" : shortTitle
     }
 
     /// The five destinations, always in the same order.
