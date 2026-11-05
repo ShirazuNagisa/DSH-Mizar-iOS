@@ -67,3 +67,78 @@ enum AgentEngine: String, CaseIterable, Sendable, Identifiable {
         }
     }
 }
+
+/// The two surfaces a coding agent shows on a computer.
+///
+/// The host still speaks three engine scopes; the phone's picker presents five
+/// destinations because a GUI transcript and a CLI conversation are different
+/// things to open, even when the same binary writes both.
+enum AgentSurface: String, CaseIterable, Sendable {
+    case gui
+    case cli
+}
+
+/// One row in the phone's Agent picker.
+struct AgentTarget: Hashable, Identifiable, Sendable {
+    let engine: AgentEngine
+    let surface: AgentSurface?
+
+    var id: String {
+        surface.map { "\(engine.rawValue)-\($0.rawValue)" } ?? engine.rawValue
+    }
+
+    /// What the picker calls it.
+    var title: String {
+        switch (engine, surface) {
+        case (.dsh, _): return "DSH"
+        case (.claude, .gui): return "CC GUI"
+        case (.claude, .cli): return "CC CLI"
+        case (.codex, .gui): return "Codex GUI"
+        case (.codex, .cli): return "Codex CLI"
+        case (.claude, nil): return "Claude Code"
+        case (.codex, nil): return "Codex"
+        }
+    }
+
+    /// One line under the name.
+    var detail: String {
+        switch (engine, surface) {
+        case (.dsh, _):
+            return String(localized: "DeepSeek Harness workspaces and sessions")
+        case (.claude, .gui):
+            return String(localized: "Claude Desktop transcripts, read-only")
+        case (.claude, .cli):
+            return String(localized: "Claude Code conversations on this computer")
+        case (.codex, .gui):
+            return String(localized: "Codex Desktop threads")
+        case (.codex, .cli):
+            return String(localized: "Codex CLI threads on this computer")
+        case (.claude, nil):
+            return String(localized: "Claude Code transcripts on this computer")
+        case (.codex, nil):
+            return String(localized: "Codex threads on this computer")
+        }
+    }
+
+    /// The shorter label a workspace capsule can use.
+    var shortTitle: String {
+        switch (engine, surface) {
+        case (.dsh, _): return "DSH"
+        case (.claude, .gui): return "CC GUI"
+        case (.claude, .cli): return "CC CLI"
+        case (.codex, .gui): return "Codex GUI"
+        case (.codex, .cli): return "Codex CLI"
+        case (.claude, nil): return "Claude"
+        case (.codex, nil): return "Codex"
+        }
+    }
+
+    /// The five destinations, always in the same order.
+    static let all: [AgentTarget] = [
+        AgentTarget(engine: .dsh, surface: nil),
+        AgentTarget(engine: .claude, surface: .gui),
+        AgentTarget(engine: .claude, surface: .cli),
+        AgentTarget(engine: .codex, surface: .gui),
+        AgentTarget(engine: .codex, surface: .cli),
+    ]
+}

@@ -2,32 +2,25 @@
 //  EnginePickerSheet.swift
 //  DSH-Mizar
 //
-//  The three agents a computer can serve, as a short sheet from the bottom.
+//  The five destinations a computer can open: DSH, CC GUI, CC CLI, Codex GUI,
+//  Codex CLI. The wire token is still scoped by engine, so GUI and CLI share a
+//  connection; the surface is a phone-side filter over `SessionRow.source`.
 //
-//  One computer runs three agents and they share nothing: their sessions, their
-//  working directories and their tool surfaces are separate. Connecting is
-//  therefore not "connect to the Mac" but "connect to one agent on the Mac", and
-//  the question is asked the moment the computer is tapped -- not afterwards,
-//  from a picker that would then have to reload everything.
+//  There is deliberately no "All agents" row. A mixed list was useful while the
+//  host could only answer for one engine at a time; with two surfaces per coding
+//  agent it turns every heading into an ambiguity instead of a choice.
 //
 
 import SwiftUI
 
 struct EnginePickerSheet: View {
     let desktopName: String
-    /// The agents worth offering. Empty means "ask the standard three", which is
-    /// what a computer that has never been connected to can say.
-    var engines: [AgentEngine] = AgentEngine.allCases
-    /// The agent already in use, ticked so a switch is visibly a switch.
-    var current: AgentEngine?
-    /// Whether "all agents" is one of the answers.
-    ///
-    /// False for the first connection -- there is no reason to open a three-agent
-    /// computer and ask for all three at once -- and true when switching a
-    /// computer that may have been opened that way before this choice existed.
-    var allowsAll = false
-    /// Called with the agent the operator chose, or `nil` for all of them.
-    let onPick: (AgentEngine?) -> Void
+    /// The destinations worth offering. Empty means "ask for all five".
+    var targets: [AgentTarget] = AgentTarget.all
+    /// The destination already in use, ticked so a switch is visibly a switch.
+    var current: AgentTarget?
+    /// Called with the destination the operator chose.
+    let onPick: (AgentTarget) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -44,26 +37,29 @@ struct EnginePickerSheet: View {
             .padding(.bottom, 14)
 
             VStack(spacing: 6) {
-                // An empty list is not an answer this sheet can draw: it is what
-                // a caller passes when it has nothing to choose between, so it
-                // falls back to the three this app knows instead of showing a
-                // sheet with no rows.
-                ForEach(engines.isEmpty ? AgentEngine.allCases : engines) { engine in
+                ForEach(targets.isEmpty ? AgentTarget.all : targets) { target in
                     Button {
                         dismiss()
-                        onPick(engine)
+                        onPick(target)
                     } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(engine.title)
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(.primary)
-                                Text(engine.detail)
+                                HStack(spacing: 5) {
+                                    Text(target.title)
+                                        .font(.body.weight(.medium))
+                                        .foregroundStyle(.primary)
+                                    if target.surface == .cli {
+                                        Text(">_")
+                                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Text(target.detail)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
-                            if engine == current {
+                            if target == current {
                                 Image(systemName: "checkmark")
                                     .font(.caption.weight(.bold))
                                     .foregroundStyle(Color.accentColor)
@@ -78,36 +74,7 @@ struct EnginePickerSheet: View {
                         .contentShape(.rect)
                     }
                     .buttonStyle(.pressable(scale: 0.98))
-                    .accessibilityIdentifier("engine.row.\(engine.rawValue)")
-                }
-
-                if allowsAll {
-                    Button {
-                        dismiss()
-                        onPick(nil)
-                    } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("All agents")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(.primary)
-                                Text("Every session on this computer, mixed together")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                            if current == nil {
-                                Image(systemName: "checkmark")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .frame(height: 50)
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.pressable(scale: 0.98))
-                    .accessibilityIdentifier("engine.row.all")
+                    .accessibilityIdentifier("agent.row.\(target.id)")
                 }
             }
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -115,7 +82,7 @@ struct EnginePickerSheet: View {
 
             Spacer(minLength: 0)
         }
-        .presentationDetents([.height(allowsAll ? 356 : 300)])
+        .presentationDetents([.height(380)])
         .presentationDragIndicator(.visible)
     }
 }

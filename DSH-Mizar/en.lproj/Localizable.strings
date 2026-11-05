@@ -640,14 +640,16 @@
 "Start a session here." = "Start a session here.";
 "A workspace with that name already exists." = "A workspace with that name already exists.";
 
-/* 0.9.x —— 一台电脑上的三个 Agent：作用域与切换 */
+/* 0.9.x —— 一台电脑上的五个 Agent 目标：GUI/CLI 与作用域 */
 "DeepSeek Harness workspaces and sessions" = "DeepSeek Harness workspaces and sessions";
 "Claude Code transcripts on this computer" = "Claude Code transcripts on this computer";
+"Claude Desktop transcripts, read-only" = "Claude Desktop transcripts, read-only";
+"Claude Code conversations on this computer" = "Claude Code conversations on this computer";
+"Codex Desktop threads" = "Codex Desktop threads";
+"Codex CLI threads on this computer" = "Codex CLI threads on this computer";
 "Codex threads on this computer" = "Codex threads on this computer";
 "Connect to which agent" = "Connect to which agent";
 "Which agent this connection is for" = "Which agent this connection is for";
-"All agents" = "All agents";
-"Every session on this computer, mixed together" = "Every session on this computer, mixed together";
 "Choose Agent…" = "Choose Agent…";
 "Can't reach the desktop. Try reconnecting." = "Can't reach the desktop. Try reconnecting.";
 "Refresh computers" = "Refresh computers";

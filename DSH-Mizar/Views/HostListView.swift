@@ -34,8 +34,6 @@ struct HostListView: View {
     /// minted, not in the question -- a computer runs three agents and a phone
     /// that opens one has to say which.
     @State private var choosingEngine: AgentChoice?
-    /// Which connection is being opened, so the sheet can show a spinner.
-    @State private var openingEngine: AgentEngine?
     /// The account computer whose local name is being edited.
     @State private var renamingAccount: AccountDesktop?
     /// Whether the computer list is being read again.
@@ -60,20 +58,28 @@ struct HostListView: View {
             }
         }
 
-        /// The agents to offer, when the computer has said which it serves.
-        var engines: [AgentEngine] {
+        /// The five destinations, narrowed to what this computer serves.
+        var targets: [AgentTarget] {
             switch self {
-            // The account's computers run this desktop, which serves all three.
-            case .account: return AgentEngine.allCases
+            // The account's computers run this desktop, which serves all three
+            // engines (and therefore all five surfaces).
+            case .account:
+                return AgentTarget.all
             case .paired(let host):
-                return host.engineChoices.compactMap(AgentEngine.init(rawValue:))
+                let served = host.engineChoices.compactMap(AgentEngine.init(rawValue:))
+                return served.isEmpty
+                    ? AgentTarget.all
+                    : AgentTarget.all.filter { served.contains($0.engine) }
             }
         }
 
-        var current: AgentEngine? {
+        var current: AgentTarget? {
             switch self {
-            case .account: return nil
-            case .paired(let host): return host.engine.flatMap(AgentEngine.init(rawValue:))
+            case .account:
+                return nil
+            case .paired(let host):
+                let engine = host.engine.flatMap(AgentEngine.init(rawValue:))
+                return engine.map { AgentTarget(engine: $0, surface: $0 == .dsh ? nil : .cli) }
             }
         }
     }
@@ -110,18 +116,17 @@ struct HostListView: View {
     /// The token the relay hands back is already scoped to this agent, so the
     /// computer filters the list it sends: the phone never sees another agent's
     /// sessions even for a moment.
-    private func connect(_ desktop: AccountDesktop, engine: AgentEngine) async {
-        openingEngine = engine
-        defer { openingEngine = nil }
+    private func connect(_ desktop: AccountDesktop, target: AgentTarget) async {
         do {
-            let connection = try await model.account.connect(to: desktop, engine: engine)
+            let connection = try await model.account.connect(to: desktop, engine: target.engine)
             guard let origin = URL(string: RelayTier.paidBaseURL) else { return }
             await model.openAccountDesktop(
                 desktop,
                 using: connection,
                 at: origin,
-                engine: engine,
+                engine: target.engine,
             )
+            await model.chooseAgent(target, for: desktop.deviceId)
         } catch {
             model.reportAccountFailure(error)
         }
@@ -264,16 +269,14 @@ struct HostListView: View {
             .sheet(item: $choosingEngine) { choice in
                 EnginePickerSheet(
                     desktopName: choice.name,
-                    engines: choice.engines,
+                    targets: choice.targets,
                     current: choice.current,
-                    allowsAll: choice.current != nil,
-                ) { engine in
+                ) { target in
                     switch choice {
                     case .account(let desktop):
-                        guard let engine else { return }
-                        Task { await connect(desktop, engine: engine) }
+                        Task { await connect(desktop, target: target) }
                     case .paired(let host):
-                        Task { await model.chooseEngine(engine, for: host.hostId) }
+                        Task { await model.chooseAgent(target, for: host.hostId) }
                     }
                 }
             }

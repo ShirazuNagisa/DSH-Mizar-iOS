@@ -640,14 +640,16 @@
 "Start a session here." = "在这里开始一个会话。";
 "A workspace with that name already exists." = "已经有一个同名工作区了。";
 
-/* 0.9.x —— 一台电脑上的三个 Agent：作用域与切换 */
+/* 0.9.x —— 一台电脑上的五个 Agent 目标：GUI/CLI 与作用域 */
 "DeepSeek Harness workspaces and sessions" = "DeepSeek Harness 的工作区与会话";
 "Claude Code transcripts on this computer" = "这台电脑上的 Claude Code 记录";
+"Claude Desktop transcripts, read-only" = "Claude 桌面的会话记录，只读";
+"Claude Code conversations on this computer" = "这台电脑上的 Claude Code 会话";
+"Codex Desktop threads" = "Codex 桌面的线程";
+"Codex CLI threads on this computer" = "这台电脑上的 Codex CLI 线程";
 "Codex threads on this computer" = "这台电脑上的 Codex 线程";
 "Connect to which agent" = "连接到哪个 Agent";
 "Which agent this connection is for" = "这条连接连到哪个 Agent";
-"All agents" = "全部 Agent";
-"Every session on this computer, mixed together" = "这台电脑上的全部会话，混在一起";
 "Choose Agent…" = "选择 Agent…";
 "Can't reach the desktop. Try reconnecting." = "无法连接到桌面端，请尝试重连";
 "Refresh computers" = "刷新电脑列表";

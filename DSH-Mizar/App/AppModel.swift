@@ -174,6 +174,20 @@ final class AppModel {
     /// host, or a pairing nobody has chosen for yet.
     private(set) var engineScope: AgentEngine?
 
+    /// Which surface of ``engineScope`` the list is showing.
+    ///
+    /// The host scopes a connection by engine, because that is what its token
+    /// and session index are keyed by. The UI's five choices need one more
+    /// bit: GUI transcripts (`source` is `claude_desktop` / `codex_desktop`)
+    /// and CLI conversations are different destinations under one engine.
+    private(set) var surfaceScope: AgentSurface?
+
+    /// The five-choice selection, or `nil` for "all agents".
+    var agentTarget: AgentTarget? {
+        guard let engineScope else { return nil }
+        return AgentTarget(engine: engineScope, surface: surfaceScope)
+    }
+
     /// The sessions the host lists, newest activity first.
     private(set) var sessions: [SessionRow] = [] {
         didSet {
@@ -282,7 +296,7 @@ final class AppModel {
     var workspaceGroups: [WorkspaceGroup] {
         WorkspaceCatalog.groups(
             sessions: sessions,
-            workspaces: workspaces,
+            workspaces: visibleWorkspaces,
             selectedSessionId: selectedSessionId,
         )
     }
@@ -293,7 +307,19 @@ final class AppModel {
     /// use: a deleted workspace leaves its session log behind, so the two are not
     /// the same list and the difference is exactly the report this answers.
     var workspaceChoices: [WorkspaceChoice] {
-        WorkspaceCatalog.choices(sessions: sessions, workspaces: workspaces)
+        WorkspaceCatalog.choices(sessions: sessions, workspaces: visibleWorkspaces)
+    }
+
+    /// Workspaces with no session on the chosen surface are not destinations
+    /// for it. A workspace that does not name its session ids is left alone:
+    /// "unknown" is not "empty".
+    private var visibleWorkspaces: [WorkspaceRow]? {
+        guard surfaceScope != nil, let workspaces else { return workspaces }
+        let ids = Set(sessions.map(\.sessionId))
+        return workspaces.filter { row in
+            guard let sessionIds = row.sessionIds else { return true }
+            return sessionIds.contains(where: ids.contains)
+        }
     }
 
     /// How many workspaces this phone is showing, in one line.
@@ -1853,6 +1879,19 @@ final class AppModel {
         WorkspaceCatalog.scoped(rows, to: engine?.wireName)
     }
 
+    /// Keep only the chosen surface's sessions.
+    ///
+    /// `source` is the host's answer. A row from a build that predates the
+    /// field has no source, which is the CLI surface — the same rule the
+    /// desktop window uses in ``sessionOnSurface``.
+    static func surfaced(_ rows: [SessionRow], to surface: AgentSurface?) -> [SessionRow] {
+        guard let surface else { return rows }
+        return rows.filter { row in
+            let gui = row.namedEngine.map { "\($0)_desktop" } == row.source
+            return surface == .gui ? gui : !gui
+        }
+    }
+
     /// Keep only the chosen agent's workspaces.
     ///
     /// The second half of the report: a phone scoped to DSH listed DSH's five
@@ -3132,15 +3171,17 @@ final class AppModel {
     ///
     /// - Parameter engine: the agent the host named, or `nil` for "all agents".
     private func adoptEngineScope(_ engine: AgentEngine?) async {
+        let engine = engine ?? host.map(Self.defaultEngine(for:)) ?? .dsh
         guard engine != engineScope else { return }
         engineScope = engine
         // The lists on screen were filtered by the old answer. Re-filter rather
         // than wait for the next refresh: one of them may be wrong now, and the
         // other is already in memory.
         sessions = Self.scoped(sessions, to: engine)
+        sessions = Self.surfaced(sessions, to: surfaceScope)
         if let workspaces { self.workspaces = Self.scoped(workspaces, to: engine) }
         guard var current = host else { return }
-        let wire = engine?.rawValue
+        let wire = engine.rawValue
         guard current.engine != wire else { return }
         current = current.opened(on: wire)
         host = current
@@ -3148,7 +3189,7 @@ final class AppModel {
             hosts[index] = current
         }
         try? await credentials.save(current)
-        log.add(.connection, "agent: this connection is \(engine?.title ?? "all agents")")
+        log.add(.connection, "agent: this connection is \(engine.title)")
     }
 
     /// The agents this computer offers a choice of.
@@ -3158,6 +3199,16 @@ final class AppModel {
     var engineChoices: [AgentEngine] {
         guard !isLocalAgentMode, let host else { return [] }
         return host.engineChoices.compactMap(AgentEngine.init(rawValue:))
+    }
+
+    /// The five destinations the picker draws.
+    ///
+    /// Deliberately independent of ``engineChoices``: a destination that is not
+    /// installed still has a page, and the disabled state belongs on the row,
+    /// not on the existence of the choice.
+    var agentChoices: [AgentTarget] {
+        guard !isLocalAgentMode, host != nil else { return [] }
+        return AgentTarget.all
     }
 
     /// Open this computer as one agent, or as all of them.
@@ -3178,6 +3229,7 @@ final class AppModel {
         // only for the computer that is open: choosing for another one is a
         // stored preference, not a comparison with what is on screen.
         if host?.hostId == hostId, engine == engineScope { return }
+        if engine != engineScope { surfaceScope = nil }
         let updated = current.opened(on: engine?.rawValue)
         if let index = hosts.firstIndex(where: { $0.hostId == hostId }) { hosts[index] = updated }
         if host?.hostId == hostId { host = updated }
@@ -3190,6 +3242,62 @@ final class AppModel {
         guard host?.hostId == hostId || isLocalAgentMode else { return }
         await open(hostId: hostId)
     }
+
+    /// Switch to one of the five visible destinations.
+    ///
+    /// Changing engine redials; changing only GUI/CLI keeps the socket and
+    /// refilters the list, because both surfaces are served by the same token.
+    func chooseAgent(_ target: AgentTarget, for hostId: String? = nil) async {
+        let hostId = hostId ?? host?.hostId
+        // Choosing for a computer that is not open is a stored preference, not
+        // a redial: its row will use it the next time it is opened. Writing the
+        // surface before the engine keeps the two halves of the choice together.
+        guard host?.hostId == hostId else {
+            Self.storeSurface(target.surface, for: hostId)
+            await chooseEngine(target.engine, for: hostId)
+            return
+        }
+        if engineScope != target.engine {
+            await chooseEngine(target.engine, for: hostId)
+        }
+        surfaceScope = target.engine == .dsh ? nil : target.surface
+        Self.storeSurface(surfaceScope, for: hostId)
+        // Re-read rather than filtering the already-filtered array: `sessions`
+        // holds only the previous surface's rows, so a GUI switch from CLI
+        // would otherwise see nothing.
+        await refreshSessions(reconnectingIfNeeded: false)
+    }
+
+    /// The surface this phone last chose for a computer.
+    ///
+    /// Stored on the phone, not in the pairing record: a surface is a view of
+    /// one engine, and the host token only ever carried the engine. A missing
+    /// value defaults to CLI for Claude/Codex, because that is where most
+    /// existing conversations came from and it makes the five-choice picker
+    /// start on a real row rather than an invisible "all surfaces".
+    private static func defaultEngine(for host: PairedHost) -> AgentEngine {
+        host.engineChoices.compactMap(AgentEngine.init(rawValue:)).first ?? .dsh
+    }
+
+    private static func storedSurface(for hostId: String?, engine: AgentEngine?) -> AgentSurface? {
+        guard let engine, engine != .dsh, let hostId else { return nil }
+        if let raw = UserDefaults.standard.string(forKey: "mizar.agent.surface.\(hostId)"),
+           let surface = AgentSurface(rawValue: raw) {
+            return surface
+        }
+        return .cli
+    }
+
+    private static func storeSurface(_ surface: AgentSurface?, for hostId: String?) {
+        guard let hostId else { return }
+        let key = "mizar.agent.surface.\(hostId)"
+        if let surface {
+            UserDefaults.standard.set(surface.rawValue, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
 
     /// Persist the identity the host punches under.
     ///
@@ -6177,6 +6285,8 @@ final class AppModel {
         // pairing, so deriving it here is what keeps a relaunch from falling
         // back to "all agents" and drawing three agents' folders under one name.
         engineScope = host.engine.flatMap(AgentEngine.init(rawValue:))
+            ?? Self.defaultEngine(for: host)
+        surfaceScope = Self.storedSurface(for: host.hostId, engine: engineScope)
         // Before the first request, not after it. Everything below waits on a
         // machine that may be asleep, and a session list that is empty until a
         // round trip lands is empty for as long as the round trip takes -- which

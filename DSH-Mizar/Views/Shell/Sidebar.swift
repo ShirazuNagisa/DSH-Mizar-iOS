@@ -201,7 +201,7 @@ struct SidebarView: View {
     @ViewBuilder
     private var agentCapsule: some View {
         if let title = agentTitle {
-            if model.engineChoices.count > 1 {
+            if model.agentChoices.count > 1 {
                 Button {
                     showingAgentPicker = true
                 } label: {
@@ -209,7 +209,7 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.pressable(scale: 0.96))
                 .accessibilityIdentifier("sessions.agent")
-                .accessibilityValue(Text(model.engineScope?.title ?? String(localized: "All agents")))
+                .accessibilityValue(Text(model.agentTarget?.title ?? "Agent"))
                 .mizarPopover(isPresented: $showingAgentPicker) {
                     AgentSwitcher()
                 }
@@ -224,16 +224,12 @@ struct SidebarView: View {
 
     /// What the agent capsule says.
     ///
-    /// `nil` when this build cannot name the agent: an older host that has not
-    /// reported which engines it serves. Showing "All agents" there would be a
-    /// sentence about having several, on a computer that may have one.
+    /// `nil` when no target is known yet; there is no mixed list to name.
     private var agentTitle: String? {
-        if model.engineChoices.count > 1 {
-            return model.engineScope?.shortTitle ?? String(localized: "All agents")
+        if model.agentChoices.count > 1 {
+            return model.agentTarget?.shortTitle
         }
-        guard let engines = model.host?.knownEngines?.compactMap(AgentEngine.init(rawValue:)),
-              engines.count == 1 else { return nil }
-        return (model.engineScope ?? engines[0]).shortTitle
+        return model.agentTarget?.shortTitle
     }
 
     private func agentCapsuleLabel(_ title: String, showsChevron: Bool) -> some View {

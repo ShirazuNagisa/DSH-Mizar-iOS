@@ -345,6 +345,9 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
     public let parentSessionId: String?
     /// `"subagent"` for delegated children, exactly as the host classifies them.
     public let origin: String?
+    /// `claude_desktop` / `codex_desktop` for GUI-owned transcripts; `nil` for
+    /// the CLI surface. Additive: an older host does not send it.
+    public let source: String?
 
     public var id: String { sessionId }
 
@@ -357,6 +360,7 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
         cwd: String?,
         parentSessionId: String? = nil,
         origin: String? = nil,
+        source: String? = nil,
     ) {
         self.sessionId = sessionId
         self.updatedAt = updatedAt
@@ -366,6 +370,7 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
         self.cwd = cwd
         self.parentSessionId = parentSessionId
         self.origin = origin
+        self.source = source
     }
 
     /// Last activity as a date.

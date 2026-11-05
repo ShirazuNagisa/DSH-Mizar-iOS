@@ -10,9 +10,7 @@
 //  over the session list names the one on screen and opens this, which is the
 //  whole of the switch: pick, and the socket is redialled with the choice.
 //
-//  "All agents" is offered rather than implied. It is what a phone that never
-//  chose sees, and what an older host can only answer, so a list that mixes
-//  three agents has to be something the operator can name -- and leave.
+//  There is no mixed list: one connection is always one of the five targets.
 //
 
 import SwiftUI
@@ -31,19 +29,9 @@ struct AgentSwitcher: View {
                 .padding(.top, 8)
                 .padding(.bottom, 4)
 
-            ForEach(model.engineChoices) { engine in
-                row(title: engine.title, detail: engine.detail, engine: engine)
+            ForEach(model.agentChoices) { target in
+                row(title: target.title, detail: target.detail, target: target)
             }
-            // Last, and set apart by its own line: it is not one of the agents,
-            // it is the absence of a choice.
-            Divider()
-                .padding(.horizontal, 10)
-                .padding(.vertical, 2)
-            row(
-                title: String(localized: "All agents"),
-                detail: String(localized: "Every session on this computer, mixed together"),
-                engine: nil,
-            )
         }
         .padding(.bottom, 6)
         .frame(width: 244)
@@ -54,12 +42,13 @@ struct AgentSwitcher: View {
     /// - Parameters:
     ///   - title: the product's name.
     ///   - detail: one line about what it holds.
-    ///   - engine: the agent, or `nil` for all of them.
-    private func row(title: String, detail: String, engine: AgentEngine?) -> some View {
-        let isCurrent = engine == model.engineScope
+    ///   - target: the five-way destination.
+    private func row(title: String, detail: String, target: AgentTarget) -> some View {
+        let isCurrent = target == model.agentTarget
+        let available = model.engineChoices.isEmpty || model.engineChoices.contains(target.engine)
         return Button {
             dismiss()
-            Task { await model.chooseEngine(engine) }
+            Task { await model.chooseAgent(target) }
         } label: {
             HStack(spacing: 9) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -83,7 +72,9 @@ struct AgentSwitcher: View {
             .contentShape(.rect)
         }
         .buttonStyle(.pressable(scale: 0.98))
-        .accessibilityIdentifier("agent.switch.\(engine?.rawValue ?? "all")")
+        .disabled(!available)
+        .opacity(available ? 1 : 0.45)
+        .accessibilityIdentifier("agent.switch.\(target.id)")
         // VoiceOver reads the tick as part of the row rather than as a shape.
         .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }
