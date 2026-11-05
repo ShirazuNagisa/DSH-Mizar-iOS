@@ -27,68 +27,16 @@ import MizarKit
 struct HostListView: View {
     @Environment(AppModel.self) private var model
     @State private var path: [HostRoute] = []
-    /// The computer whose agent is being chosen, if any.
-    ///
-    /// Both kinds of row end here: a computer the account found, and one this
-    /// phone paired with by scanning a code. They differ in how the token is
-    /// minted, not in the question -- a computer runs three agents and a phone
-    /// that opens one has to say which.
-    @State private var choosingEngine: AgentChoice?
     /// The account computer whose local name is being edited.
     @State private var renamingAccount: AccountDesktop?
     /// Whether the computer list is being read again.
     @State private var refreshing = false
 
-    /// A computer waiting for its agent to be chosen.
-    private enum AgentChoice: Identifiable {
-        case account(AccountDesktop)
-        case paired(PairedHost)
-
-        var id: String {
-            switch self {
-            case .account(let desktop): return "account-\(desktop.deviceId)"
-            case .paired(let host): return "paired-\(host.hostId)"
-            }
-        }
-
-        var name: String {
-            switch self {
-            case .account(let desktop): return desktop.name
-            case .paired(let host): return host.displayName
-            }
-        }
-
-        /// The five destinations, narrowed to what this computer serves.
-        var targets: [AgentTarget] {
-            switch self {
-            // The account's computers run this desktop, which serves all three
-            // engines (and therefore all five surfaces).
-            case .account:
-                return AgentTarget.all
-            case .paired(let host):
-                let served = host.engineChoices.compactMap(AgentEngine.init(rawValue:))
-                return served.isEmpty
-                    ? AgentTarget.all
-                    : AgentTarget.all.filter { served.contains($0.engine) }
-            }
-        }
-
-        var current: AgentTarget? {
-            switch self {
-            case .account:
-                return nil
-            case .paired(let host):
-                let engine = host.engine.flatMap(AgentEngine.init(rawValue:))
-                return engine.map { AgentTarget(engine: $0, surface: $0 == .dsh ? nil : .cli) }
-            }
-        }
-    }
-
     /// One row of the account's computers.
     @ViewBuilder
     private func accountRow(_ desktop: AccountDesktop) -> some View {
         Button {
-            choosingEngine = .account(desktop)
+            Task { await connect(desktop, target: model.preferredAgent(for: desktop.deviceId)) }
         } label: {
             AccountDesktopRow(
                 desktop: desktop,
@@ -108,6 +56,15 @@ struct HostListView: View {
         }
         .accessibilityAction(named: Text("Rename…")) {
             renamingAccount = desktop
+        }
+    }
+
+    /// Open a paired computer on the agent last used there.
+    private func openPaired(_ host: PairedHost) async {
+        let target = model.preferredAgent(for: host.hostId)
+        await model.chooseAgent(target, for: host.hostId)
+        if model.host?.hostId != host.hostId {
+            await model.open(hostId: host.hostId)
         }
     }
 
@@ -163,29 +120,13 @@ struct HostListView: View {
                     if AppModel.showsManualPairing {
                     ForEach(model.hosts, id: \.hostId) { host in
                         Button {
-                            // A computer that serves three agents is asked which
-                            // one first. One that has never said (an older host,
-                            // or a pairing made before this existed) opens as it
-                            // always did, and the picker appears on the sidebar
-                            // once the host has answered.
-                            if host.engineChoices.count > 1 {
-                                choosingEngine = .paired(host)
-                            } else {
-                                Task { await model.open(hostId: host.hostId) }
-                            }
+                            Task { await openPaired(host) }
                         } label: {
                             HostRow(host: host, isOpen: model.host?.hostId == host.hostId, live: model.isConnected)
                         }
                         .buttonStyle(.pressable(scale: 0.98))
                         .accessibilityIdentifier("host.row.\(host.hostId)")
                         .contextMenu {
-                            if host.engineChoices.count > 1 {
-                                Button {
-                                    choosingEngine = .paired(host)
-                                } label: {
-                                    Label("Choose Agent…", systemImage: "square.stack.3d.up")
-                                }
-                            }
                             Button {
                                 path.append(.rename(host.hostId))
                             } label: {
@@ -213,7 +154,7 @@ struct HostListView: View {
                             .padding(.vertical, 4)
                     }
 
-                    Text("Tap a computer to choose the agent to connect to.")
+                    Text("Tap a computer to connect. It opens the last agent used there, or the first available one.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -225,9 +166,9 @@ struct HostListView: View {
                 .padding(.vertical, 6)
             }
             .scrollBounceBehavior(.basedOnSize)
-            // "Agents", not "Computers": the list now holds one agent that is
-            // not a computer at all.
-            .navigationTitle("Agents")
+            // A device list, not an agent list: the agent is remembered by
+            // the device and changed from the session capsule.
+            .navigationTitle("Choose Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -263,20 +204,6 @@ struct HostListView: View {
                             if let name { Task { await model.rename(hostId: host.hostId, to: name) } }
                             path.removeAll()
                         }
-                    }
-                }
-            }
-            .sheet(item: $choosingEngine) { choice in
-                EnginePickerSheet(
-                    desktopName: choice.name,
-                    targets: choice.targets,
-                    current: choice.current,
-                ) { target in
-                    switch choice {
-                    case .account(let desktop):
-                        Task { await connect(desktop, target: target) }
-                    case .paired(let host):
-                        Task { await model.chooseAgent(target, for: host.hostId) }
                     }
                 }
             }
@@ -803,7 +730,9 @@ struct UnpairedView<Mark: View>: View {
                         Divider().overlay(.white.opacity(0.08))
                     }
                     Button {
-                        Task { await connect(entry.element, engine: nil) }
+                        let target = model?.preferredAgent(for: entry.element.deviceId)
+                            ?? AgentTarget(engine: .dsh, surface: nil)
+                        Task { await connect(entry.element, target: target) }
                     } label: {
                         AccountDesktopRow(desktop: entry.element)
                     }
@@ -820,15 +749,15 @@ struct UnpairedView<Mark: View>: View {
         )
     }
 
-    /// Choose an agent on a computer and open it, the way the agent list does
-    /// once something is paired.
-    private func connect(_ desktop: AccountDesktop, engine: AgentEngine?) async {
+    /// Open a computer on the target last used there, or its first target.
+    private func connect(_ desktop: AccountDesktop, target: AgentTarget) async {
         opening = true
         defer { opening = false }
         do {
-            let connection = try await model?.account.connect(to: desktop, engine: engine)
+            let connection = try await model?.account.connect(to: desktop, engine: target.engine)
             guard let connection, let origin = URL(string: RelayTier.paidBaseURL) else { return }
-            await model?.openAccountDesktop(desktop, using: connection, at: origin, engine: engine)
+            await model?.openAccountDesktop(desktop, using: connection, at: origin, engine: target.engine)
+            await model?.chooseAgent(target, for: desktop.deviceId)
         } catch {
             model?.reportAccountFailure(error)
         }
@@ -871,7 +800,7 @@ struct AccountDesktopRow: View {
                     .font(.body.weight(.medium))
                     .foregroundStyle(desktop.online ? .primary : .secondary)
                     .lineLimit(1)
-                Text(desktop.online ? String(localized: "Online · tap to choose an agent") : String(localized: "Offline"))
+                Text(desktop.online ? String(localized: "Online") : String(localized: "Offline"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

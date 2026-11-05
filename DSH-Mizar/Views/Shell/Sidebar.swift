@@ -210,7 +210,7 @@ struct SidebarView: View {
                 .buttonStyle(.pressable(scale: 0.96))
                 .accessibilityIdentifier("sessions.agent")
                 .accessibilityValue(Text(model.agentTarget?.experimentalTitle ?? "Agent"))
-                .mizarPopover(isPresented: $showingAgentPicker) {
+                .mizarPopover(isPresented: $showingAgentPicker, arrowEdge: .top) {
                     AgentSwitcher()
                 }
             } else {
@@ -655,11 +655,13 @@ private struct SidebarFooter: View {
                         .animation(.mizarBouncy, value: showingConnection)
                 }
                 .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 54)
                 .contentShape(.capsule)
                 .liquidCapsule(interactive: true)
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
             // One label for the whole capsule: a button is one accessibility
             // element, so the route drawn under the status is not separately
             // voiced and would otherwise be left out of it. The route goes into
@@ -676,19 +678,24 @@ private struct SidebarFooter: View {
                 ConnectionPanel()
             }
 
-            Button {
-                showingBalance = true
-            } label: {
-                GlassCircleLabel(size: 54) {
-                    Text("¥")
-                        .font(.system(size: 23, weight: .medium))
+            // The balance is a DSH account fact. On Claude/Codex the capsule
+            // takes the space instead, so the footer is one full-width status
+            // control rather than a status plus an empty wallet button.
+            if model.agentTarget?.engine == .dsh {
+                Button {
+                    showingBalance = true
+                } label: {
+                    GlassCircleLabel(size: 54) {
+                        Text("¥")
+                            .font(.system(size: 23, weight: .medium))
+                    }
                 }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("balance.title"))
-            .accessibilityIdentifier("sidebar.balance")
-            .mizarPopover(isPresented: $showingBalance, arrowEdge: .bottom) {
-                BalanceView()
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("balance.title"))
+                .accessibilityIdentifier("sidebar.balance")
+                .mizarPopover(isPresented: $showingBalance, arrowEdge: .bottom) {
+                    BalanceView()
+                }
             }
 
             Button {

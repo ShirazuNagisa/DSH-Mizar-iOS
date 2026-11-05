@@ -25,7 +25,7 @@ struct AgentSwitcher: View {
             Text("Which agent this connection is for")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 14)
                 .padding(.top, 8)
                 .padding(.bottom, 4)
 
@@ -33,8 +33,8 @@ struct AgentSwitcher: View {
                 row(title: target.experimentalTitle, detail: target.detail, target: target)
             }
         }
-        .padding(.bottom, 6)
-        .frame(width: 244)
+        .padding(.bottom, 8)
+        .frame(width: 320)
     }
 
     /// One agent, ticked when it is the one on screen.
@@ -45,13 +45,22 @@ struct AgentSwitcher: View {
     ///   - target: the five-way destination.
     private func row(title: String, detail: String, target: AgentTarget) -> some View {
         let isCurrent = target == model.agentTarget
-        let available = model.engineChoices.isEmpty || model.engineChoices.contains(target.engine)
+        let available = model.isAgentAvailable(target)
         return Button {
             dismiss()
             Task { await model.chooseAgent(target) }
         } label: {
-            HStack(spacing: 9) {
-                VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 11) {
+                Circle()
+                    .fill(available ? Theme.running : Color.clear)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(Color.secondary, lineWidth: available ? 0 : 1.2)
+                    )
+                    .frame(width: 9, height: 9)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.subheadline.weight(isCurrent ? .semibold : .regular))
                         .foregroundStyle(.primary)
@@ -67,14 +76,15 @@ struct AgentSwitcher: View {
                         .foregroundStyle(Color.accentColor)
                 }
             }
-            .padding(.horizontal, 10)
-            .frame(height: 42)
+            .padding(.horizontal, 14)
+            .frame(height: 54)
             .contentShape(.rect)
         }
         .buttonStyle(.pressable(scale: 0.98))
         .disabled(!available)
-        .opacity(available ? 1 : 0.45)
+        .opacity(available ? 1 : 0.5)
         .accessibilityIdentifier("agent.switch.\(target.id)")
+        .accessibilityValue(Text(available ? String(localized: "Online") : String(localized: "Offline")))
         // VoiceOver reads the tick as part of the row rather than as a shape.
         .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }

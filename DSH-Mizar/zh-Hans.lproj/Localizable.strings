@@ -575,7 +575,7 @@
 "Makes this folder a workspace on the computer and starts a session in it. The folder has to exist there already." = "在电脑上把这个目录建成工作区，并在其中开始一个会话。该目录需要已经在电脑上存在。";
 
 /* 0.9.x —— 本地 Agent（实验性） */
-"Agents" = "Agent 选择";
+"Choose Device" = "设备选择";
 "On-Device Agent (Experimental)" = "本地 Agent（实验性）";
 "On-Device Agent" = "本地 Agent";
 "On-device" = "本地";
@@ -652,7 +652,6 @@
 "Which agent this connection is for" = "这条连接连到哪个 Agent";
 
 "(Experimental)" = "（实验性）";
-"Choose Agent…" = "选择 Agent…";
 "Can't reach the desktop. Try reconnecting." = "无法连接到桌面端，请尝试重连";
 "Refresh computers" = "刷新电脑列表";
 "Commands and attachments" = "命令与附件";
@@ -683,7 +682,7 @@
 "Background subagents updated" = "后台子代理有更新";
 
 /* Added for the Chinese localisation pass */
-"%@ tokens" = "%@ 个 Token";
+"%@ tokens" = "%@ Token";
 "%@, %@" = "%@，%@";
 "%lld" = "%lld";
 "%lld messages, %lld tokens" = "%lld 条消息，%lld 个 Token";
@@ -711,7 +710,6 @@
 "Not connected to the computer." = "尚未连接到电脑。";
 "OK" = "好";
 "Online" = "在线";
-"Online · tap to choose an agent" = "在线 · 点一下选择 Agent";
 "Pair a computer" = "配对一台电脑";
 "Pairing with a code is kept for development; sign in above to find your computers by account." = "用配对码配对仅供开发使用；请在上方登录，通过账户找到你的电脑。";
 "Preview" = "预览";
@@ -730,7 +728,7 @@
 "tokens" = "Token";
 "Refresh list" = "刷新列表";
 "Reading the computer…" = "正在读取电脑…";
-"Tap a computer to choose the agent to connect to." = "点一下电脑，选择要连接的 Agent。";
+"Tap a computer to connect. It opens the last agent used there, or the first available one." = "点一下电脑即可连接，会打开上次使用的 Agent；没有记录时使用最上方的可用 Agent。";
 "Computers signed in to the same account are below; tap one to connect." = "用同一个账户登录过的电脑都在下面，点一下就能连。";
 "The computer is offline. Make sure AGI Mizar is running on it." = "电脑显示离线：请确认电脑上的 AGI Mizar 正在运行。";
 "Your computers appear here after you sign in." = "登录后，这里会出现你的电脑。";

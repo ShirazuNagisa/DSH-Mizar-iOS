@@ -575,7 +575,7 @@
 "Makes this folder a workspace on the computer and starts a session in it. The folder has to exist there already." = "Makes this folder a workspace on the computer and starts a session in it. The folder has to exist there already.";
 
 /* 0.9.x —— 本地 Agent（实验性） */
-"Agents" = "Agents";
+"Choose Device" = "Choose Device";
 "On-Device Agent (Experimental)" = "On-Device Agent (Experimental)";
 "On-Device Agent" = "On-Device Agent";
 "On-device" = "On-device";
@@ -652,7 +652,6 @@
 "Which agent this connection is for" = "Which agent this connection is for";
 
 "(Experimental)" = "(Experimental)";
-"Choose Agent…" = "Choose Agent…";
 "Can't reach the desktop. Try reconnecting." = "Can't reach the desktop. Try reconnecting.";
 "Refresh computers" = "Refresh computers";
 "Commands and attachments" = "Commands and attachments";
@@ -711,7 +710,6 @@
 "Not connected to the computer." = "Not connected to the computer.";
 "OK" = "OK";
 "Online" = "Online";
-"Online · tap to choose an agent" = "Online · tap to choose an agent";
 "Pair a computer" = "Pair a computer";
 "Pairing with a code is kept for development; sign in above to find your computers by account." = "Pairing with a code is kept for development; sign in above to find your computers by account.";
 "Preview" = "Preview";
@@ -730,7 +728,7 @@
 "tokens" = "tokens";
 "Refresh list" = "Refresh list";
 "Reading the computer…" = "Reading the computer…";
-"Tap a computer to choose the agent to connect to." = "Tap a computer to choose the agent to connect to.";
+"Tap a computer to connect. It opens the last agent used there, or the first available one." = "Tap a computer to connect. It opens the last agent used there, or the first available one.";
 "Computers signed in to the same account are below; tap one to connect." = "Computers signed in to the same account are below; tap one to connect.";
 "The computer is offline. Make sure AGI Mizar is running on it." = "The computer is offline. Make sure AGI Mizar is running on it.";
 "Your computers appear here after you sign in." = "Your computers appear here after you sign in.";

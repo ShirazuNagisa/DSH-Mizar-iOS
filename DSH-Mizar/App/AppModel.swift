@@ -3243,12 +3243,71 @@ final class AppModel {
         await open(hostId: hostId)
     }
 
+    /// The target a computer should open with when its row is tapped.
+    ///
+    /// The last engine is stored on the pairing, and the surface is stored on
+    /// this phone by host id. If either is absent, the first destination the
+    /// computer actually serves is used, which is DSH on an account desktop.
+    func preferredAgent(for hostId: String) -> AgentTarget {
+        let record = hosts.first { $0.hostId == hostId }
+        let engine = record?.engine.flatMap(AgentEngine.init(rawValue:))
+        let served = record?.engineChoices.compactMap(AgentEngine.init(rawValue:)) ?? []
+        let candidates = served.isEmpty
+            ? AgentTarget.all
+            : AgentTarget.all.filter { served.contains($0.engine) }
+        // No remembered engine: the first available destination, not the
+        // first engine with a default surface. For a Claude-only computer that
+        // is CC GUI, which is the top row the picker would show.
+        guard let chosen = engine else {
+            return candidates.first ?? AgentTarget(engine: .dsh, surface: nil)
+        }
+        if chosen == .dsh { return AgentTarget(engine: .dsh, surface: nil) }
+        let surface = Self.storedSurface(for: hostId, engine: chosen) ?? .cli
+        return candidates.first { $0.engine == chosen && $0.surface == surface }
+            ?? candidates.first { $0.engine == chosen }
+            ?? AgentTarget(engine: chosen, surface: surface)
+    }
+
+    /// Whether a picker row can be selected.
+    ///
+    /// An account computer is brokered by the relay for any surface, even when
+    /// the last scoped token only reported the engine it was minted for. A
+    /// directly paired host can only offer what its hello listed; an older host
+    /// that listed nothing keeps the old permissive behaviour.
+    func isAgentAvailable(_ target: AgentTarget) -> Bool {
+        guard let host else { return false }
+        if account.desktops.contains(where: { $0.deviceId == host.hostId }) { return true }
+        return engineChoices.isEmpty || engineChoices.contains(target.engine)
+    }
+
     /// Switch to one of the five visible destinations.
     ///
     /// Changing engine redials; changing only GUI/CLI keeps the socket and
     /// refilters the list, because both surfaces are served by the same token.
     func chooseAgent(_ target: AgentTarget, for hostId: String? = nil) async {
         let hostId = hostId ?? host?.hostId
+        // An account desktop's token is minted for one engine. Redialling the
+        // old token cannot change agents, so mint a new one before opening.
+        if let hostId, host?.hostId == hostId,
+           target.engine != engineScope,
+           let desktop = account.desktops.first(where: { $0.deviceId == hostId }) {
+            do {
+                let connection = try await account.connect(to: desktop, engine: target.engine)
+                guard let origin = URL(string: RelayTier.paidBaseURL) else { return }
+                await openAccountDesktop(
+                    desktop,
+                    using: connection,
+                    at: origin,
+                    engine: target.engine,
+                )
+                surfaceScope = target.engine == .dsh ? nil : target.surface
+                Self.storeSurface(surfaceScope, for: hostId)
+                await refreshSessions(reconnectingIfNeeded: false)
+            } catch {
+                reportAccountFailure(error)
+            }
+            return
+        }
         // Choosing for a computer that is not open is a stored preference, not
         // a redial: its row will use it the next time it is opened. Writing the
         // surface before the engine keeps the two halves of the choice together.
