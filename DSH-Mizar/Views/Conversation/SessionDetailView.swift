@@ -1481,6 +1481,7 @@ struct SessionDetailView: View {
         // until the screen is reopened. Eight seconds is one heartbeat and a
         // little slack, not another polling loop while frames are arriving.
         var lastFrameAt = Date()
+        var lastHistorySyncAt = Date()
 
         if let newest = shownTurns.last, newest.isRunning {
             await replayTurnInFlight()
@@ -1548,11 +1549,17 @@ struct SessionDetailView: View {
             associateStream()
             sweepCardsForDisconnect()
             // A terminal frame can be lost without the socket dying. The
-            // history is the durable source of "this turn ended"; the page
-            // reload is the same read the running poll would make, but it does
-            // not depend on the poll having started from a session-list row.
-            if (shownTurns.last?.isRunning == true || (!stream.finished && streamStartedAt != nil)),
-               Date().timeIntervalSince(lastFrameAt) >= 8,
+            // journal is the same source a fresh launch replays, so use it
+            // every few seconds while the stream is live; the page itself is
+            // heavier and only needs the slower history read.
+            let liveTurn = shownTurns.last?.isRunning == true
+                || (!stream.finished && streamStartedAt != nil)
+            if liveTurn, Date().timeIntervalSince(lastFrameAt) >= 3, !reloading {
+                await replayTurnInFlight()
+                lastFrameAt = Date()
+            }
+            if liveTurn,
+               Date().timeIntervalSince(lastHistorySyncAt) >= 8,
                !reloading {
                 let synced = await model.syncConversation(for: sessionId)
                 let cached = await model.cachedConversation(for: sessionId)
@@ -1567,13 +1574,7 @@ struct SessionDetailView: View {
                     stats = frame
                     statsSessionId = sessionId
                 }
-                // The page says the turn is still running, but the state
-                // channel has stopped. The journal is the same source a fresh
-                // launch replays; use it so the body and state advance too.
-                if shownTurns.last?.isRunning == true || (!stream.finished && streamStartedAt != nil) {
-                    await replayTurnInFlight()
-                }
-                lastFrameAt = Date()
+                lastHistorySyncAt = Date()
             }
             try? await Task.sleep(for: .milliseconds(110))
         }
