@@ -453,6 +453,39 @@ struct ConnectionTests {
         #expect(await stateSettles { await connection.sessionState("s-1") == .completed })
     }
 
+    @Test("a reconnect starts a new state-channel epoch")
+    func reconnectResetsStateInterval() async throws {
+        let first = StubTransport(responder: responder())
+        let second = StubTransport(responder: responder())
+        let queue = TransportQueue([first, second])
+        let connection = MizarConnection(
+            configuration: .init(
+                authority: "127.0.0.1:19390",
+                token: "mz_test",
+                requestTimeout: .seconds(5),
+            ),
+            makeTransport: { queue.next() },
+        )
+        _ = try await connection.connect()
+
+        func envelope(_ frame: StateFrame) -> WebSocketFrame {
+            var out = Data([UInt8("s-1".utf8.count)])
+            out.append(contentsOf: "s-1".utf8)
+            out.append(frame.encoded())
+            return .binary(out)
+        }
+
+        await first.push(frame: envelope(StateFrame(state: .tool, interval: 9, flags: [])))
+        #expect(await stateSettles { await connection.sessionState("s-1") == .tool })
+
+        await connection.disconnect()
+        _ = try await connection.connect()
+        // A rebuilt desktop app can restart intervals at 1. The old 9 must not
+        // make the fresh interval look stale.
+        await second.push(frame: envelope(StateFrame(state: .completed, interval: 1, flags: [])))
+        #expect(await stateSettles { await connection.sessionState("s-1") == .completed })
+    }
+
     /// Poll until the read loop has caught up: "pushed" is not "applied".
     private func stateSettles(
         _ condition: @Sendable () async -> Bool,
@@ -462,6 +495,20 @@ struct ConnectionTests {
             try? await Task.sleep(for: .milliseconds(5))
         }
         return false
+    }
+}
+
+/// A thread-safe sequence of stub sockets for one reconnect test.
+final class TransportQueue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var transports: [StubTransport]
+
+    init(_ transports: [StubTransport]) { self.transports = transports }
+
+    func next() -> StubTransport {
+        lock.lock()
+        defer { lock.unlock() }
+        return transports.isEmpty ? StubTransport() : transports.removeFirst()
     }
 }
 

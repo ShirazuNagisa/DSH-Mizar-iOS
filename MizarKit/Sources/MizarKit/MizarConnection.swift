@@ -270,6 +270,14 @@ public actor MizarConnection {
     @discardableResult
     public func connect() async throws -> WelcomeFrame {
         if let welcome = state.welcome { return welcome }
+        // A new socket is a new epoch of the state channel. The host's interval
+        // counter is per session and can restart with a desktop app update or a
+        // fresh state machine; keeping the old channel would make every new
+        // frame look ``stale`` and the phone would freeze until the app was
+        // killed. Buffered frames belong to the socket being replaced for the
+        // same reason.
+        stateChannels.removeAll()
+        stateFrames.removeAll()
         state = .connecting
         // A new attempt is a new answer; the reason the last one ended belongs
         // to the last one.
