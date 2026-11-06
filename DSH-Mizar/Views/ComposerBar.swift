@@ -409,11 +409,11 @@ private struct ContextDetail: View {
 
     @Environment(AppModel.self) private var model
     @State private var current: SessionStatsFrame?
-    @State private var compacting = false
     @State private var completed = false
     @State private var failure: String?
 
     private var context: ContextPressure? { (current ?? stats)?.context }
+    private var compacting: Bool { model.isCompacting(sessionId) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -474,10 +474,8 @@ private struct ContextDetail: View {
 
     private func compact() async {
         guard !compacting else { return }
-        compacting = true
         completed = false
         failure = nil
-        defer { compacting = false }
         do {
             try await model.compactSession(sessionId)
             await onChanged()

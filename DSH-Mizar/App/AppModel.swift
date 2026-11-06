@@ -5813,6 +5813,18 @@ final class AppModel {
         }
     }
 
+    /// Sessions whose context compaction is still in flight.
+    ///
+    /// The context popover is a view; closing it must not reset the button to
+    /// "Compact context" while the host is still compacting. The request is
+    /// owned by the model, not by the popover's @State.
+    private(set) var compactingSessions: Set<String> = []
+
+    /// Whether this session is still compacting.
+    func isCompacting(_ sessionId: String) -> Bool {
+        compactingSessions.contains(sessionId)
+    }
+
     private struct CompactSessionResult: Decodable, Sendable {
         let compacted: Bool?
     }
@@ -5828,6 +5840,9 @@ final class AppModel {
         guard connection != nil else {
             throw MizarError(code: "NO_CONNECTION", message: "not connected to the computer")
         }
+        guard !compactingSessions.contains(sessionId) else { return }
+        compactingSessions.insert(sessionId)
+        defer { compactingSessions.remove(sessionId) }
         _ = try await call(
             "session.compact",
             payload: JSONValue.object(["sessionId": .string(sessionId)]),
