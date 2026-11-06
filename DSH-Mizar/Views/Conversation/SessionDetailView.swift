@@ -1551,7 +1551,7 @@ struct SessionDetailView: View {
             // history is the durable source of "this turn ended"; the page
             // reload is the same read the running poll would make, but it does
             // not depend on the poll having started from a session-list row.
-            if shownTurns.last?.isRunning == true,
+            if (shownTurns.last?.isRunning == true || (!stream.finished && streamStartedAt != nil)),
                Date().timeIntervalSince(lastFrameAt) >= 8,
                !reloading {
                 let synced = await model.syncConversation(for: sessionId)
@@ -1567,6 +1567,12 @@ struct SessionDetailView: View {
                     stats = frame
                     statsSessionId = sessionId
                 }
+                // The page says the turn is still running, but the state
+                // channel has stopped. The journal is the same source a fresh
+                // launch replays; use it so the body and state advance too.
+                if shownTurns.last?.isRunning == true || (!stream.finished && streamStartedAt != nil) {
+                    await replayTurnInFlight()
+                }
                 lastFrameAt = Date()
             }
             try? await Task.sleep(for: .milliseconds(110))
@@ -1580,7 +1586,11 @@ struct SessionDetailView: View {
     /// journal of the last turn, and replaying a finished one would draw it a
     /// second time beside the history that already has it.
     private func replayTurnInFlight() async {
-        guard let turn = shownTurns.last, turn.isRunning else { return }
+        guard let turn = shownTurns.last else { return }
+        // The history row can already say finished while the live stream is
+        // still stuck on a terminal frame that never arrived; in that shape the
+        // journal is still the only way to settle the visible stream.
+        guard turn.isRunning || (!stream.finished && streamStartedAt != nil) else { return }
         guard let replay = await model.streamReplay(for: sessionId), !replay.entries.isEmpty else {
             // An older host has no journal. The history's own running row still
             // says how long the turn has been going, and the screen keeps it:
@@ -2695,6 +2705,15 @@ struct SessionDetailView: View {
         while reloadWanted {
             reloadWanted = false
             await load()
+        }
+        // A manual refresh is also the operator asking "where is this turn
+        // now". `load()` refreshes the history and stats, but the live body
+        // comes from the state journal; if the state channel has gone quiet,
+        // reading only the page leaves the old "calling a tool" body on screen.
+        // Replaying the in-flight journal is what a fresh launch does, so a
+        // refresh now gets the same answer without relaunching the app.
+        if shownTurns.last?.isRunning == true || (!stream.finished && streamStartedAt != nil) {
+            await replayTurnInFlight()
         }
         // Out of attempts with nothing ever committed: the page has its
         // terminal state. A session that answered with nothing settled as
