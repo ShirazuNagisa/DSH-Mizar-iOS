@@ -46,6 +46,12 @@ public struct CachedConversation: Codable, Sendable, Equatable {
     /// first record sits. Without it there is no way to ask for what came
     /// before, which is why scrolling up did nothing.
     public let oldestSeq: Int?
+    /// The oldest raw log position this cache has paged over.
+    ///
+    /// Separate from ``oldestSeq`` because a page can contain only tool calls
+    /// and project to no visible item. That page still advances where the next
+    /// backward request must start.
+    public let historyCursor: Int?
     /// The last usage frame the host sent for this session.
     ///
     /// Stored beside the conversation rather than fetched when the screen opens.
@@ -88,12 +94,14 @@ public struct CachedConversation: Codable, Sendable, Equatable {
         hasMore: Bool = false,
         turns: [ConversationTurn]? = nil,
         oldestSeq: Int? = nil,
+        historyCursor: Int? = nil,
         stats: SessionStatsFrame? = nil,
         deliveredSeq: Int? = nil,
         syncedUpdatedAt: Double? = nil,
     ) {
         self.turns = turns
         self.oldestSeq = oldestSeq
+        self.historyCursor = historyCursor
         self.stats = stats
         self.deliveredSeq = deliveredSeq
         self.syncedUpdatedAt = syncedUpdatedAt

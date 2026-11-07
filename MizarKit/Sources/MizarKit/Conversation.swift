@@ -42,6 +42,14 @@ public struct SessionMessagesResult: Decodable, Sendable, Equatable {
     public let asOfSeq: Int?
     public let records: [SessionRecord]
     public let hasMore: Bool
+    /// The oldest *raw* log position on this page.
+    ///
+    /// The page can project to nothing the phone draws -- a long turn is mostly
+    /// tool calls, which are not on the phone wire -- so the visible
+    /// ``oldestSeq`` may be absent while the page still has a cursor. Paging
+    /// backwards must use this, or the first tool-only page looks like the end
+    /// of history.
+    public let oldestRawSeq: Int?
     /// Context-window occupancy and its breakdown, as of this page's cut.
     ///
     /// Every page carries it -- the host derives it from the same projection

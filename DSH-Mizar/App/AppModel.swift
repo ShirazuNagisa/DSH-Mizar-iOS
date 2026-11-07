@@ -5097,7 +5097,7 @@ final class AppModel {
     func loadOlder(sessionId: String) async -> Int? {
         guard connection != nil else { return nil }
         guard let cached = await conversations.load(sessionId: sessionId),
-              let before = cached.oldestSeq
+              let before = cached.historyCursor ?? cached.oldestSeq
         else { return nil }
         // Nothing older to ask for. Without this the scroll-to-top would fire a
         // request on every appearance for a page that cannot change. This one is
@@ -5110,11 +5110,15 @@ final class AppModel {
                 beforeSeq: before,
             )
             let fresh = result.conversationItems()
-            let reached = result.oldestSeq
             // The host answers with the tail before `beforeSeq`, so the same
-            // page coming back means there is nothing further; stopping is what
-            // keeps a scroll at the top from looping.
-            if reached == nil || reached == before || fresh.isEmpty { return 0 }
+            // raw cursor coming back means there is nothing further; stopping
+            // is what keeps a scroll at the top from looping.
+            //
+            // The visible cursor is deliberately not used here. A page can
+            // project to no visible item while still moving the raw cursor
+            // backwards; that is progress, not the end of history.
+            let reached = result.oldestRawSeq
+            if reached == nil || reached == before { return 0 }
 
             // Folded in as one step, so a reload landing at the same moment
             // cannot have its write undone by this one.
@@ -5129,7 +5133,11 @@ final class AppModel {
                 .cache,
                 "session \(sessionId): paged back, \(stored.items.count) items now held",
             )
-            return stored.items.count - cached.items.count
+            let added = stored.items.count - cached.items.count
+            // Returning zero for a tool-only page made `backfillHistory` stop
+            // before the user prompt several pages back. The raw cursor moving
+            // is what says there is more to read.
+            return added > 0 ? added : 1
         } catch {
             let message = Self.describe(error, authority: host?.authority ?? host?.baseURL)
             if !message.isEmpty { lastError = message }
@@ -5168,6 +5176,9 @@ final class AppModel {
             hasMore: page.hasMore,
             turns: mergeTurns(cached: known.turns ?? [], fresh: page.conversationTurns()),
             oldestSeq: [known.oldestSeq, page.oldestSeq].compactMap { $0 }.min(),
+            historyCursor: [known.historyCursor, page.oldestRawSeq]
+                .compactMap { $0 }
+                .min(),
             stats: statsFrame(carrying: page.context, over: known.stats),
             deliveredSeq: known.deliveredSeq,
         )
@@ -5369,7 +5380,7 @@ final class AppModel {
     /// Bounded per pass: a conversation with years of history should become
     /// complete over a few passes, not hold a request loop for minutes.
     @discardableResult
-    private func backfillHistory(for sessionId: String, maxPages: Int = 8) async -> Int {
+    private func backfillHistory(for sessionId: String, maxPages: Int = 16) async -> Int {
         var added = 0
         for _ in 0..<maxPages {
             guard let cached = await conversations.load(sessionId: sessionId), cached.hasMore else {
@@ -5432,6 +5443,9 @@ final class AppModel {
                     // what is already stored, and paging from the wrong end would
                     // re-fetch what is already here.
                     oldestSeq: [cached?.oldestSeq, older].compactMap { $0 }.min(),
+                    historyCursor: [cached?.historyCursor, result.oldestRawSeq]
+                        .compactMap { $0 }
+                        .min(),
                     // The page's context figure, folded into the frame the
                     // composer draws from: every refresh carries one, so the
                     // occupancy ring moves with the turn instead of waiting for
