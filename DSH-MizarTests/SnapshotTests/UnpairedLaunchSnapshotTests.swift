@@ -11,12 +11,12 @@
 //  the session list's new-session control. A launch that reached neither screen
 //  can only come back by failing this test or the contract.
 //
-//  `MizarStar`'s loop runs on a repeating keyframe animator, which no
+//  `MizarRing`'s loop runs on a repeating keyframe animator, which no
 //  transaction can stop, and `accessibilityReduceMotion` is a get-only
 //  environment key the harness cannot set. The app view therefore takes its
 //  mark as an injectable subview (`UnpairedView(mark:)`; the shipping
 //  `UnpairedView()` keeps the turning one), and this reference pins the pose
-//  the loop's reduce-motion branch rests on: the star still, in the screen's
+//  the loop’s reduce-motion branch rests on: the ring still, in the screen's
 //  own white ink, at the same size.
 //
 //  The screen's copy resolves through the app bundle in the simulator's own
@@ -46,7 +46,7 @@ struct UnpairedLaunchSnapshotTests {
 
         let snapshot = try SnapshotHarness.assertSnapshot(
             of: UnpairedView(
-                mark: MizarStar(motion: .still, size: 112, palette: .ink(.white)),
+                mark: MizarRing(motion: .still, size: 112, palette: .ink(.white)),
             ),
             named: "UnpairedLaunch-unpaired",
             size: CGSize(width: 390, height: 844),

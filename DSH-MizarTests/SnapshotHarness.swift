@@ -108,7 +108,7 @@ enum SnapshotHarness {
     ///   - view: the view to render. Build it from fixture data, not from the
     ///     live app model: a snapshot has to be reproducible from the test.
     ///   - name: the reference's name. Use one per case; put the case's input in
-    ///     the name (`MizarStar-openingHalf`) so a failure says what changed.
+    ///     the name (`MizarRing-openingHalf`) so a failure says what changed.
     ///   - size: the exact layout size in points. A reference is invalid at any
     ///     other size.
     ///   - scale: pixels per point. Changes only with a deliberate re-record.

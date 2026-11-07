@@ -1,18 +1,18 @@
 //
-//  MizarStarSnapshotTests.swift
+//  MizarRingSnapshotTests.swift
 //  DSH-MizarTests
 //
 //  The mark, in the poses the app actually draws.
 //
 //  This is the cheapest possible snapshot: pure geometry with no environment
-//  dependency, so it is also the harness's own smoke test — if these references
+//  dependency, so it is also the harness's own smoke test -- if these references
 //  stop matching, the renderer or the runtime moved, not the mark.
 //
 //  The animation itself cannot be pinned here: `running` is a repeating keyframe
 //  animator no render transaction stops, and `accessibilityReduceMotion` is a
-//  get-only environment key the harness cannot set. What is pinned is what the
-//  app draws while the animation is not allowed to run, plus the two ends of the
-//  progress reading — which is where a shape change would show up first.
+//  get-only environment key the harness cannot set. What is pinned is the icon's
+//  pose, the two ends of the progress reading (the track at zero, half filled,
+//  the whole icon at one), and the pale/dark tile.
 //
 
 import SwiftUI
@@ -20,11 +20,11 @@ import Testing
 @testable import DSH_Mizar
 
 @MainActor
-struct MizarStarSnapshotTests {
-    /// The poses a screen can hold still: the icon, a download half arrived, and
-    /// the 56-point size the refresh sheet draws.
+struct MizarRingSnapshotTests {
+    /// The poses a screen can hold still.
     enum Pose: String, CaseIterable, Sendable {
         case icon
+        case openingEmpty
         case openingHalf
         case inkOnNavy
         case darkRunning
@@ -32,37 +32,37 @@ struct MizarStarSnapshotTests {
         @ViewBuilder var view: some View {
             switch self {
             case .icon:
-                MizarStar(motion: .still, size: 68)
+                MizarRing(motion: .still, size: 68)
+            case .openingEmpty:
+                MizarRing(motion: .opening(0), size: 68)
             case .openingHalf:
-                MizarStar(motion: .opening(0.5), size: 68)
+                MizarRing(motion: .opening(0.5), size: 68)
             case .inkOnNavy:
-                MizarStar(motion: .still, size: 68, palette: .ink(.white))
+                MizarRing(motion: .still, size: 68, palette: .ink(.white))
                     .background(Color(red: 19 / 255, green: 31 / 255, blue: 61 / 255))
             case .darkRunning:
                 // The same mark, in Dark Mode, with no palette named: the ink
                 // follows the appearance, so this must come out white. Pinned
-                // on black because a white star on the harness's white ground
+                // on black because a white ring on the harness's white ground
                 // would pass by being invisible.
                 ZStack {
                     Color.black
-                    MizarStar(motion: .still, size: 68)
+                    MizarRing(motion: .still, size: 68)
                 }
                 .environment(\.colorScheme, .dark)
             }
         }
 
         var size: CGSize {
-            switch self {
-            case .icon, .openingHalf, .inkOnNavy, .darkRunning: CGSize(width: 68, height: 68)
-            }
+            CGSize(width: 68, height: 68)
         }
     }
 
     @Test(arguments: Pose.allCases)
-    func mizarStar(_ pose: Pose) throws {
+    func mizarRing(_ pose: Pose) throws {
         let snapshot = try SnapshotHarness.assertSnapshot(
             of: pose.view,
-            named: "MizarStar-\(pose.rawValue)",
+            named: "MizarRing-\(pose.rawValue)",
             size: pose.size,
         )
 
@@ -73,7 +73,7 @@ struct MizarStarSnapshotTests {
         #expect(snapshot.recorded == SnapshotHarness.isRecording)
     }
 
-    /// The app icon's own composition: the mark on its tile.
+    /// The app icon's own composition: the ring on its tile.
     @Test
     func mizarIconTile() throws {
         let snapshot = try SnapshotHarness.assertSnapshot(
@@ -87,9 +87,9 @@ struct MizarStarSnapshotTests {
 
     /// The same tile in Dark Mode: the icon's other appearance.
     ///
-    /// The asset catalog ships a black-tile icon for dark, and this is the
-    /// settings page agreeing with it. A tile that stayed white here is the
-    /// bug that made this reference exist.
+    /// The asset catalog ships a near-black tile for dark, and this is the
+    /// settings page agreeing with it. A tile that stayed pale here is the bug
+    /// that made this reference exist.
     @Test
     func mizarIconTileDark() throws {
         let snapshot = try SnapshotHarness.assertSnapshot(

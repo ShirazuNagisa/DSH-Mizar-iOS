@@ -320,7 +320,7 @@ private struct StreamClock: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            MizarStar(ink: 17, motion: .running)
+            MizarRing(ink: 17, motion: .running)
                 .frame(width: 20, height: 20)
             if let startedAt, let now {
                 label(elapsed: max(0, now.timeIntervalSince(startedAt)))
@@ -393,7 +393,7 @@ private struct StreamStatusLine: View {
                 // live voice", not another paragraph.
                 .underline(running && colorScheme == .dark)
         }
-        .foregroundStyle(running ? Color.accentColor : Color.secondary)
+        .foregroundStyle(running ? Theme.accentText : Color.secondary)
         // The live state machine keeps the old left-to-right sweep: this line
         // is the one thing on the page that is still doing something, and a
         // settled status line must not keep moving. The line is outside the

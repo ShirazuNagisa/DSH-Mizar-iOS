@@ -1,134 +1,161 @@
-# 应用图标与星标动画
+# 应用图标与环形标记
 
-手机和电脑是一个产品，所以是一个图标：`AGI Mizar` 桌面端 `crates/agi-app/icons/` 里的那颗星。
-这个仓库不重画它，只把它变成 iOS 需要的样子，并把它变成能做动画的两层。
+手机和电脑是一个产品，用同一份图标母版：五段圆头弧线组成的一只环，长弧在右，三段短弧在左，
+十点钟方向有一颗圆点。iOS 的 `AppIcon` 是两个 1024 PNG（浅色 / 深色），Live Activity 是同一只环
+裁出来的白色模板；应用里的标记不是位图，而是一条由同一组数字画出来的 `Canvas`，所以图标和标记
+不会因为各自重画而漂移。
 
 ```
-python3 scripts/make-app-icon.py             # AppIcon-1024.png / -dark.png ← 桌面端两个外观
-python3 scripts/make-star-geometry.py        # 星形路径 + 灵动岛图标 + 动作胶片
-python3 scripts/make-app-icon.py --check     # 只检查 PNG 是否与源一致
-python3 scripts/make-star-geometry.py --check  # 只检查生成的 Swift 是否过期
+python3 scripts/make-app-icon.py          # AppIcon 1024 两个外观 + 灵动岛模板
+python3 scripts/make-app-icon.py --check  # 只检查提交的 PNG 是否过期
 ```
 
-`make-app-icon.py` 默认去工作区里找 `../AGI Mizar/crates/agi-app/icons/{icon,icon-dark}.png`；
-`make-star-geometry.py` 的形状数据在脚本里（`LAYER_PROFILE`），`--trace 参考图.png` 可以从
-一张单层参考图重新量出那张表。生成物都提交进仓库；脚本只在图标本身要改时跑。
+母版在工作区根的 `icon-design/masters/mizar-icon/`：
+
+| 文件 | 用途 |
+|---|---|
+| `light.png` / `dark.png` | 不透明满幅图标；iOS 直接用它生成 AppIcon |
+| `light-transparent.png` / `dark-transparent.png` | 透明字重；只作为没有共享几何模块时的栅格回退 |
+| `ring_geometry.py` | 五段弧的几何与栅格化；桌面 `.icns` / `.ico`、iOS 灵动岛模板、Android 通知图标都从这里取 |
+| `README.md` | 母版来源、尺寸与重建方式 |
 
 ## 1. 图标本体
 
 | 平台 | 形状 | 为什么 |
 |---|---|---|
-| macOS（桌面端） | 1024 画布 + 824 圆角方块 + 透明外边距 | Dock / Finder / 启动台要这个网格 |
-| iOS（本仓库） | 1024 **满幅、不透明、无圆角**，两个外观 | 系统自己裁圆角；App Store Connect 直接拒收带 alpha 的图标 |
+| macOS（桌面端） | 1024 画布 + 824 圆角方块 + 透明外边距 | Dock / Finder / 启动台要这个网格；`AGI Mizar/scripts/make-icons.py` 负责 |
+| iOS（本仓库） | 1024 **满幅、不透明、无圆角**，两个外观 | 系统自己裁圆角；App Store Connect 拒收带 alpha 的图标 |
+| Live Activity | 32 / 64 / 96 白色模板，裁到环的外接框 | 素材分辨率不能超过它被绘制的尺寸；模板由系统着色 |
+| Android | 192 满幅 + 24dp 通知矢量 | 与 iOS 同一份浅色母版；通知图标是掩膜 |
 
-`make-app-icon.py` 只做这件事：裁出 824 的方块、把 macOS 留下的四个透明角压成该外观的底色
-（浅色白、深色黑）、按 Lanczos 放大到 1024、丢掉 alpha 通道。星本身的像素是桌面端的，没有被重画。
+`make-app-icon.py` 只做三件事：把母版放到 1024 网格、转成无 alpha 的 RGB、把同一只环按模板尺寸
+栅格化。它不重画图标。`Contents.json` 里是两个 1024：默认（浅色）和
+`appearances: [{appearance: luminosity, value: dark}]`；iOS 18 起系统在深色模式下自动取后者。
 
-`AppIcon.appiconset/Contents.json` 里是**两个 1024**：一个默认（浅色），一个
-`appearances: [{appearance: luminosity, value: dark}]`。iOS 18 起系统在深色模式下自己取后者；
-桌面端本来就有 `icon-dark.png`（白星、黑底），所以这是同一套素材，不是另做一套。
-着色（tinted）变体没有做：桌面端没有对应素材。
+## 2. 环的几何
 
-## 2. 星形：一层一条路径
+以母版画布为 1：
 
-图标是**两颗三臂星**相差 60° 叠出来的六臂星，所以动画不需要第二个素材：
-`StarGeometry+Generated.swift` 里只有一条三臂路径，另一层就是这条路径转 60°。
+| 量 | 值 | 说明 |
+|---|---|---|
+| 中心线半径 `R` | 0.385 | 五个元素的圆心 |
+| 描边宽度 `W` | 0.086 | 圆头端点；深色母版略细、浅色略粗，取共用中值 |
+| 墨迹外径 | 0.856 | `2 * (R + W/2)`；图标和标记都按这个比例 |
+| 长弧 | 270° → 47°（137°） | 右上到右下 |
+| 下弧 | 70° → 109°（39°） | 底部 |
+| 左下弧 | 131° → 163°（32°） | 左下 |
+| 左弧 | 186° → 206°（20°） | 左侧 |
+| 圆点 | 230° | 十点钟；零长度弧就是一颗圆头点 |
 
-形状的来源是**所有者给的那张单层参考图**，量成一张极坐标表 `LAYER_PROFILE`（离尖端每 5° 一个半径，
-相对尖端半径 0…1），脚本按这张表采样（2.5°）、用 Catmull-Rom 转成三次曲线。三个要点：
-
-- **凹口不是圆。** 半径一路掉到 60° 处的 0.247（尖端为 1.0）。早先这一版用 `icon-design/` 的 SVG，
-  它是从**合成图**描的，用一段圆弧把每个缺口闭合成半径 0.328 的圆核 —— 两层叠起来那个圆核就是
-  「中间一个球」，臂反而像长在球上。参考图里没有这个球，所以现在按参考图量。
-- **单层路径在它的盒子里不居中**：三条臂朝上、左下、右下，盒子上边是顶点、下边是两条下臂。
-  两层叠起来才居中，所以旋转中心是盒子中心，路径自己不去补偏移。
-- 归一化成 `0...1` 的坐标：SwiftUI 的 `Path` 没有圆弧指令，也不需要 —— 全部是三次曲线。
-
-`StarMotionTests` 钉住的是几何不变量（顶点半径 = `tipFraction`、左右对称、宽高比 2/√3、
-两层合成后居中且竖长），不是像素；像素在快照里。
+角度从三点钟方向起、顺时针为正（视图的 y 轴向下）。`R`、`W`、五段角度在
+`DSH-Mizar/Design/MizarRing.swift` 和 `icon-design/masters/mizar-icon/ring_geometry.py` 里各有一份；
+`MizarRingTests` 钉住它们，改一处必须改另一处。
 
 ## 3. 两种动画
 
-两种都只依赖四个数字，都在 `StarMetrics` 里，`DSH-MizarTests/StarMotionTests.swift` 钉住它们。
+两种都只由时间轴和五个元素的 trim 决定，没有整体旋转：每一帧都是图标在“被画出来”的某个状态，
+而不是一只转动的通用 spinner。
 
-动作胶片（上排一次呼吸、下排一次 flick，逐帧）由 `make-star-geometry.py` 生成在工作区的
-`../../docs/evidence/ios-star-motion-2026-10-30.png`：它是工作区级的证据文件，不在本仓库内，
-但每次跑那个脚本都会重画一遍，所以和参数不会有出入。
+### running —— 长时间等待（2.20 秒一圈）
 
-### running —— 长时间等待
+顺时针逐个画出：长弧 → 下弧 → 左下弧 → 左弧 → 圆点。五段画完后停 0.34 秒，环完整；然后按同一
+顺序顺时针收起：长弧先退，圆点最后退。收完停 0.20 秒，下一圈从空环开始。
 
-- 两层各自 360° / **9 秒**，方向相反、速度相同。
-- 一层转 60°，两层就重新对齐一次，所以轮廓的呼吸周期是 **9 / 6 = 1.5 秒**：六芒 → 三芒 → 六芒。
-- 线性循环，不用缓动：缓动循环每圈会「顿」一次，9 秒一次也很显眼。
-- 360° 与 0° 在 120° 对称的层上是同一个姿势，所以循环接缝不可见。
-- 用在：`Connecting…`（`LaunchingView`）、配对搜索、未配对首屏、未指定进度的同步窗，
-  以及**所有「会话正在运行」的指示**（侧栏工作区、会话行、轮次摘要、轮次索引、子代理面板、
-  连接面板的圆环里、`Running now` 胶囊里）。这些位置原来是 `TwinStar`（两个点互绕），
-  现在统一成同一颗转动的星，尺寸按「墨宽」给（`MizarStar(ink:)`，14–17pt；两轮反馈后从 9–13 放大）。
+| 阶段 | 时长 |
+|---|---|
+| 逐段画出（5 段，错峰 0.16s，每段 0.26s） | 0.90s |
+| 完整环停留 | 0.34s |
+| 逐段收起（错峰 0.14s，每段 0.20s） | 0.76s |
+| 空环停留 | 0.20s |
+| **一圈** | **2.20s** |
 
-### flick —— 短促的「被拨弄了一下」
+- 时间轴在 `RingMetrics` 里；`RingPresentation.running(t)` 是纯函数，测试可以逐点检查。
+- 画和收都用缓动：画出是 ease-out（笔头快、收得住），收起是 ease-in-out（两端不顿）。
+- 循环用线性 keyframe；首尾都是空环，所以接缝不可见。用缓动循环会在每圈末“顿”一下。
+- `drawersStill == false`（抽屉被拖 / 还在落位）时停在图标姿势，和旧标记的规则一致。
 
-- 前层 **+480°** / **1.00 秒**；后层 **−600°** / **1.55 秒**，晚 35 ms 出发。
-- 两侧都从静止开始、加速、再减速到静止：缓动是 smootherstep（两端一阶二阶导都为 0），
-  所以起步不抖、停住不噎。
-- 角度都是 120° 的整数倍（4 圈、5 圈），因此**最后一帧正好是图标的姿势**，不是差两度。
-- 后层转得更多、更久，两层不会同时停 —— 同时停就像一个刚体在整体旋转。
-- 用在：设置页图标、首页问候、登录墙（92pt）。
-- 用手指拨动两层的那一下是意图；参数上它和 running 共用同一套层与颜色，只是时间轴不同。
+### once —— 短加载与过渡（1.58 秒一次）
+
+从静态图标开始：先停 0.14 秒，然后按 running 的顺序收起五段（0.56s），空环停 0.12s，再按同一
+顺序画回来（0.62s），最后停在完整图标 0.14 秒。它开头和结尾都是图标姿势，所以可以直接盖在任何
+显示图标的屏幕上而不会跳帧。
+
+用在：设置页图标砖（`MizarIconTile(size: 64, motion: .once)`）、登录墙顶部（92pt）。
 
 ### opening —— 进度读数
 
-- 后层相对前层从 −60°（两层重合，三臂星）开到 0°（图标，六臂星），`fraction` 就是进度。
-- 下载完成时星正好拼成图标；这比一根进度条更像「历史正在到达」。
-- 用在：配对后的首次全量下载（96pt）、刷新进度窗（56pt）。
-- 它不是装饰，所以 Reduce Motion 下**仍然随进度变化**，只是不做额外转动。
+不是装饰，是下载 / 同步的进度：从缺口（270°）开始顺时针填，`0` 是空环加一圈 12% 的淡轨道，
+`1` 是完整图标。弧按经过的角度裁切，圆点在头部越过 320° 时淡入并长大。Reduce Motion 下仍然随
+进度变化，只是不做额外缓动。
 
-### 颜色：三个平色，不渐变
+用在：配对后的首次全量下载（96pt）、刷新进度窗（56pt）。
 
-| 外观 | 前层 | 后层 | 底 |
-|---|---|---|---|
-| 浅色 | `#0A78AE` | `#08608B` | 白（图标砖） |
-| 深色 | 白 | 白 55% | 黑（图标砖） |
+### Reduce Motion
 
-- 深浅只由后层一个色阶表示，前层是平的。**不能用径向渐变**：亮起来的中心会被后层衬成一个
-  硬边圆盘，又变回那个球。这条写进了 `MizarStarPalette` 的文档注释。
-- 深色模式下**所有**裸星（running / flick / opening）都是白色，不是强调色：深蓝在深色底上会沉下去。
-  这是 `MizarStarPalette.automatic(for:)`，图标砖也走它（黑底白星 = 深色图标）。
-- 图标砖（设置页头部）自己决定底：浅色白砖 + 蓝星，深色黑砖 + 白星；圆角 22.37%、星宽 64%
-  都是图标的数。
+- `running` 停在完整图标；`once` 直接显示最后一帧；`opening` 跟随进度。
+- 动画不承担信息时（装饰）就停；承担读数时（opening）保留变化。
 
-### Reduce Motion 与性能
+## 4. 颜色
 
-- `running` 停在图标姿势；`flick` 直接显示最后一帧；`opening` 跟随进度但用淡入淡出级的动画。
-- 抽屉在动（`drawersStill == false`）时，`running` 也停在图标姿势：连续重绘的帧属于正在被拖的卡片。
-- 每层是一条 ~145 段的三次路径（按 2.5° 采样），没有 blur、没有 shadow、没有 `drawingGroup`：
-  旋转是图层的变换，不需要每帧重新三角化。
+| 外观 | 环 | 底板 | 强调色 | 强调色上的墨 |
+|---|---|---|---|---|
+| 浅色 | 蓝→青渐变 `#3E86F0` / `#5DC4F9` / `#7FE4FC` | 近白 + 淡蓝径向光 | `#3CCBF4` | `#03141F` |
+| 深色 | 白 | `#1A1A1A` | 白 | `#03141F` |
 
-## 4. 图标出现在哪里
+- 浅色强调色是图标里最亮的那档青蓝，用在填充、开关、进度环和主按钮上。
+- 因为它是亮色，主按钮的墨改成近黑（`Theme.onAccent`），不再用白字压亮青。
+- 文字 / 小图标另用 `Theme.accentText`：浅色是 `#0A78AE`（同一色相压深到白底上可读），
+  深色是白色。填充仍用 `Color.accentColor`，所以“亮青”体现在面上，“深青 / 白”体现在字上。
+- 图标砖（设置页头部）用 `MizarIconTile`：浅色是近白底 + 淡蓝径向光 + 蓝青渐变环，深色是
+  `#1A1A1A` 底 + 白环；圆角 22.37%，环占 85.6%——都是图标的数。
+
+## 5. 标记出现在哪里
 
 | 位置 | 代码 | 形态 |
 |---|---|---|
-| OS 图标 | `Assets.xcassets/AppIcon.appiconset` | 两个 PNG（浅色 / 深色） |
-| 设置页头部 | `MizarIconTile(size: 64, motion: .flick)` | 图标砖 + 星，随外观换底 |
-| 首页问候 | `MizarStar(motion: .flick, size: 64)` | 浅色蓝 / 深色白 |
-| 登录墙 | `MizarStar(motion: .flick, size: 92, palette: .ink(.white))` | 白墨 |
-| 连接中 / 配对 / 未配对 | `MizarStar(motion: .running, …)` | 圆环内或页面中央 |
-| 同步（首次 / 刷新窗） | `MizarStar(motion: .opening(fraction))` | 图标色 |
-| 会话运行指示 | `MizarStar(ink: 10…13, motion: .running)` | 随外观（深色白） |
-| 灵动岛与实时活动 | `DSH-Mizar-LiveActivity/…/MizarIcon.imageset` | 白色模板，裁到星 |
+| OS 图标 | `Assets.xcassets/AppIcon.appiconset` | 两个 1024 PNG（浅色 / 深色） |
+| 设置页头部 | `MizarIconTile(size: 64, motion: .once)` | 图标砖 + 一次短过渡 |
+| 登录墙 | `MizarRing(motion: .once, size: 92, palette: .ink(.white))` | 白墨 |
+| 连接中 | `LaunchingView` 的 `MizarRing(motion: .running, size: 64)` | running |
+| 配对搜索 | `MizarRing(motion: .running, size: 56)` | running |
+| 未配对首屏 | `MizarRing(motion: .running, size: 112, palette: .ink(.white))` | running |
+| 同步（首次 / 刷新） | `MizarRing(motion: .opening(fraction), size: 96 / 56)` | opening；无进度时 running |
+| 会话运行指示 | `MizarRing(ink: 14…17, motion: .running)` | 随外观；深色白 |
+| 灵动岛与实时活动 | `DSH-Mizar-LiveActivity/…/MizarIcon.imageset` | 白色模板，静态 |
 
-**刷新控件不在这个表里**：侧栏和会话页的刷新键保持系统箭头（`arrow.clockwise`）+ 进度环 + 落定勾，
-即 `RefreshGlyph` 原样，星标没有进去。
+浅色设置页实拍：[`../../docs/evidence/ios-settings-ring-2026-11-07.png`](../../docs/evidence/ios-settings-ring-2026-11-07.png)。
 
-**灵动岛为什么是静态的一张图**：Live Activity 是系统在应用之外渲染的快照，不接受连续
-自定义动画，也不链接应用里的 SwiftUI 形状；它的素材尺寸还有上限（素材分辨率不能超过
-它被绘制的尺寸，否则系统可能拒绝启动这次活动）。所以那边只有图标本身，没有动画参数。
-`MizarIcon` 是 32/64/96（32pt 框的三个倍率），已裁到星的外接框，不留设计盒的 14% 边距。
+**Home 没有大标记**：首页问候不再放应用图标，避免每进一次首页就播一次品牌动画。
 
-## 5. 测试
+**灵动岛为什么是静态的**：Live Activity 是系统在应用之外渲染的快照，不接受连续自定义动画，也不
+链接应用里的 SwiftUI `Canvas`；它的素材尺寸还有上限。所以那边只有环本身，没有时间轴。
 
-- `DSH-MizarTests/StarMotionTests.swift`：几何不变量（顶点半径、左右对称、宽高比 2/√3）、
-  两层合成后居中且竖长、缓动端点静止且单调、呼吸 = 周期/6、flick 落在图标姿势、两层平均速度不同。
-- `DSH-MizarTests/SnapshotTests/MizarStarSnapshotTests.swift`：静止 / 半开 / 白墨 / 深色四种姿势，
-  加图标砖的浅色与深色两张，参考图在 `DSH-MizarTests/Snapshots/__Snapshots__/`。
-- 动画本身无法断言（重复关键帧动画没有可步进的时钟），所以测的是「决定」而不是「效果」。
+## 6. 测试
+
+- `DSH-MizarTests/MizarRingTests.swift`：20 个用例——五段顺序与不重叠、R/W/墨迹比例、圆弧路径
+  包围盒、两种缓动、loop 首尾同姿势、满环 / 空环、画出与收起的先后、短过渡首尾为图标、进度读数
+  顺时针且单调、圆点最后亮、只有 opening 画轨道。
+- `DSH-MizarTests/SnapshotTests/MizarRingSnapshotTests.swift`：图标 / 空轨道 / 半满 / 白墨 / 深色
+  五种环姿势，加图标砖浅色与深色两张；参考图在 `Snapshots/__Snapshots__/`。
+- `UnpairedLaunchSnapshotTests`：未配对整屏，注入静止的白墨环。
+- 动画本身无法断言（重复 keyframe 没有可步进的时钟），所以测的是“决定”而不是“效果”；实际运动
+  已用模拟器录屏逐帧看过（见 [`../../docs/evidence/ios-ring-motion-2026-11-07.png`](../../docs/evidence/ios-ring-motion-2026-11-07.png)）。
+
+## 7. 重建与验证
+
+```sh
+cd iOS
+
+python3 scripts/make-app-icon.py          # 图标 + 灵动岛模板
+python3 scripts/make-app-icon.py --check  # 应该输出 up to date
+
+# 图标和 Live Activity 模板必须无 alpha：
+sips -g hasAlpha DSH-Mizar/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+sips -g hasAlpha DSH-Mizar/Assets.xcassets/AppIcon.appiconset/AppIcon-1024-dark.png
+
+OTHER_SWIFT_FLAGS='-disable-sandbox' scripts/ios.sh build
+```
+
+桌面端的图标由 `AGI Mizar/scripts/make-icons.py` 从同一份母版生成；它还需要 `iconutil` 来写
+`.icns`。Live Activity 的模板由 `make-app-icon.py` 用 `ring_geometry.py` 直接画，而不是把图标
+缩小的位图：96px 时把 706px 的 alpha 阈值化会看到阶梯状端点。

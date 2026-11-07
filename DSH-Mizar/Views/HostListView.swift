@@ -475,7 +475,9 @@ struct AccountRenameForm: View {
                 Button {
                     save()
                 } label: {
-                    Text("Save").frame(maxWidth: .infinity)
+                    Text("Save")
+                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(Theme.onAccent)
                 }
                 .buttonStyle(.glassProminent)
                 .accessibilityIdentifier("rename.account.save")
@@ -539,7 +541,9 @@ struct RenameForm: View {
                 Button {
                     save()
                 } label: {
-                    Text("Save").frame(maxWidth: .infinity)
+                    Text("Save")
+                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(Theme.onAccent)
                 }
                 .buttonStyle(.glassProminent)
                 .accessibilityIdentifier("rename.save")
@@ -574,7 +578,7 @@ extension PairedHost: @retroactive Identifiable {
 /// mark sending its signal up and out -- looking for a computer to answer it.
 ///
 /// The mark is injectable so the snapshot suite can pin its resting state
-/// (`MizarStar(motion: .still)`, which is what Reduce Motion rests on): the
+/// (`MizarRing(motion: .still)`, which is what Reduce Motion rests on): the
 /// loop runs on a repeating keyframe animator, which no render transaction
 /// stops, and `accessibilityReduceMotion` is a get-only environment key the
 /// harness cannot set. On screen it is always turning; see the convenience
@@ -686,6 +690,7 @@ struct UnpairedView<Mark: View>: View {
                         } label: {
                             Label("Scan the code", systemImage: "qrcode.viewfinder")
                                 .font(.headline)
+                                .foregroundStyle(Theme.onAccent)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 6)
                         }
@@ -764,11 +769,11 @@ struct UnpairedView<Mark: View>: View {
     }
 }
 
-extension UnpairedView where Mark == MizarStar {
+extension UnpairedView where Mark == MizarRing {
     /// The screen as it ships: the mark turning for as long as nothing has
     /// answered, which is exactly what is happening.
     init() {
-        self.init(mark: MizarStar(motion: .running, size: 112, palette: .ink(.white)))
+        self.init(mark: MizarRing(motion: .running, size: 112, palette: .ink(.white)))
     }
 }
 
@@ -788,7 +793,7 @@ struct AccountDesktopRow: View {
         HStack(spacing: 12) {
             Image(systemName: "desktopcomputer")
                 .font(.body.weight(.medium))
-                .foregroundStyle(desktop.online ? Color.accentColor : Color.secondary)
+                .foregroundStyle(desktop.online ? Theme.accentText : Color.secondary)
                 .frame(width: 34, height: 34)
                 .background(
                     (desktop.online ? AnyShapeStyle(Color.accentColor.opacity(0.12)) : AnyShapeStyle(.fill.tertiary)),

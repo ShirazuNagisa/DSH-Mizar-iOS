@@ -44,7 +44,7 @@ struct WelcomeGateView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     Spacer(minLength: 40)
-                    MizarStar(motion: .flick, size: 92, palette: .ink(.white))
+                    MizarRing(motion: .once, size: 92, palette: .ink(.white))
                         .padding(.bottom, 30)
 
                     Text("Sign in to get started")

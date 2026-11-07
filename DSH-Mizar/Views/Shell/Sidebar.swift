@@ -407,7 +407,7 @@ struct SidebarView: View {
             HStack(spacing: 8) {
                 Image(systemName: "folder.badge.plus")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Theme.accentText)
                 Text("New workspace")
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
@@ -438,7 +438,7 @@ struct SidebarView: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.and.pencil")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Theme.accentText)
                 Text("New session")
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
@@ -645,7 +645,7 @@ private struct SidebarFooter: View {
                     if model.runningPollIsActive {
                         // The poll is up: something is running and the phone is
                         // following it.
-                        MizarStar(ink: 14, motion: .running)
+                        MizarRing(ink: 14, motion: .running)
                             .transition(.pop)
                     }
                     Image(systemName: "chevron.up")

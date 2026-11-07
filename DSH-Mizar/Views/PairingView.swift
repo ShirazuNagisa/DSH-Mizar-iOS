@@ -40,7 +40,7 @@ struct PairingView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                MizarStar(motion: .running, size: 56)
+                MizarRing(motion: .running, size: 56)
                     .padding(.top, 22)
                     .padding(.bottom, 16)
 

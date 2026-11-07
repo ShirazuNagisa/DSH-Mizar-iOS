@@ -275,7 +275,7 @@ private extension RootView {
 private struct LaunchingView: View {
     var body: some View {
         VStack(spacing: 20) {
-            MizarStar(motion: .running, size: 64)
+            MizarRing(motion: .running, size: 64)
             Text("Connecting…")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -345,6 +345,7 @@ private struct UnreachableView: View {
             // The list is the only way in now: an on-device agent, and the
             // computers this account owns. There is no code to scan.
             Button("Choose an agent") { showingHosts = true }
+                .tint(Theme.accentText)
                 .mizarPopover(isPresented: $showingHosts) {
                     HostListView()
                         .frame(width: PopoverSize.compact.width, height: PopoverSize.compact.height)

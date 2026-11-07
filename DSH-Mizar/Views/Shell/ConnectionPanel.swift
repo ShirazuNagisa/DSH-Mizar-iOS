@@ -198,7 +198,7 @@ struct ConnectionPanel: View {
     private func quality(_ milliseconds: Double) -> (label: String, tint: Color) {
         switch milliseconds {
         case ..<80: (String(localized: "Excellent"), Theme.running)
-        case ..<250: (String(localized: "Good"), .accentColor)
+        case ..<250: (String(localized: "Good"), Theme.accentText)
         case ..<700: (String(localized: "Slow"), Theme.waiting)
         default: (String(localized: "Poor"), Theme.failed)
         }
@@ -230,7 +230,7 @@ struct ConnectionPanel: View {
 
             row {
                 Image(systemName: model.listensForHostEvents ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                    .foregroundStyle(model.listensForHostEvents ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(model.listensForHostEvents ? Theme.accentText : Color.secondary)
                     .symbolEffect(.variableColor.iterative, options: .repeat(.continuous), isActive: model.listensForHostEvents)
             } title: {
                 Text(model.listensForHostEvents ? "Live updates from the computer" : "Not receiving live updates")
@@ -310,7 +310,7 @@ private struct PollDial: View {
                 .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(.linear(duration: 1), value: fraction)
-            MizarStar(ink: 13, motion: .running)
+            MizarRing(ink: 13, motion: .running)
         }
         .frame(width: 20, height: 20)
     }

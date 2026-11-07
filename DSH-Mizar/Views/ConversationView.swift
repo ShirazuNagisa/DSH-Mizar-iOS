@@ -475,7 +475,7 @@ private struct TurnSummary: View {
             // turning while it works, settling into a tick when it is done.
             ZStack {
                 if turn.isRunning {
-                    MizarStar(ink: 17, motion: .running)
+                    MizarRing(ink: 17, motion: .running)
                         .transition(.pop)
                 } else if turn.isEndInferred {
                     // A later turn proves this one is over, but the log never

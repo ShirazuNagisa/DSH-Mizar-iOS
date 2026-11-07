@@ -95,7 +95,7 @@ struct WorkspaceSection: View {
                     .frame(width: 12)
                 Image(systemName: group.isUnclaimed ? "tray" : (isOpen ? "folder.fill" : "folder"))
                     .font(.body)
-                    .foregroundStyle(isOpen ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isOpen ? Theme.accentText : Color.secondary)
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 22)
                 // The leftover group is drawn as what it is. It is not a
@@ -122,7 +122,7 @@ struct WorkspaceSection: View {
                 Spacer(minLength: 8)
                 if !isOpen, group.sessions.contains(where: \.running) {
                     // Work is going on in here, said without opening it.
-                    MizarStar(ink: 15, motion: .running)
+                    MizarRing(ink: 15, motion: .running)
                         .transition(.pop)
                 }
                 if waiting > 0 {
@@ -272,7 +272,7 @@ struct SessionRowButton: View {
 
     @ViewBuilder private var indicator: some View {
         if session.running {
-            MizarStar(ink: 15, motion: .running)
+            MizarRing(ink: 15, motion: .running)
                 .transition(.pop)
         } else {
             Circle()
@@ -293,7 +293,7 @@ struct SessionRowButton: View {
         var text = AttributedString(SessionTitle.display(for: session, title: title))
         let needle = query.trimmingCharacters(in: .whitespaces)
         if !needle.isEmpty, let range = text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) {
-            text[range].foregroundColor = .accentColor
+            text[range].foregroundColor = Theme.accentText
             text[range].font = .subheadline.weight(.semibold)
         }
         return text

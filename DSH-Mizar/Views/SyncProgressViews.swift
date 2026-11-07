@@ -43,15 +43,14 @@ struct FirstLoadView: View {
 
     var body: some View {
         VStack(spacing: 26) {
-            // The mark assembles as the history arrives: the two layers start
-            // on top of each other -- a three-armed star -- and open to the
-            // icon's six by the end. Turning, before there is a count to open
-            // by. A bar would say how much; this says what is being assembled.
+            // The ring fills as the history arrives: a faint track at zero,
+            // the icon at one. Turning, before there is a count to fill by. A
+            // bar would say how much; this says what is being assembled.
             Group {
                 if let progress, progress.total > 0 {
-                    MizarStar(motion: .opening(progress.fraction), size: 96)
+                    MizarRing(motion: .opening(progress.fraction), size: 96)
                 } else {
-                    MizarStar(motion: .running, size: 96)
+                    MizarRing(motion: .running, size: 96)
                 }
             }
 
@@ -128,7 +127,7 @@ struct SyncProgressSheet: View {
         NavigationStack {
             VStack(spacing: 16) {
                 if let progress, progress.total > 0 {
-                    MizarStar(motion: .opening(progress.fraction), size: 56)
+                    MizarRing(motion: .opening(progress.fraction), size: 56)
                     Text("Syncing \(progress.completed) of \(progress.total)")
                         .font(.headline)
                         .monospacedDigit()

@@ -186,12 +186,12 @@ scripts/swift.sh test         # MizarKit（协议层）全部测试，跑在 Mac
 scripts/ios.sh build          # 编译 App
 ```
 
-图标与星标动画（两种动效、参数、灵动岛素材怎么来）见 [`docs/app-icon.md`](docs/app-icon.md)。
-图标源在桌面端仓库与 `icon-design/`，这里的两个脚本只负责把它变成 iOS 的样子：
+图标与环形动画（两种动效、参数、灵动岛素材怎么来）见 [`docs/app-icon.md`](docs/app-icon.md)。
+图标母版在 `icon-design/masters/mizar-icon/`；这里的脚本只负责把它变成 iOS 的样子：
 
 ```sh
-python3 scripts/make-app-icon.py        # AppIcon-1024.png ← AGI Mizar 的图标
-python3 scripts/make-star-geometry.py   # 星形路径 + 灵动岛图标 + 动作胶片
+python3 scripts/make-app-icon.py        # AppIcon-1024 两个外观 + 灵动岛模板
+python3 scripts/make-app-icon.py --check
 ```
 
 截图用 `ScreenshotTour`（同样需要假主机）：

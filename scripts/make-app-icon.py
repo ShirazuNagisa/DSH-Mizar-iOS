@@ -1,117 +1,166 @@
 #!/usr/bin/env python3
-"""Build the phone's app icon from the desktop's.
+"""Build the phone's app icon from the owner's masters.
 
-The two apps are one product, so they wear one icon: this takes the desktop
-build's 1024-point master -- the star on Apple's 824-point macOS tile -- and
-turns it into the shape an iOS icon has to be.
+The two apps are one product, so they wear one icon. The macOS build puts the
+same masters on Apple's 824-point tile; iOS is the other grid: the artwork is
+**full-bleed and opaque**, and the system applies the rounded mask itself. An
+iOS icon may not carry an alpha channel at all -- App Store Connect rejects it
+even when every pixel is opaque -- so the sources are flattened and written as
+RGB.
 
-Apple's two icon grids differ in exactly one way that matters here. macOS gets a
-rounded square drawn inside the canvas with transparent margin around it; iOS
-expects the artwork **full-bleed and opaque**, and applies the rounded mask
-itself. Feeding the macOS canvas to iOS would produce a small rounded icon
-floating in a transparent square, which is both wrong and rejected by App Store
-Connect (transparency is not allowed at all).
-
-Two appearances, because the desktop ships two: the light tile (a blue star on
-white) and the dark one (a white star on black). iOS 18 and later draw the dark
-asset when the system is in Dark Mode, which is what `AppIcon.appiconset`'s
-`appearances` entry selects.
-
-So: crop each tile, flatten it onto its own background so the four corners are
-that colour rather than transparent, and scale to 1024. Nothing is redrawn --
-the star's pixels are the desktop's.
+The mark used by the Live Activity is not the app icon: it is the glyph alone,
+white on transparency, cropped to its own ink. That asset is a template image,
+because the system tints it against the island's black background.
 
     python3 scripts/make-app-icon.py [--source PATH] [--dark-source PATH] [--check]
 
-The default sources are the sibling `AGI Mizar` checkout's build icons, which is
-what the desktop ships. `--check` exits non-zero if either committed PNG is not
-what this script would produce.
+Default sources are the masters under the workspace's `icon-design/`. The two
+committed AppIcon PNGs and the three Live Activity PNGs are the deliverables;
+`--check` exits non-zero if any of them is stale.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-ICON_DIR = ROOT.parent / "AGI Mizar" / "crates" / "agi-app" / "icons"
-DEFAULT_SOURCE = ICON_DIR / "icon.png"
-DEFAULT_DARK_SOURCE = ICON_DIR / "icon-dark.png"
+WORKSPACE = ROOT.parent
+MASTER_DIR = WORKSPACE / "icon-design" / "masters" / "mizar-icon"
+DEFAULT_SOURCE = MASTER_DIR / "light.png"
+DEFAULT_DARK_SOURCE = MASTER_DIR / "dark.png"
+DEFAULT_MARK_SOURCE = MASTER_DIR / "light-transparent.png"
+
 OUT_DIR = ROOT / "DSH-Mizar" / "Assets.xcassets" / "AppIcon.appiconset"
 OUT = OUT_DIR / "AppIcon-1024.png"
 OUT_DARK = OUT_DIR / "AppIcon-1024-dark.png"
 
-#: The desktop icon's geometry, as `AGI Mizar/scripts/make-icons.py` writes it:
-#: an 824-point tile centred in a 1024-point canvas.
+WIDGET_SET = ROOT / "DSH-Mizar-LiveActivity" / "Assets.xcassets" / "MizarIcon.imageset"
+WIDGET_OUT = {
+    32: WIDGET_SET / "MizarIcon.png",
+    64: WIDGET_SET / "MizarIcon@2x.png",
+    96: WIDGET_SET / "MizarIcon@3x.png",
+}
+
 CANVAS = 1024
-TILE = 824
-INSET = (CANVAS - TILE) // 2
 
 
-def build(source: Path, background: tuple[int, int, int]) -> Image.Image:
-    """One appearance: the desktop's tile, full-bleed and opaque.
+def build(source: Path) -> Image.Image:
+    """One appearance: full-bleed, opaque, 1024 points.
 
-    - Parameters:
-      - source: the 1024-point desktop icon.
-      - background: the tile's own background colour, which the macOS canvas
-        leaves transparent in the corners.
+    The source is already a square composition with its own background; the
+    only job here is to put it on the 1024 grid and remove alpha. Resampling
+    once with Lanczos is deliberately the whole edit -- cropping the macOS
+    tile here would throw away the outer margin the icon was drawn with.
     """
-    master = Image.open(source).convert("RGBA")
-    if master.size != (CANVAS, CANVAS):
-        raise SystemExit(f"{source} is {master.size[0]}x{master.size[1]}, expected {CANVAS}x{CANVAS}")
-
-    tile = master.crop((INSET, INSET, INSET + TILE, INSET + TILE))
-    # The tile's own colour: the macOS canvas leaves its four corners
-    # transparent, and on iOS those patches become four notches of whatever is
-    # behind them once the system rounds the icon.
-    flat = Image.new("RGBA", tile.size, (*background, 255))
-    flat.alpha_composite(tile)
-
-    icon = flat.convert("RGB").resize((CANVAS, CANVAS), Image.LANCZOS)
-    # No alpha channel at all: App Store Connect refuses an icon that has one,
-    # even when every pixel in it is opaque.
-    return icon
+    master = Image.open(source).convert("RGB")
+    if master.width != master.height:
+        raise SystemExit(f"{source} is {master.width}x{master.height}, expected a square")
+    return master.resize((CANVAS, CANVAS), Image.LANCZOS)
 
 
-def matches(path: Path, icon: Image.Image) -> bool:
-    """Whether the committed PNG is already this image."""
+def build_mark_from_raster(source: Path) -> Image.Image:
+    """The glyph alone, white on transparency, cropped to its ink.
+
+    Fallback for a checkout without the shared geometry module. The preferred
+    path renders the five arcs from their numbers, because thresholding a
+    raster leaves the caps visibly stepped at Live Activity sizes.
+    """
+    image = Image.open(source).convert("RGBA")
+    alpha = image.getchannel("A")
+    # The transparent masters carry a soft shadow around the glyph. A template
+    # mark is a cut-out, so keep the ink and drop the shadow.
+    alpha = alpha.point(lambda value: 0 if value < 96 else 255)
+    alpha = alpha.filter(ImageFilter.GaussianBlur(0.6))
+    bbox = alpha.getbbox()
+    if bbox is None:
+        raise SystemExit(f"{source} has no visible mark")
+    alpha = alpha.crop(bbox)
+    side = max(alpha.size)
+    # A square canvas keeps the asset's aspect independent of which side the
+    # glyph's bounding box happens to be longer.
+    canvas = Image.new("L", (side, side), 0)
+    canvas.paste(alpha, ((side - alpha.width) // 2, (side - alpha.height) // 2))
+    white = Image.new("RGBA", (side, side), (255, 255, 255, 0))
+    white.putalpha(canvas)
+    return white
+
+
+def build_marks(source: Path) -> dict[int, Image.Image]:
+    """The template mark at each of the sizes the imageset ships."""
+    geometry = MASTER_DIR / "ring_geometry.py"
+    if geometry.exists():
+        spec = importlib.util.spec_from_file_location("mizar_ring_geometry", geometry)
+        if spec is None or spec.loader is None:
+            raise SystemExit(f"could not load {geometry}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return {
+            pixels: module.render(pixels, padding=0.02, supersample=8)
+            for pixels in WIDGET_OUT
+        }
+    raster = build_mark_from_raster(source)
+    return {
+        pixels: raster.resize((pixels, pixels), Image.LANCZOS)
+        for pixels in WIDGET_OUT
+    }
+
+
+def matches(path: Path, image: Image.Image) -> bool:
+    """Whether the committed file is already this image."""
     if not path.exists():
         return False
-    current = Image.open(path).convert("RGB")
-    return current.size == icon.size and current.tobytes() == icon.tobytes()
+    mode = "RGB" if image.mode == "RGB" else "RGBA"
+    current = Image.open(path).convert(mode)
+    return current.size == image.size and current.tobytes() == image.tobytes()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--dark-source", type=Path, default=DEFAULT_DARK_SOURCE)
+    parser.add_argument("--mark-source", type=Path, default=DEFAULT_MARK_SOURCE)
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args()
 
-    for source in (arguments.source, arguments.dark_source):
+    for source in (arguments.source, arguments.dark_source, arguments.mark_source):
         if not source.exists():
-            print(f"no desktop icon at {source}")
+            print(f"no icon source at {source}")
             return 1
 
-    light = build(arguments.source, (255, 255, 255))
-    dark = build(arguments.dark_source, (0, 0, 0))
+    light = build(arguments.source)
+    dark = build(arguments.dark_source)
+    marks = build_marks(arguments.mark_source)
 
     if arguments.check:
-        stale = [path for path, icon in ((OUT, light), (OUT_DARK, dark)) if not matches(path, icon)]
+        stale = [
+            path
+            for path, image in (
+                (OUT, light),
+                (OUT_DARK, dark),
+                *[(WIDGET_OUT[pixels], marks[pixels]) for pixels in WIDGET_OUT],
+            )
+            if not matches(path, image)
+        ]
         if stale:
             for path in stale:
                 print(f"{path} is missing or stale; run scripts/make-app-icon.py")
             return 1
-        print("app icons are up to date")
+        print("app icons and the Live Activity mark are up to date")
         return 0
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     light.save(OUT, format="PNG", optimize=True)
     dark.save(OUT_DARK, format="PNG", optimize=True)
-    print(f"app icons: {OUT} and {OUT_DARK.name} ({light.size[0]}x{light.size[1]}, {light.mode})")
+    WIDGET_SET.mkdir(parents=True, exist_ok=True)
+    for pixels, path in WIDGET_OUT.items():
+        marks[pixels].save(path, format="PNG", optimize=True)
+    print(f"app icons: {OUT.name}, {OUT_DARK.name} ({CANVAS}x{CANVAS}, RGB)")
+    print(f"Live Activity mark: {', '.join(path.name for path in WIDGET_OUT.values())}")
     return 0
 
 

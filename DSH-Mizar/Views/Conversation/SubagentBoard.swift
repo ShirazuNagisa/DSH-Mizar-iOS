@@ -388,14 +388,14 @@ private struct SubagentRow: View {
         return String(format: String(localized: "Subagent %lld", table: SidePlaneTable.name), number)
     }
 
-    /// The same visual language as the turn index's nodes: the brand star for
+    /// The same visual language as the turn index's nodes: the brand ring for
     /// running, a filled dot for finished, the orange mark for something that
     /// did not finish. Nothing here is a button -- the census does not open
     /// doors yet.
     @ViewBuilder private var node: some View {
         switch snapshot?.status {
         case .running:
-            MizarStar(ink: 17, motion: .running)
+            MizarRing(ink: 17, motion: .running)
                 .padding(.top, 12)
         case .done:
             Circle()

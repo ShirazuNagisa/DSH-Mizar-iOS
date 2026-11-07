@@ -5,11 +5,12 @@
 //  The few numbers the whole app is drawn with.
 //
 //  Restraint is the design: one accent, one radius scale, one spacing grid. The
-//  accent is the asset catalogue's `AccentColor` -- a cyan deep enough to carry
-//  white text in the light appearance, and white itself in the dark one, where
-//  the mark is white and a blue accent beside it reads as a second colour the
-//  product does not have. `onAccent` is the ink that goes on top, so the pair
-//  inverts together: white on cyan, near-black on white.
+//  accent is the asset catalogue's `AccentColor` -- the icon's bright cyan-blue
+//  in the light appearance, and white itself in the dark one, where the ring is
+//  white and a blue accent beside it reads as a second colour the product does
+//  not have. `onAccent` is the ink that goes on top: near-black in both
+//  appearances, because white on the bright cyan is unreadable and the dark
+//  appearance's accent is already white.
 //
 //  Every radius here is meant for `style: .continuous`. A circular-arc corner is
 //  the one detail that makes a SwiftUI screen look like a web page.
@@ -60,13 +61,22 @@ enum Theme {
 
     /// Ink for text drawn on an accent fill.
     ///
-    /// White in the light appearance, where the accent is a deep cyan; a near
-    /// black in the dark one, where the accent is bright enough that white on it
-    /// fails contrast.
-    static let onAccent = Color(UIColor { traits in
+    /// Near-black in both appearances. The light accent is the icon's bright
+    /// cyan, which white text cannot sit on; the dark accent is already white,
+    /// so the same near-black is the readable ink there too.
+    static let onAccent = Color(red: 3 / 255, green: 20 / 255, blue: 31 / 255)
+
+    /// The accent as ink, for text and small glyphs.
+    ///
+    /// In the light appearance the asset's accent is the icon's bright cyan,
+    /// which is right as a fill and too light as 11-point text; this is the
+    /// same hue taken down to a contrast that holds on white. In the dark
+    /// appearance the accent is already white, so the ink is white too. Fills
+    /// keep using `Color.accentColor`.
+    static let accentText = Color(UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 3 / 255, green: 20 / 255, blue: 31 / 255, alpha: 1)
-            : .white
+            ? .white
+            : UIColor(red: 10 / 255, green: 120 / 255, blue: 174 / 255, alpha: 1)
     })
 
     /// The states the app has always coloured, kept to the system's hues so
