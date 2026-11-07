@@ -33,6 +33,18 @@ import Foundation
 #if os(iOS) && canImport(ActivityKit) && canImport(AppIntents)
 import ActivityKit
 import AppIntents
+import os
+
+/// The button's side of the story: which process ran it, which route answered,
+/// and whether the computer accepted the answer.
+///
+/// A Live Activity button that does nothing is invisible from the outside --
+/// there is no error to show on a Lock Screen -- so the only way to tell "the
+/// intent never ran" from "the socket never connected" is a line here.
+private let liveActivityAnswerLog = Logger(
+    subsystem: "me.shirazu.dshmizar",
+    category: "live-activity",
+)
 #endif
 
 /// The one action the island can take.
@@ -57,12 +69,24 @@ public enum LiveActivityAnswers {
     /// - Returns: whether a computer accepted the answer.
     @discardableResult
     public static func answer(requestId: String, outcome: ApprovalOutcome) async -> Bool {
-        guard !requestId.isEmpty else { return false }
+        guard !requestId.isEmpty else {
+            liveActivityAnswerLog.error("answer: empty requestId")
+            return false
+        }
         let store = KeychainCredentialStore()
-        guard let hosts = try? await store.loadAll(), !hosts.isEmpty else { return false }
+        guard let hosts = try? await store.loadAll(), !hosts.isEmpty else {
+            liveActivityAnswerLog.error("answer: no paired hosts in the keychain")
+            return false
+        }
+        liveActivityAnswerLog.notice(
+            "answer: request=\(requestId, privacy: .public) hosts=\(hosts.count, privacy: .public) process=\(ProcessInfo.processInfo.processName, privacy: .public)",
+        )
         let ordered = hosts.sorted { $0.pairedAt > $1.pairedAt }
         for host in ordered {
-            guard let connection = await open(host) else { continue }
+            guard let connection = await open(host) else {
+                liveActivityAnswerLog.error("answer: no route to \(host.label ?? host.hostName, privacy: .public)")
+                continue
+            }
             let payload = JSONValue.object([
                 "requestId": .string(requestId),
                 "outcome": .string(outcome.rawValue),
@@ -73,8 +97,12 @@ public enum LiveActivityAnswers {
                 as: Acceptance.self,
             ))?.accepted ?? true
             await connection.disconnect()
+            liveActivityAnswerLog.notice(
+                "answer: \(host.label ?? host.hostName, privacy: .public) accepted=\(accepted, privacy: .public)",
+            )
             if accepted { return true }
         }
+        liveActivityAnswerLog.error("answer: no computer accepted")
         return false
     }
 
@@ -147,7 +175,11 @@ public struct AllowOnceIntent: LiveActivityIntent {
 
     /// Answer, then take the approval off the card this process can see.
     public func perform() async throws -> some IntentResult {
+        liveActivityAnswerLog.notice(
+            "AllowOnceIntent: process=\(ProcessInfo.processInfo.processName, privacy: .public) request=\(self.requestId, privacy: .public)",
+        )
         let accepted = await LiveActivityAnswers.answer(requestId: requestId, outcome: .allowedOnce)
+        liveActivityAnswerLog.notice("AllowOnceIntent: accepted=\(accepted, privacy: .public)")
         if accepted {
             await LiveActivityCards.dropApproval(requestId)
         }
@@ -167,7 +199,11 @@ public struct RejectIntent: LiveActivityIntent {
     public static var title: LocalizedStringResource { "Reject" }
 
     public func perform() async throws -> some IntentResult {
+        liveActivityAnswerLog.notice(
+            "RejectIntent: process=\(ProcessInfo.processInfo.processName, privacy: .public) request=\(self.requestId, privacy: .public)",
+        )
         let accepted = await LiveActivityAnswers.answer(requestId: requestId, outcome: .rejected)
+        liveActivityAnswerLog.notice("RejectIntent: accepted=\(accepted, privacy: .public)")
         if accepted {
             await LiveActivityCards.dropApproval(requestId)
         }

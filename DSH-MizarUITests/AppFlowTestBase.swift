@@ -1018,15 +1018,24 @@ class AppFlowTestBase: XCTestCase {
     func dismissSystemAlertIfPresent(_ app: XCUIApplication) {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         // The dialog can arrive a beat after the app does: it is raised by the
-        // app's own first request, not by the launch itself.
+        // app's own first request, not by the launch itself. The simulator runs
+        // in Chinese on this machine, so the buttons are 允许/不允许 as well as
+        // the English labels -- and the Live Activity permission has a second
+        // "始终允许" step. Allow where possible: a denied Live Activity permission
+        // would make the activity tests measure the wrong thing.
+        //
+        // Existence checks rather than `waitForExistence` per label: this runs on
+        // every launch, and nine one-second waits with no alert up would cost the
+        // whole suite more than the alert handling saves.
         for _ in 0..<3 {
-            for label in ["Don’t Allow", "Don't Allow", "Allow"] {
+            for label in ["始终允许", "允许", "Allow", "不允许", "Don’t Allow", "Don't Allow"] {
                 let button = springboard.buttons[label]
-                if button.waitForExistence(timeout: 1), button.isHittable {
+                if button.exists, button.isHittable {
                     button.tap()
                     return
                 }
             }
+            Thread.sleep(forTimeInterval: 0.5)
         }
         _ = app
     }

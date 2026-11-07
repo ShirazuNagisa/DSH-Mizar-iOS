@@ -127,6 +127,18 @@ final class LiveActivityController {
     /// ended, and the activity has not been taken down for it yet.
     private var appOpenedSinceLastFinish = false
 
+    /// The appearance a card started now should use.
+    ///
+    /// The widget cannot read this from its environment: the Lock Screen asks
+    /// WidgetKit to draw a Live Activity in its dark vibrant presentation even
+    /// when the phone is in light mode. The app knows the real appearance, so it
+    /// hands it over in the activity's attributes -- fixed for that card's
+    /// lifetime. The controller is `@MainActor`, which is what makes reading the
+    /// current trait collection safe.
+    private var cardAppearance: LiveActivityAppearance {
+        UITraitCollection.current.userInterfaceStyle == .dark ? .dark : .light
+    }
+
     /// The token checks that follow a start, when there are any.
     ///
     /// One task, replaced on every start and cancelled when the card comes down.
@@ -412,7 +424,15 @@ final class LiveActivityController {
                 log.add(.live, "not started: the app is off screen, and an activity starts in the foreground")
                 return
             }
-            log.add(.live, await ActivityCalls.start(decision.phase, appState: state, runningRowCount: runningRowCount))
+            log.add(
+                .live,
+                await ActivityCalls.start(
+                    decision.phase,
+                    appearance: cardAppearance,
+                    appState: state,
+                    runningRowCount: runningRowCount,
+                ),
+            )
             // The token is not part of the request's answer: it may be there
             // already and it may arrive a second from now, which is what the
             // bounded retry is for.
@@ -593,10 +613,18 @@ private enum ActivityCalls {
     ///
     /// - Parameters:
     ///   - phase: what it should show.
+    ///   - appearance: the phone's appearance at the moment of the request. Fixed
+    ///     into the attributes so a light card stays light and a dark one stays
+    ///     dark, whichever way the Lock Screen renders it.
     ///   - appState: where the app was, for the log line.
     ///   - runningRowCount: how many sessions it was built from, for the log line.
     /// - Returns: what to write in the log.
-    static func start(_ phase: LiveActivityState, appState: String, runningRowCount: Int) async -> String {
+    static func start(
+        _ phase: LiveActivityState,
+        appearance: LiveActivityAppearance,
+        appState: String,
+        runningRowCount: Int,
+    ) async -> String {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             // A different switch from the app's own: this one is iOS Settings >
             // DSH-Mizar > Live Activities. Nothing can be done about it here, and
@@ -605,7 +633,7 @@ private enum ActivityCalls {
         }
         do {
             let activity = try Island.request(
-                attributes: DSHMizarActivityAttributes(),
+                attributes: DSHMizarActivityAttributes(appearance: appearance),
                 content: ActivityContent(state: phase, staleDate: nil),
                 pushType: .token,
             )

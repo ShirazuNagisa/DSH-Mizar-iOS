@@ -690,6 +690,20 @@ final class AppFlowTurnLifecycleTests: AppFlowTestBase {
     /// DSH-Mizar-LiveActivity crashed" — which is the assertion here.
     func testTheLiveActivitySurvivesEverythingFinishing() {
         let app = launch(session: nil, pending: false)
+        // A cold launch now lands on Home with the sidebar open; the session
+        // list (and its refresh control) is one workspace tap behind it. The
+        // old assumption -- that `session: nil` opens the list -- predates the
+        // Home screen and made this test fail before the activity was ever
+        // touched.
+        if !app.buttons["sessions.refresh"].exists {
+            if app.buttons["shell.sidebarToggle"].waitForExistence(timeout: 5) {
+                app.buttons["shell.sidebarToggle"].tap()
+            }
+            let workspace = app.buttons["workspace./Users/you/projects/demo"]
+            if workspace.waitForExistence(timeout: 10) {
+                workspace.staticTexts.element(boundBy: 0).tap()
+            }
+        }
         expect(app.buttons["sessions.refresh"], "the session list never arrived")
 
         // Nothing is running any more, which is what the next refresh reports.

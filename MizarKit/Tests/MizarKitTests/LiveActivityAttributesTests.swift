@@ -21,15 +21,23 @@ private let epoch = Date(timeIntervalSince1970: 1_800_000_000)
 
 @Suite("The activity's attributes")
 struct LiveActivityAttributesTests {
-    @Test("are empty, so nothing but the state crosses the boundary")
-    func attributesCarryNothing() throws {
-        // Static attributes are for what varies between activities. This app
-        // posts one kind of activity, so there is nothing to put in them -- and
-        // the widget draws the title row itself rather than being handed a
-        // string that can only go stale.
-        let data = try JSONEncoder().encode(DSHMizarActivityAttributes())
-        #expect(String(decoding: data, as: UTF8.self) == "{}")
-        #expect(try JSONDecoder().decode(DSHMizarActivityAttributes.self, from: data) == DSHMizarActivityAttributes())
+    @Test("carry the appearance the card was started in")
+    func attributesCarryAppearance() throws {
+        // The Lock Screen draws a Live Activity in its dark vibrant presentation
+        // even in light mode, so the widget cannot read the phone's appearance
+        // from its environment. The app writes it here instead, where it is
+        // fixed for this card and untouched by every push that replaces the
+        // content state.
+        let light = DSHMizarActivityAttributes(appearance: .light)
+        let data = try JSONEncoder().encode(light)
+        #expect(String(decoding: data, as: UTF8.self) == #"{"appearance":"light"}"#)
+        #expect(try JSONDecoder().decode(DSHMizarActivityAttributes.self, from: data) == light)
+
+        // An activity started by the build before this field existed encodes as
+        // `{}`; it must decode to the old card's dark appearance rather than
+        // failing and drawing nothing.
+        let legacy = Data("{}".utf8)
+        #expect(try JSONDecoder().decode(DSHMizarActivityAttributes.self, from: legacy) == DSHMizarActivityAttributes(appearance: .dark))
     }
 
     @Test("carry the rows and their clocks as the content state")

@@ -41,6 +41,70 @@ import MizarKit
 import SwiftUI
 import WidgetKit
 
+/// The card's two appearances.
+///
+/// Live Activities on the Lock Screen are drawn in the system's vibrant mode,
+/// but their content is still the app's: the light card is the pale blue-white
+/// the in-app icon tile uses, the dark card is the navy the app has always used
+/// behind its mark. The bright cyan is the app's light accent; the dark
+/// appearance's accent is white, exactly as in the app. The expanded island is
+/// always the system's black, so it takes the dark palette regardless of the
+/// phone's appearance.
+private struct LiveActivityPalette {
+    let appearance: LiveActivityAppearance
+
+    var isDark: Bool { appearance == .dark }
+
+    var background: Color {
+        isDark
+            ? Color(red: 19 / 255, green: 31 / 255, blue: 61 / 255)
+            : Color(red: 0.973, green: 0.984, blue: 0.996)
+    }
+
+    var ink: Color {
+        isDark
+            ? .white
+            : Color(red: 8 / 255, green: 17 / 255, blue: 28 / 255)
+    }
+
+    var secondaryInk: Color {
+        isDark ? .white.opacity(0.72) : ink.opacity(0.58)
+    }
+
+    /// The icon's bright cyan in the light appearance; white in the dark one,
+    /// where the app's accent is white.
+    var accent: Color {
+        isDark
+            ? .white
+            : Color(red: 60 / 255, green: 203 / 255, blue: 244 / 255)
+    }
+
+    var surface: Color {
+        isDark ? .white.opacity(0.07) : .black.opacity(0.05)
+    }
+
+    var primaryButtonFill: Color {
+        isDark ? .white.opacity(0.16) : accent
+    }
+
+    var primaryButtonInk: Color {
+        isDark
+            ? .white
+            : Color(red: 3 / 255, green: 20 / 255, blue: 31 / 255)
+    }
+
+    var secondaryButtonFill: Color {
+        isDark ? .white.opacity(0.08) : .black.opacity(0.06)
+    }
+
+    var secondaryButtonInk: Color {
+        isDark ? .white.opacity(0.82) : ink.opacity(0.82)
+    }
+
+    /// The island has no colour choice: its background is the system's black.
+    static let island = LiveActivityPalette(appearance: .dark)
+}
+
 // MARK: - Why every string here is resolved before SwiftUI sees it
 
 /// A string out of this extension's `Localizable.strings`, translated by hand
@@ -169,7 +233,7 @@ struct DSHMizarLiveActivityWidget: Widget {
             // The Lock Screen presentation, and the banner on a device without
             // an island. The same card the expanded island draws, because there
             // is nothing about it that depends on where it is drawn.
-            LiveActivityCard(state: context.state)
+            LiveActivityCard(state: context.state, appearance: context.attributes.appearance)
         } dynamicIsland: { context in
             DynamicIsland {
                 // The title row: the mark and the app's name, on the leading
@@ -185,15 +249,28 @@ struct DSHMizarLiveActivityWidget: Widget {
                     Headline(state: context.state)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
                         // A blocked turn comes before the clocks: the operator
                         // can answer it from here, and a question under two
-                        // counting rows is a question nobody sees.
-                        if !context.state.approvals.isEmpty {
-                            ApprovalRows(approvals: context.state.approvals)
+                        // counting rows is a question nobody sees. The expanded
+                        // island has one card's height, not a lock screen's;
+                        // one approval is the action it can carry without
+                        // pushing the rows out of the system's frame. The card
+                        // still carries both.
+                        if let approval = context.state.approvals.first {
+                            ApprovalRows(approvals: [approval], palette: .island)
                         }
-                        SessionRows(state: context.state)
+                        // One approval plus two clocks does not fit the
+                        // expanded island's height at type this size; when there
+                        // is something to answer, the longest-running row is
+                        // the context and the card carries the second.
+                        SessionRows(
+                            state: context.state,
+                            palette: .island,
+                            maximumRows: context.state.approvals.isEmpty ? nil : 1,
+                        )
                     }
+                    .padding(.top, 2)
                 }
             // The compact presentation is content, and only content -- but the
             // content has to say how wide it is, and a date-styled `Text` will
@@ -221,18 +298,20 @@ struct DSHMizarLiveActivityWidget: Widget {
                 // app. The image's own frame is the whole of its size; a
                 // `fixedSize` beside it would be a second opinion about a frame
                 // that is already exact.
-                Mark(diameter: 14)
+                Mark(diameter: 16)
             } compactTrailing: {
                 // Right: the clock and nothing else. The clock carries its own
                 // bound (see `Clock`), and `.lineLimit(1)` inside it keeps the
                 // number on one line; a `fixedSize` here cannot bound a timer
-                // text and only repeats what the view already says.
-                Headline(state: context.state, font: .caption2.monospacedDigit())
+                // text and only repeats what the view already says. The compact
+                // slot is narrow, so this is the one place a caption is right;
+                // it is still a step up from the caption2 the first build used.
+                Headline(state: context.state, font: .caption.monospacedDigit().weight(.semibold))
             } minimal: {
                 // One slot, no left and right: the mark only. The check the old
                 // build drew here made a finished activity wider than a mark for
                 // no information a one-glyph slot can carry.
-                Mark(diameter: 14)
+                Mark(diameter: 18)
             }
         }
     }
@@ -286,11 +365,12 @@ private struct Mark: View {
 /// it say everything this row has to say.
 private struct TitleRow: View {
     var body: some View {
-        HStack(spacing: 6) {
-            Mark(diameter: 16)
+        HStack(spacing: 7) {
+            Mark(diameter: 18)
             Text(verbatim: "DSH-Mizar")
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: "DSH-Mizar"))
@@ -332,7 +412,7 @@ private struct Clock: View {
     let since: Date
     /// The size it is drawn at. The compact island asks for the smallest one;
     /// the card asks for a body-sized figure.
-    var font: Font = .caption.monospacedDigit()
+    var font: Font = .footnote.monospacedDigit().weight(.semibold)
 
     /// The widest string this clock can draw, in the same font and therefore at
     /// the same width.
@@ -368,7 +448,7 @@ private struct Clock: View {
 /// duration and nothing else; the card asks for the same view at a larger size.
 private struct Headline: View {
     let state: LiveActivityState
-    var font: Font = .caption.monospacedDigit()
+    var font: Font = .footnote.monospacedDigit().weight(.semibold)
 
     var body: some View {
         if let longest = state.rows.first {
@@ -409,16 +489,33 @@ private struct SessionRows: View {
     let state: LiveActivityState
     /// Whether to draw the larger card typography.
     var prominent = false
+    /// The card's appearance, or the island's always-dark palette.
+    var palette: LiveActivityPalette
+    /// A cap for the expanded island, where the approval block is already tall.
+    var maximumRows: Int? = nil
 
-    private var titleFont: Font { prominent ? .body.weight(.medium) : .caption }
-    private var clockFont: Font {
-        prominent ? .body.monospacedDigit().weight(.semibold) : .caption.monospacedDigit()
+    private var rows: [LiveActivityRow] {
+        guard let maximumRows else { return state.rows }
+        return Array(state.rows.prefix(maximumRows))
     }
-    private var rowHeight: CGFloat? { prominent ? 44 : nil }
+
+    private var titleFont: Font {
+        prominent ? .body.weight(.medium) : .subheadline.weight(.medium)
+    }
+    private var clockFont: Font {
+        prominent
+            ? .body.monospacedDigit().weight(.semibold)
+            : .subheadline.monospacedDigit().weight(.semibold)
+    }
+    private var rowHeight: CGFloat? { prominent ? 44 : 30 }
 
     var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-            ForEach(state.rows) { row in
+        Grid(
+            alignment: .leading,
+            horizontalSpacing: prominent ? 12 : 10,
+            verticalSpacing: prominent ? 4 : 6,
+        ) {
+            ForEach(rows) { row in
                 GridRow(alignment: .center) {
                     // A row with no title and no instruction is a session the
                     // app has not read yet. It says only how long, which is
@@ -426,7 +523,9 @@ private struct SessionRows: View {
                     // app talking.
                     Text(verbatim: row.displayTitle)
                         .font(titleFont)
+                        .foregroundStyle(palette.ink)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         // The first column takes the width the card leaves and
                         // the second keeps its natural width, so the numbers
                         // form one right-aligned column rather than drifting
@@ -434,7 +533,7 @@ private struct SessionRows: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .gridCellAnchor(.leading)
                     Clock(since: row.countingSince, font: clockFont)
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(palette.secondaryInk)
                         .gridCellAnchor(.trailing)
                 }
                 .frame(minHeight: rowHeight)
@@ -481,58 +580,67 @@ private struct ApprovalRows: View {
     let approvals: [LiveActivityApproval]
     /// Whether to draw the larger card typography.
     var prominent = false
+    /// The card's appearance, or the island's always-dark palette.
+    var palette: LiveActivityPalette
 
     private var titleFont: Font {
-        prominent ? .subheadline.weight(.semibold) : .caption.weight(.semibold)
+        prominent ? .subheadline.weight(.semibold) : .footnote.weight(.semibold)
     }
-    private var detailFont: Font { prominent ? .footnote : .caption2 }
+    private var detailFont: Font { prominent ? .footnote : .caption }
     private var buttonFont: Font {
-        prominent ? .footnote.weight(.semibold) : .caption2.weight(.semibold)
+        .footnote.weight(.semibold)
     }
 
     var body: some View {
         ForEach(approvals) { approval in
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: prominent ? 6 : 5) {
                 HStack(spacing: 6) {
                     Image(systemName: "lock.shield.fill")
-                        .font(.caption2)
+                        .font(.caption)
+                        .foregroundStyle(palette.secondaryInk)
                         .accessibilityHidden(true)
                     // The tool's name, from the computer. `verbatim`: it is an
                     // identifier the operator already knows, not a phrase.
                     Text(verbatim: approval.headline)
                         .font(titleFont)
+                        .foregroundStyle(palette.ink)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                if !approval.detail.isEmpty {
+                // The card has room for the reason; the expanded island does
+                // not. The island keeps the tool name and the two answers --
+                // the action is the point -- and the card below carries the
+                // detail.
+                if prominent && !approval.detail.isEmpty {
                     Text(verbatim: approval.detail)
                         .font(detailFont)
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(palette.secondaryInk)
                         .lineLimit(2)
                 }
                 HStack(spacing: 8) {
                     Button(intent: AllowOnceIntent(requestId: approval.requestId)) {
                         Text.translated("Allow once")
                             .font(buttonFont)
+                            .foregroundStyle(palette.primaryButtonInk)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .background(.white.opacity(0.16), in: Capsule())
+                            .padding(.vertical, prominent ? 7 : 6)
+                            .background(palette.primaryButtonFill, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     Button(intent: RejectIntent(requestId: approval.requestId)) {
                         Text.translated("Reject")
                             .font(buttonFont)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .background(.white.opacity(0.08), in: Capsule())
-                            .foregroundStyle(.white.opacity(0.82))
+                            .padding(.vertical, prominent ? 7 : 6)
+                            .background(palette.secondaryButtonFill, in: Capsule())
+                            .foregroundStyle(palette.secondaryButtonInk)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(10)
+            .padding(prominent ? 10 : 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+            .background(palette.surface, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 }
@@ -543,11 +651,15 @@ private struct ApprovalRows: View {
 /// has to read as a card on a lock screen full of notifications, and a caption
 /// above body-sized rows reads as a footnote to them.
 private struct CardTitle: View {
+    let palette: LiveActivityPalette
+
     var body: some View {
-        HStack(spacing: 8) {
-            Mark(diameter: 22)
+        HStack(spacing: 9) {
+            Mark(diameter: 24)
+                .foregroundStyle(palette.accent)
             Text(verbatim: "DSH-Mizar")
                 .font(.title3.weight(.semibold))
+                .foregroundStyle(palette.ink)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .ignore)
@@ -557,22 +669,46 @@ private struct CardTitle: View {
 
 /// The whole card: the title row, then the rows.
 ///
-/// The height is content, not a frame: a 24-point title, two 44-point rows and
-/// 6 points of padding above and below come to about 136 points before
-/// WidgetKit's own margins. That is as tall as the Lock Screen's activity cap
-/// leaves room for -- the system's limit is around 160 points, so the two
-/// notification banners this is asked to match cannot both fit whole. The rows
-/// are the part that must not be squeezed, and they are the part that grows.
+/// The height is content, not a frame. With no approval it is a 24-point title,
+/// two 44-point rows and 11 points of padding above and below: about 143 points
+/// before WidgetKit's own margins. That is as tall as the Lock Screen's activity
+/// cap leaves room for -- the system's limit is around 160–200 points. With an
+/// approval it is a title and one approval, and the rows are deliberately left
+/// to the island: an approval plus two 44-point rows measured 205 points and
+/// had its title clipped off the top.
 private struct LiveActivityCard: View {
     let state: LiveActivityState
+    /// The phone's appearance when the card was started. Read from the
+    /// attributes, not the environment: the Lock Screen draws a Live Activity in
+    /// its dark vibrant presentation even in light mode, so the environment says
+    /// "dark" for both appearances.
+    let appearance: LiveActivityAppearance
+
+    private var palette: LiveActivityPalette {
+        LiveActivityPalette(appearance: appearance)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CardTitle()
+        VStack(alignment: .leading, spacing: 9) {
+            CardTitle(palette: palette)
             // A blocked turn first, for the same reason as on the island: this is
-            // the row the operator can act on.
+            // the row the operator can act on. The card carries one approval and
+            // no clocks; the expanded island carries the oldest approval plus
+            // one running row.
             if !state.approvals.isEmpty {
-                ApprovalRows(approvals: state.approvals, prominent: true)
+                // One question on the card, and no clocks beside it. A card with
+                // an approval and two 44-point rows is taller than the Lock
+                // Screen's activity cap -- measured at 205 points against a cap
+                // of about 160 -- and the system clips the title off the top
+                // rather than shrinking anything. The approval is the action;
+                // the island still carries the longest-running row, and the
+                // next state brings the second approval once this one is
+                // answered.
+                ApprovalRows(
+                    approvals: Array(state.approvals.prefix(1)),
+                    prominent: true,
+                    palette: palette,
+                )
             }
             if state.rows.isEmpty && state.approvals.isEmpty {
                 // Nothing is running. The decision layer has no rows to give and
@@ -585,8 +721,8 @@ private struct LiveActivityCard: View {
                         .font(.body)
                     Spacer(minLength: 0)
                 }
-            } else {
-                SessionRows(state: state, prominent: true)
+            } else if state.approvals.isEmpty {
+                SessionRows(state: state, prominent: true, palette: palette)
             }
         }
         // The system leaves only a few points between a Live Activity's content
@@ -595,15 +731,15 @@ private struct LiveActivityCard: View {
         // is the inset that makes it read as a card rather than as text that
         // overflowed it; 10 vertical against 16 horizontal keeps the optical
         // balance at these type sizes.
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundStyle(.white)
-        // The icon's own navy, so the card belongs to the app whose glyph is on
-        // it. Set here rather than left to the system because the card's content
-        // is drawn in one colour in every mode, and a tint that changed with the
-        // wallpaper would leave white text on a pale card.
-        .activityBackgroundTint(Color(red: 19 / 255, green: 31 / 255, blue: 61 / 255))
-        .activitySystemActionForegroundColor(.white)
+        .foregroundStyle(palette.ink)
+        // The light card is the icon tile's pale blue-white; the dark card is
+        // the app's navy. The tint is set here rather than left to the system,
+        // because the card has two appearances of its own and a wallpaper-tinted
+        // ground would leave dark text on a dark card (or white on a pale one).
+        .activityBackgroundTint(palette.background)
+        .activitySystemActionForegroundColor(palette.ink)
     }
 }
