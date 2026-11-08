@@ -163,7 +163,7 @@ final class AccountController {
     var device: AccountDevicePayload {
         AccountDevicePayload(
             id: installId,
-            name: UIDevice.current.name,
+            name: AppModel.deviceName,
             model: AppModel.deviceModel,
             appVersion: AppModel.appVersion,
         )

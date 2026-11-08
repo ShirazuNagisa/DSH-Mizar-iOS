@@ -29,12 +29,14 @@
 //
 
 import Foundation
-
-#if os(iOS) && canImport(ActivityKit) && canImport(AppIntents)
-import ActivityKit
-import AppIntents
 import os
 
+// The logger is outside the `ActivityKit` guard below on purpose: `os.Logger`
+// exists on every platform this package targets, and the enum that uses it
+// (`LiveActivityAnswers`) is compiled everywhere so `swift test` can reach the
+// route decision. Declared inside the guard it disappeared on macOS and the
+// whole module failed to build with "cannot find 'liveActivityAnswerLog' in
+// scope" -- a test suite that cannot compile proves nothing about the phone.
 /// The button's side of the story: which process ran it, which route answered,
 /// and whether the computer accepted the answer.
 ///
@@ -45,6 +47,10 @@ private let liveActivityAnswerLog = Logger(
     subsystem: "me.shirazu.dshmizar",
     category: "live-activity",
 )
+
+#if os(iOS) && canImport(ActivityKit) && canImport(AppIntents)
+import ActivityKit
+import AppIntents
 #endif
 
 /// The one action the island can take.
@@ -91,12 +97,25 @@ public enum LiveActivityAnswers {
                 "requestId": .string(requestId),
                 "outcome": .string(outcome.rawValue),
             ])
-            let accepted = (try? await connection.call(
-                "approval.answer",
-                payload: payload,
-                as: Acceptance.self,
-            ))?.accepted ?? true
+            let acceptance: Acceptance
+            do {
+                acceptance = try await connection.call(
+                    "approval.answer",
+                    payload: payload,
+                    as: Acceptance.self,
+                )
+            } catch {
+                // A host that refuses this request id is the wrong computer, or
+                // the link dropped. Either way it is not an accepted answer,
+                // and the next pairing may be the one that issued the approval.
+                await connection.disconnect()
+                liveActivityAnswerLog.error(
+                    "answer: \(host.label ?? host.hostName, privacy: .public) call failed: \(String(describing: error), privacy: .public)",
+                )
+                continue
+            }
             await connection.disconnect()
+            let accepted = acceptance.accepted ?? true
             liveActivityAnswerLog.notice(
                 "answer: \(host.label ?? host.hostName, privacy: .public) accepted=\(accepted, privacy: .public)",
             )
@@ -234,7 +253,16 @@ public enum LiveActivityCards {
             var state = activity.content.state
             guard state.approvals.contains(where: { $0.requestId == requestId }) else { continue }
             state.approvals.removeAll { $0.requestId == requestId }
-            await activity.update(ActivityContent(state: state, staleDate: nil))
+            let content = ActivityContent(state: state, staleDate: nil)
+            if state.isFinished {
+                // The approval was the only thing on the card: answering it
+                // leaves nothing to count and nothing to act on, so take the
+                // card down rather than leaving "Every session has finished"
+                // standing for a turn that is actually continuing.
+                await activity.end(content, dismissalPolicy: .immediate)
+            } else {
+                await activity.update(content)
+            }
         }
     }
 }

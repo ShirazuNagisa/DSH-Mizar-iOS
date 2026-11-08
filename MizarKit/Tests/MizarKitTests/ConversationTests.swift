@@ -18,6 +18,49 @@ private func page(_ json: String) throws -> SessionMessagesResult {
 
 @Suite("Conversation")
 struct ConversationTests {
+    @Test("only a cursor with a position is a delta")
+    func cursorDelta() {
+        // `hasMore` is the phone's own backfill state; a delta read must not
+        // overwrite it. The three cursor states are not interchangeable:
+        // `after` says "I hold through here" and is the only delta, `empty`
+        // says "I hold nothing" and is a full load, and `unstated` makes no
+        // claim at all.
+        #expect(SessionMessagesCursor.after(12).isDelta)
+        #expect(!SessionMessagesCursor.empty.isDelta)
+        #expect(!SessionMessagesCursor.unstated.isDelta)
+    }
+
+    @Test("a batch answer decodes unchanged, a page, and a per-item error")
+    func syncBatch() throws {
+        // `session.sync` is what turns a history sync from one round trip per
+        // session into one per window. The three item shapes are all load
+        // bearing: `unchanged` means the host skipped the read, `messages` is
+        // the page the merge code already knows, and `error` must fail only that
+        // session -- the rest of the batch arrived.
+        let json = """
+        {"items":[
+          {"sessionId":"dsh:a","unchanged":true},
+          {"sessionId":"dsh:b","messages":{"sessionId":"dsh:b","asOfSeq":9,"hasMore":false,"records":[]}},
+          {"sessionId":"claude:c","error":{"code":"MALFORMED_FRAME","message":"needs a sessionId"}}
+        ],"remaining":["codex:d"]}
+        """
+        let result = try JSONDecoder().decode(SessionSyncResult.self, from: Data(json.utf8))
+        #expect(result.items.count == 3)
+        #expect(result.items[0].sessionId == "dsh:a")
+        #expect(result.items[0].unchanged == true)
+        #expect(result.items[0].messages == nil)
+        #expect(result.items[1].messages?.asOfSeq == 9)
+        #expect(result.items[2].error?.code == "MALFORMED_FRAME")
+        #expect(result.remaining == ["codex:d"])
+
+        // A host that sends neither key is "nothing to answer", not a decode
+        // failure: an empty window is a legal answer and must not tear down a
+        // sync that is otherwise working.
+        let empty = try JSONDecoder().decode(SessionSyncResult.self, from: Data("{}".utf8))
+        #expect(empty.items.isEmpty)
+        #expect(empty.remaining.isEmpty)
+    }
+
     @Test("a page carries the context figure, and a page without one is unknown")
     func pageContext() throws {
         // Every page carries it -- full refresh and data-saving incremental

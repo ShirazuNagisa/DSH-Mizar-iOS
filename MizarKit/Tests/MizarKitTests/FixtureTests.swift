@@ -114,6 +114,37 @@ struct FixtureTests {
         }
     }
 
+    @Test("a session row carries the additive title, model and context")
+    func sessionRowAdditiveFields() throws {
+        // The three fields that let a history sync name its rows without one
+        // `session.stats` request each. `pressureTokens` is the spelling the
+        // host puts on the wire (`session.messages` and `session.stats` use it
+        // too) -- the desktop's own domain struct calls the same number `used`,
+        // and decoding that spelling here would leave the ring without a count.
+        let modern = """
+        {"sessionId":"dsh:s","updatedAt":1,"running":false,"blank":false,"agentAvailable":true,
+         "cwd":null,"parentSessionId":null,"origin":null,"source":null,
+         "title":"会话","model":"deepseek-chat",
+         "context":{"window":128000,"pressureTokens":32000,"percent":25}}
+        """
+        let row = try JSONDecoder().decode(SessionRow.self, from: Data(modern.utf8))
+        #expect(row.title == "会话")
+        #expect(row.model == "deepseek-chat")
+        #expect(row.context?.window == 128_000)
+        #expect(row.context?.pressureTokens == 32_000)
+        #expect(row.context?.percent == 25)
+
+        // An older host sends none of the three. The row still decodes, and the
+        // fields read as "not said" rather than as a zero nobody claimed.
+        let older = """
+        {"sessionId":"dsh:o","updatedAt":1,"running":false,"blank":true,"agentAvailable":true,"cwd":null}
+        """
+        let legacy = try JSONDecoder().decode(SessionRow.self, from: Data(older.utf8))
+        #expect(legacy.title == nil)
+        #expect(legacy.model == nil)
+        #expect(legacy.context == nil)
+    }
+
     @Test("the usage fixture decodes into a stats frame")
     func sessionStatsFixture() throws {
         let fixture = try #require(try loadFixtures().first { $0.name == "session-stats" })

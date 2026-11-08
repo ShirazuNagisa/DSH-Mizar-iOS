@@ -96,6 +96,70 @@ struct ConnectionTests {
         #expect(result?["hostId"]?.stringValue == "h1")
     }
 
+    @Test("a rejection before the welcome keeps its code")
+    func handshakeFailureKeepsItsCode() async throws {
+        // `DEVICE_REVOKED`, a cross-account hello and a blocked device are all
+        // sent as an error frame with no id, before the welcome. Without a
+        // pending call to attach it to, the code used to be dropped and every
+        // one of those cases surfaced as "the host closed the connection" --
+        // which tells the operator nothing and hides the one screen that says
+        // to pair again.
+        let transport = StubTransport(responder: { text in
+            guard let type = frameType(of: text) else { return [] }
+            if type == "hello" {
+                return [errorFrame(code: "DEVICE_REVOKED", message: "this phone was removed", id: nil)]
+            }
+            return []
+        })
+        let connection = makeConnection(transport: transport)
+        do {
+            _ = try await connection.connect()
+            Issue.record("connect() should have thrown the host's refusal")
+        } catch let error as MizarError {
+            #expect(error.code == "DEVICE_REVOKED")
+        } catch {
+            Issue.record("wrong error: \(error)")
+        }
+    }
+
+    @Test("fans out calls, correlating every answer and keeping one failure from discarding the rest")
+    func requestAllCorrelatesEachAnswer() async throws {
+        // The socket was always multiplexed; the caller was not. `requestAll` is
+        // what lets a 342-session sync issue its pages at once, so what has to
+        // hold is that each answer lands on its own id -- and that one session
+        // refusing does not throw away the pages that did arrive.
+        let transport = StubTransport(responder: { text in
+            guard let type = frameType(of: text) else { return [] }
+            if type == "hello" { return [welcomeFrame()] }
+            let id = correlationId(of: text) ?? ""
+            let frame = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
+            let session = frame?["payload"]?["sessionId"]?.stringValue ?? ""
+            if session == "session-2" {
+                return [errorFrame(code: "SESSION_GONE", message: "no such session", id: id)]
+            }
+            return [okFrame(id: id, result: json(["sessionId": .string(session)]))]
+        })
+        let connection = makeConnection(transport: transport)
+        _ = try await connection.connect()
+
+        let requests = (0..<8).map { index in
+            (
+                id: "r\(index)",
+                method: "session.messages",
+                payload: JSONValue.object(["sessionId": .string("session-\(index)")]),
+            )
+        }
+        let outcomes = await connection.requestAll(requests, concurrency: 3)
+        #expect(outcomes.count == 8)
+        for index in 0..<8 where index != 2 {
+            #expect(outcomes["r\(index)"]?.value?["sessionId"]?.stringValue == "session-\(index)")
+        }
+        #expect(outcomes["r2"]?.error?.code == "SESSION_GONE")
+        // A missing id is absent, not a made-up success: the caller decides
+        // what an unanswered page means.
+        #expect(outcomes["r99"] == nil)
+    }
+
     @Test("decodes a typed result")
     func typedCall() async throws {
         let transport = StubTransport(responder: responderAnswering { type in
@@ -448,6 +512,15 @@ struct ConnectionTests {
             StateFrame(state: .streamFinal, interval: 2, textSeq: 6, flags: [.append], text: "结论")
         ))
         #expect(await stateSettles { await connection.streamedText("s-1") == "先说结论" })
+
+        // An append that skips bytes means a frame was lost; splicing it would
+        // draw a sentence that was never said, so the channel waits for the
+        // next snapshot instead.
+        await transport.push(frame: envelope(
+            StateFrame(state: .streamFinal, interval: 2, textSeq: 20, flags: [.append], text: "跳")
+        ))
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(await connection.streamedText("s-1") == "先说结论")
 
         await transport.push(frame: envelope(StateFrame(state: .completed, interval: 3, flags: [])))
         #expect(await stateSettles { await connection.sessionState("s-1") == .completed })

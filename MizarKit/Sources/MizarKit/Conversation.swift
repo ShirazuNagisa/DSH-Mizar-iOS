@@ -37,8 +37,7 @@ import Foundation
 
 /// One page of a session's log.
 public struct SessionMessagesResult: Decodable, Sendable, Equatable {
-    public let sessionId: String
-    /// The log cut the page was taken at; `nil` when the session is unknown.
+    public let sessionId: String    /// The log cut the page was taken at; `nil` when the session is unknown.
     public let asOfSeq: Int?
     public let records: [SessionRecord]
     public let hasMore: Bool
@@ -61,6 +60,68 @@ public struct SessionMessagesResult: Decodable, Sendable, Equatable {
     public let context: ContextPressure?
 }
 
+/// The answer to a `session.sync` batch.
+///
+/// A host new enough to answer it returns several conversation pages in one
+/// frame -- the history sync's real cost was never the bytes, it was one public
+/// round trip per session. A host that does not know the method answers
+/// `NOT_IMPLEMENTED`, and the caller falls back to one request per session; the
+/// type exists here rather than in the app so both sides of that decision are
+/// testable against a scripted socket.
+public struct SessionSyncResult: Decodable, Sendable, Equatable {
+    /// The sessions this frame answers, in the order they were asked. A session
+    /// the host read is here; one it had no room for is in ``remaining``.
+    public let items: [SessionSyncItem]
+    /// Sessions the host did not have room for, in the order they were asked.
+    ///
+    /// Absent means "nothing left" rather than "the host does not support this":
+    /// a host that did not understand the request would have failed the call.
+    public let remaining: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case remaining
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decodeIfPresent([SessionSyncItem].self, forKey: .items) ?? []
+        remaining = try container.decodeIfPresent([String].self, forKey: .remaining) ?? []
+    }
+}
+
+/// One session's entry in a `session.sync` answer.
+public struct SessionSyncItem: Decodable, Sendable, Equatable {
+    public let sessionId: String
+    /// The host skipped the read: its row has not moved since `updatedAt`.
+    public let unchanged: Bool?
+    /// The page, when the host read one.
+    public let messages: SessionMessagesResult?
+    /// Why this item failed, when it did. The other items are unaffected.
+    public let error: SessionSyncError?
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId
+        case unchanged
+        case messages
+        case error
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try container.decode(String.self, forKey: .sessionId)
+        unchanged = try container.decodeIfPresent(Bool.self, forKey: .unchanged)
+        messages = try container.decodeIfPresent(SessionMessagesResult.self, forKey: .messages)
+        error = try container.decodeIfPresent(SessionSyncError.self, forKey: .error)
+    }
+}
+
+/// One failed item in a `session.sync` answer.
+public struct SessionSyncError: Decodable, Sendable, Equatable {
+    public let code: String
+    public let message: String
+}
+
 /// What the phone claims to hold when it asks for a page.
 ///
 /// The three states are not interchangeable, and the host treats them
@@ -80,6 +141,16 @@ public enum SessionMessagesCursor: Sendable, Equatable {
     case empty
     /// The phone holds everything through this position.
     case after(Int)
+
+    /// Whether this is a delta read -- "what is new since a position".
+    ///
+    /// A delta is not the head of history: the older records a full load would
+    /// page back through are already on disk, and a page that claimed otherwise
+    /// made every incremental sync start a backfill it did not need.
+    public var isDelta: Bool {
+        if case .after = self { return true }
+        return false
+    }
 
     /// The `afterSeq` field's value, or `nil` when the key must be omitted.
     public var fieldValue: JSONValue? {

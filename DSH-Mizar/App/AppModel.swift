@@ -14,6 +14,9 @@ import Foundation
 import Observation
 import UserNotifications
 import MizarKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 @Observable
@@ -344,6 +347,30 @@ final class AppModel {
         return named + String(format: String(localized: " · %lld not in a workspace"), unclaimed)
     }
 
+    /// Take the titles a session list already carries.
+    ///
+    /// The rows used to carry none, so every name on the phone came from a
+    /// `session.stats` call -- one round trip per row, paid by both the sidebar
+    /// and the whole history sync. A host new enough to send `title` makes the
+    /// read unnecessary; an older one sends nothing and the fallback in
+    /// ``loadTitles(for:)`` still asks.
+    ///
+    /// - Parameter rows: the list that was just read.
+    private func adoptTitles(from rows: [SessionRow]) {
+        // Built as one value and assigned once: `titles` is observed, and a
+        // dictionary written key by key notifies the sidebar once per row -- on
+        // a 342-session machine that is 342 reasons to redraw the list that was
+        // just read, which is the class of cost this whole change is about.
+        var merged = titles
+        for row in rows {
+            guard let title = row.title, !title.isEmpty else { continue }
+            merged[row.sessionId] = title
+        }
+        if merged != titles {
+            titles = merged
+        }
+    }
+
     /// Fetch titles for sessions that do not have one yet.
     ///
     /// Concurrently, and only for the sessions actually on screen, because this
@@ -351,7 +378,18 @@ final class AppModel {
     ///
     /// - Parameter sessionIds: the sessions to look up.
     func loadTitles(for sessionIds: [String]) async {
-        let missing = sessionIds.filter { titles[$0] == nil }
+        let missing = sessionIds.filter { sessionId in
+            guard titles[sessionId] == nil else { return false }
+            // A session with no title and no activity yet has nothing to fetch:
+            // `session.stats` would answer with the same `null` the row already
+            // said, at the cost of a round trip. This is not "blank means no
+            // title forever" -- the row stops being blank the moment the host
+            // records a turn, and the next read asks then.
+            if sessions.first(where: { $0.sessionId == sessionId })?.blank == true {
+                return false
+            }
+            return true
+        }
         guard !missing.isEmpty, connection != nil else { return }
         // One at a time. A task group across the actor trips Swift 6's
         // region-based isolation checker, and the caller only ever asks for the
@@ -1681,7 +1719,7 @@ final class AppModel {
             // what makes the order meaningful.
             for raw in Self.launchPairingURIs {
                 guard let target = PairingURI.parse(raw) else { continue }
-                await pair(with: target, deviceName: "iPhone")
+                await pair(with: target, deviceName: Self.deviceName)
             }
             return
         }
@@ -4644,6 +4682,10 @@ final class AppModel {
             }
             sessions = Self.scoped(result.items, to: engineScope)
             sessionsAreKnown = true
+            // The rows carry their own titles now. Taking them here is what
+            // keeps the sidebar from asking `session.stats` once per row just to
+            // learn a name the host sent in the list it already read.
+            adoptTitles(from: sessions)
             await refreshWorkspaces()
             lastError = nil
             // Written after the workspaces, so the two halves of one answer land
@@ -5217,6 +5259,44 @@ final class AppModel {
         await conversations.load(sessionId: sessionId)
     }
 
+    /// How many conversation pages a history sync may have in flight.
+    ///
+    /// Six, not sixty. The bound is what keeps a fan-out from turning one
+    /// operator's refresh into a burst the relay or the computer has to queue:
+    /// each request becomes a frame on one socket and a task on the host, and
+    /// the host answers each by reading a page of a log. Six keeps the round
+    /// trip overlapped (the point) while the link still carries the desktop's
+    /// own traffic and a page's bytes arrive before the next six are asked for.
+    /// The relay's per-frame request bucket no longer prices these frames --
+    /// only the day's bytes do -- so this is a courtesy bound, not a limit.
+    private static let conversationFetchConcurrency = 6
+
+    /// How many conversation pages one window holds before they are folded in.
+    ///
+    /// Four rounds of ``conversationFetchConcurrency``. The two numbers answer
+    /// different questions: the concurrency keeps the round trip overlapped, the
+    /// window keeps memory bounded. A first sync is tens of megabytes of pages,
+    /// and decoding all of them before writing any of them to the cache is how a
+    /// faster sync gets a phone killed for memory -- what is in flight here is a
+    /// few megabytes, not the whole history.
+    private static let conversationFetchWindow = conversationFetchConcurrency * 4
+
+    /// What a session's cache says the next read should ask for.
+    ///
+    /// Extracted so the history sync's batch and the single read in
+    /// ``syncConversation(for:page:)`` cannot disagree about what "what this
+    /// phone already holds" means. Three answers, and each is load-bearing:
+    /// a position to read after, an explicit "nothing here" for a reinstalled
+    /// phone, and no claim at all for a cache written before positions existed.
+    ///
+    /// - Parameter known: the cached conversation, when one is stored.
+    /// - Returns: the cursor to send.
+    private static func nextCursor(for known: CachedConversation?) -> SessionMessagesCursor {
+        if let held = known?.deliveredSeq { return .after(held) }
+        if known == nil { return .empty }
+        return .unstated
+    }
+
     /// Sync every session's history to this phone.
     ///
     /// Run on first pairing and from the refresh button. Paging rather than
@@ -5224,7 +5304,7 @@ final class AppModel {
     /// freshness of one screen, which is the lesson the two-megabyte page
     /// taught.
     func syncAllConversations() async {
-        // One at a time, and the flag is released on every exit.
+        // One pass at a time, and the flag is released on every exit.
         //
         // This has no other guard: the button that starts it is disabled while
         // `isSyncing`, but `syncProgress` was only set after the session list
@@ -5284,8 +5364,19 @@ final class AppModel {
         log.add(.sync, "history sync: \(runnable.count) sessions to fetch")
         syncProgress = SyncProgress(current: "", completed: 0, total: runnable.count, startedAt: startedAt)
 
-        for (index, session) in runnable.enumerated() {
-            syncProgress?.current = session.cwd.map { ($0 as NSString).lastPathComponent } ?? session.sessionId
+        // Phase 1 -- decide on the phone, then ask in parallel.
+        //
+        // The pass used to run one conversation at a time, two round trips each.
+        // On a machine with a few hundred sessions that is the whole cost of the
+        // button: the relay's servers sat idle while the phone spent a hundred
+        // milliseconds per session waiting for an answer that was usually a few
+        // kilobytes. Nothing about a history sync needs session N to have landed
+        // before N+1 is asked for -- they are independent pages -- so the reads
+        // are issued together, bounded (see `conversationFetchConcurrency`) and
+        // keyed by session id.
+        var unchanged: Set<String> = []
+        var pending: [PendingSync] = []
+        for session in runnable {
             // A session's row moves when anything a history pass would fetch
             // moves: a new record, a rename, a model change. If the stored
             // conversation already covers that instant, the request would
@@ -5293,29 +5384,112 @@ final class AppModel {
             // are the whole cost of the button.
             let known = await conversations.load(sessionId: session.sessionId)
             if HistorySyncPolicy.isCurrent(known, updatedAt: session.updatedAt) {
-                syncProgress?.completed = index + 1
-                log.add(.sync, "history sync: \(index + 1)/\(runnable.count) \(session.sessionId) unchanged")
+                unchanged.insert(session.sessionId)
                 continue
             }
-            let synced = await syncConversation(for: session.sessionId)
-            // The usage frame too, not only the messages. It carries the row's
-            // title and the model and context figures above the composer, and a
-            // history download that skipped it left every row unnamed and every
-            // session's cost unknown until the operator opened it -- on a link
-            // that may not answer by then. One extra request per session, once.
-            let frame = await stats(for: session.sessionId)
-            if let frame, let title = frame.title, !title.isEmpty {
-                titles[session.sessionId] = title
+            pending.append(
+                PendingSync(
+                    session: session,
+                    cursor: Self.nextCursor(for: known),
+                    // What the stored filter actually covers, not the row's
+                    // instant: the host compares *this* against its row to
+                    // decide whether a read can be skipped, and a fresh row
+                    // with a stale cache must never look covered.
+                    coveredAt: known?.syncedUpdatedAt ?? 0,
+                ),
+            )
+        }
+        // Sessions that need nothing are done for the purposes of the bar: no
+        // request will ever be made for them.
+        syncProgress?.completed = unchanged.count
+        for session in runnable where unchanged.contains(session.sessionId) {
+            log.add(.sync, "history sync: \(session.sessionId) unchanged")
+        }
+
+        // Phase 2 -- ask in batches, fold each answer in one session at a time.
+        //
+        // The batch is the point: `session.sync` answers a whole window of
+        // sessions in one frame, so a machine with hundreds of sessions costs a
+        // handful of round trips instead of one per session. The real cost of
+        // this button was never the bytes -- it was one public round trip per
+        // session through two hops.
+        //
+        // A host that does not know the method answers `NOT_IMPLEMENTED`; the
+        // fallback below is the per-session fan-out this app shipped before, so
+        // an older computer keeps working and simply stays slower.
+        //
+        // The fold stays serial and windowed on purpose: a page is merged into a
+        // cache, paged back, repaired and reflected in the island, and those
+        // steps read and write one session's stored conversation in order. The
+        // window is also the memory bound -- decoding a whole first sync's pages
+        // before writing any of them is how a faster sync gets a phone killed.
+        var completed = unchanged.count
+        var queue = pending
+        var batchUnsupported = false
+        var rounds = 0
+        while !queue.isEmpty {
+            // Re-read the socket per round: `refreshSessions` above (and a
+            // reconnect during the pass) can replace it, and a request sent to
+            // the closed one would fail for a reason that is not the session's.
+            guard let connection else {
+                log.add(.sync, "history sync: stopped with \(queue.count) session(s) unread, not connected")
+                break
             }
-            // Both halves have to have landed before the session may be
-            // skipped: a failed stats read would otherwise leave the title and
-            // model blank for good, because the next pass would think this
-            // instant was already covered.
-            if synced.succeeded, frame != nil {
-                await markConversationSynced(session.sessionId, updatedAt: session.updatedAt)
+            // A host that answers nothing must not make this loop spin: every
+            // round either settles at least one session or drops one from the
+            // queue, so a working host never reaches this ceiling.
+            rounds += 1
+            if rounds > runnable.count * 3 + 16 {
+                log.add(.sync, "history sync: stopped after \(rounds) rounds, \(queue.count) session(s) unread")
+                break
             }
-            syncProgress?.completed = index + 1
-            log.add(.sync, "history sync: \(index + 1)/\(runnable.count) \(session.sessionId)")
+            let window = Array(queue.prefix(Self.conversationFetchWindow))
+            let rest = Array(queue.dropFirst(window.count))
+
+            var handled: Set<String> = []
+            if !batchUnsupported {
+                switch await requestSyncBatch(window, over: connection) {
+                case .answered(let batch):
+                    for item in batch.items where !handled.contains(item.sessionId) {
+                        guard let entry = window.first(where: { $0.session.sessionId == item.sessionId }) else {
+                            continue
+                        }
+                        handled.insert(item.sessionId)
+                        completed += 1
+                        syncProgress?.current = Self.label(for: entry.session)
+                        await applySyncItem(item, for: entry)
+                        syncProgress?.completed = completed
+                        log.add(.sync, "history sync: \(completed)/\(runnable.count) \(item.sessionId)")
+                    }
+                    // Whatever the host did not answer goes back to the front of
+                    // the queue, in the order it was asked. A batch that answered
+                    // nothing falls through to the single-call path below so one
+                    // bad answer cannot stall the whole pass.
+                    if handled.isEmpty {
+                        log.add(.sync, "history sync: the batch answered no sessions; reading this window one by one")
+                    } else {
+                        queue = window.filter { !handled.contains($0.session.sessionId) } + rest
+                        continue
+                    }
+                case .unsupported:
+                    batchUnsupported = true
+                    log.add(.sync, "history sync: this computer does not answer batched reads; one request per session")
+                case .failed(let reason):
+                    log.add(.sync, "history sync: batch read failed (\(reason)); reading this window one by one")
+                }
+            }
+
+            // Per-session fallback for one window (older host, or a batch that
+            // failed). Pages are fetched concurrently and folded serially.
+            let pages = await fetchConversationPages(window, over: connection)
+            for entry in window {
+                syncProgress?.current = Self.label(for: entry.session)
+                completed += 1
+                await applySyncedPage(pages[entry.session.sessionId], for: entry)
+                syncProgress?.completed = completed
+                log.add(.sync, "history sync: \(completed)/\(runnable.count) \(entry.session.sessionId)")
+            }
+            queue = rest
         }
         let elapsed = Date().timeIntervalSince(startedAt)
         log.add(.sync, String(format: "history sync: finished in %.1f s", elapsed))
@@ -5327,6 +5501,182 @@ final class AppModel {
         // The pass ran to the end. Whatever went wrong inside it is already
         // recorded, and this is the line that lets the window stop saying it.
         syncProblem = connectionError ?? lastError
+    }
+
+    /// Fetch one window of conversation pages at once.
+    ///
+    /// The requests are built from the same payload helper the serial read uses,
+    /// then issued through ``MizarConnection/requestAll(_:concurrency:)`` so the
+    /// round trips overlap. A page that failed is simply absent from the result:
+    /// the caller's serial fold then retries it through the path that knows how
+    /// to reconnect, which is better than one failed session discarding the
+    /// window.
+    ///
+    /// - Parameters:
+    ///   - entries: the sessions in this window, with the cursor each needs.
+    ///   - connection: the socket to ask. Read per window by the caller.
+    /// - Returns: the pages that arrived, keyed by session id.
+    private func fetchConversationPages(
+        _ entries: [PendingSync],
+        over connection: MizarConnection,
+    ) async -> [String: SessionMessagesResult] {
+        let requests = entries.map { entry in
+            (
+                id: entry.session.sessionId,
+                method: "session.messages",
+                payload: JSONValue.object(
+                    messagesFields(
+                        sessionId: entry.session.sessionId,
+                        afterSeq: entry.cursor,
+                        maxMessages: 200,
+                    ),
+                ),
+            )
+        }
+        let outcomes = await connection.requestAll(
+            requests,
+            concurrency: Self.conversationFetchConcurrency,
+        )
+        var pages: [String: SessionMessagesResult] = [:]
+        pages.reserveCapacity(outcomes.count)
+        for (sessionId, outcome) in outcomes {
+            switch outcome {
+            case .value(let value):
+                guard let value, let page = try? value.decoded(as: SessionMessagesResult.self) else {
+                    continue
+                }
+                pages[sessionId] = page
+            case .failure(let error):
+                log.add(.sync, "history sync: \(sessionId) fetch failed: \(error.message)")
+            }
+        }
+        return pages
+    }
+
+    /// One session the history sync still has to read.
+    ///
+    /// `coveredAt` is the cache's own coverage (`syncedUpdatedAt`), not the
+    /// row's instant. The host compares it against its row to decide whether the
+    /// read can be skipped; sending the row's own timestamp instead would ask
+    /// "is my row newer than my row", which is always true and would make the
+    /// host skip a page this phone does not actually hold.
+    private struct PendingSync {
+        let session: SessionRow
+        let cursor: SessionMessagesCursor
+        let coveredAt: Double
+    }
+
+    /// What one `session.sync` attempt produced.
+    private enum SyncBatchOutcome {
+        case answered(SessionSyncResult)
+        /// The host does not know the method (an older computer).
+        case unsupported
+        /// The call failed for another reason; the window falls back to
+        /// one request per session rather than stalling the pass.
+        case failed(String)
+    }
+
+    /// The row's short name, for the progress line.
+    private static func label(for session: SessionRow) -> String {
+        session.cwd.map { ($0 as NSString).lastPathComponent } ?? session.sessionId
+    }
+
+    /// Ask the host for a whole window of conversation pages in one frame.
+    ///
+    /// - Parameters:
+    ///   - entries: the sessions in this window, each with the cursor its cache
+    ///     justified and the instant that cache actually covers.
+    ///   - connection: the socket to ask.
+    /// - Returns: the answer, or why there is none.
+    private func requestSyncBatch(
+        _ entries: [PendingSync],
+        over connection: MizarConnection,
+    ) async -> SyncBatchOutcome {
+        var items: [JSONValue] = []
+        items.reserveCapacity(entries.count)
+        for entry in entries {
+            // The same payload the single read builds, plus the coverage
+            // instant the host's skip decision needs.
+            var fields = messagesFields(
+                sessionId: entry.session.sessionId,
+                afterSeq: entry.cursor,
+                maxMessages: 200,
+            )
+            fields["updatedAt"] = .number(entry.coveredAt)
+            items.append(.object(fields))
+        }
+        do {
+            let result = try await call(
+                "session.sync",
+                payload: .object([
+                    "items": .array(items),
+                    // Under the relay's 900 KiB frame cap; the host also clamps
+                    // this, so a client that asks for more does not get a frame
+                    // the phone would drop.
+                    "maxBytes": .number(600_000),
+                    "maxItems": .number(Double(Self.conversationFetchWindow)),
+                ]),
+                as: SessionSyncResult.self,
+            )
+            return .answered(result)
+        } catch let error as MizarError where error.code == "NOT_IMPLEMENTED" {
+            return .unsupported
+        } catch {
+            return .failed(Self.describe(error, authority: host?.authority ?? host?.baseURL))
+        }
+    }
+
+    /// Fold one answered batch item in.
+    ///
+    /// - Parameters:
+    ///   - item: what the host said about this session.
+    ///   - entry: the row and cursor it was asked with.
+    private func applySyncItem(_ item: SessionSyncItem, for entry: PendingSync) async {
+        if item.unchanged == true {
+            // The host's row has not moved past what this cache covers: no page
+            // is missing, and the row instant is now covered.
+            await markConversationSynced(entry.session.sessionId, updatedAt: entry.session.updatedAt)
+            return
+        }
+        if let page = item.messages {
+            await applySyncedPage(page, for: entry)
+            return
+        }
+        // A per-item error or an empty answer: retry this one on the path that
+        // knows how to reconnect. A permanent refusal fails the same way and
+        // costs one request.
+        log.add(
+            .sync,
+            "history sync: \(entry.session.sessionId) in the batch failed: \(item.error?.message ?? "no answer")",
+        )
+        await applySyncedPage(nil, for: entry)
+    }
+
+    /// Merge one page into the cache and record that the row instant is covered.
+    ///
+    /// - Parameters:
+    ///   - page: the page, or `nil` to read it one request at a time.
+    ///   - entry: the row and cursor this session was asked with.
+    /// - Returns: whether the read landed (and the watermark advanced).
+    @discardableResult
+    private func applySyncedPage(_ page: SessionMessagesResult?, for entry: PendingSync) async -> Bool {
+        let synced = await syncConversation(
+            for: entry.session.sessionId,
+            page: page,
+            delta: entry.cursor.isDelta,
+        )
+        // The title rides on the session row now. `adoptTitles` already took it
+        // from the fresh list; writing it again only when it actually differs
+        // keeps an observed dictionary from notifying the sidebar once per
+        // session.
+        if let title = entry.session.title, !title.isEmpty, titles[entry.session.sessionId] != title {
+            titles[entry.session.sessionId] = title
+        }
+        if synced.succeeded {
+            await markConversationSynced(entry.session.sessionId, updatedAt: entry.session.updatedAt)
+            return true
+        }
+        return false
     }
 
     /// One forward page read, and the usage frame it left in the cache.
@@ -5398,28 +5748,30 @@ final class AppModel {
     /// - Returns: the items now known and the usage frame the cache holds after
     ///   the page's context figure was folded in.
     @discardableResult
-    func syncConversation(for sessionId: String) async -> SyncedConversation {
-        // What this phone holds decides what the host sends. A refresh used to
-        // download the whole tail every time -- the phone already had every
-        // record and paid for them again on every pull, reconnect and poll.
-        let known = await conversations.load(sessionId: sessionId)
-        let cursor: SessionMessagesCursor
-        if let held = known?.deliveredSeq {
-            cursor = .after(held)
-        } else if known == nil {
-            // Nothing stored at all. Said explicitly rather than left to the
-            // host's memory: a reinstall keeps the device token -- the Keychain
-            // survives the app -- but not the cache, and the host would then
-            // answer a phone with nothing with only what it sent after the
-            // reinstall.
-            cursor = .empty
-        } else {
-            // A cache written before positions were stored: it holds records but
-            // cannot say through where. Neither claim is true, so make neither.
-            cursor = .unstated
-        }
+    func syncConversation(
+        for sessionId: String,
+        page: SessionMessagesResult? = nil,
+        delta: Bool? = nil,
+    ) async -> SyncedConversation {
         do {
-            let result = try await messages(sessionId: sessionId, afterSeq: cursor)
+            // A page already in hand -- the history sync fetched a batch of them
+            // together -- is used as it is. Asking again would put back the round
+            // trip the fan-out just removed.
+            let result: SessionMessagesResult
+            let isDelta: Bool
+            if let page {
+                result = page
+                isDelta = delta ?? false
+            } else {
+                // What this phone holds decides what the host sends. A refresh
+                // used to download the whole tail every time -- the phone already
+                // had every record and paid for them again on every pull,
+                // reconnect and poll.
+                let known = await conversations.load(sessionId: sessionId)
+                let cursor = Self.nextCursor(for: known)
+                isDelta = cursor.isDelta
+                result = try await messages(sessionId: sessionId, afterSeq: cursor)
+            }
             let fresh = result.conversationItems()
             let freshTurns = result.conversationTurns()
             let older = result.oldestSeq
@@ -5433,7 +5785,12 @@ final class AppModel {
                     sessionId: sessionId,
                     items: mergeConversations(cached: cached?.items ?? [], fresh: fresh),
                     throughSeq: result.asOfSeq,
-                    hasMore: result.hasMore,
+                    // A delta read does not get to say whether older history
+                    // exists: it asked for new records, and the host answers
+                    // `false` for a delta by design. Keeping the cached flag is
+                    // what stops one incremental sync from clearing a backfill
+                    // that has not finished, or from starting one that has.
+                    hasMore: isDelta ? (cached?.hasMore ?? false) : result.hasMore,
                     // Grouped on the fresh page and kept beside it, because a
                     // page is where the turn boundaries are -- they are in the
                     // records, and the merged item list has already lost which
@@ -5790,26 +6147,14 @@ final class AppModel {
         afterSeq: SessionMessagesCursor = .unstated,
         maxMessages: Int = 200,
     ) async throws -> SessionMessagesResult {
-        // Only a delegated child has one. A fork carries a parent and is not a
-        // subagent -- it is the operator's own conversation, addressable as a
-        // session like any other, and sending a parent for it would be a claim
-        // about a log that is not a child's.
-        let parentSessionId: String? = sessions
-            .first { $0.sessionId == sessionId && $0.isSubagent }?
-            .parentSessionId
         var ask = maxMessages
         while true {
-            var fields: [String: JSONValue] = [
-                "sessionId": .string(sessionId),
-                // The host trims the page to what the transport can carry;
-                // asking for more only costs a bigger request.
-                "maxMessages": .number(Double(ask)),
-            ]
-            if let parentSessionId { fields["parentSessionId"] = .string(parentSessionId) }
-            if let beforeSeq { fields["beforeSeq"] = .number(Double(beforeSeq)) }
-            // `.unstated` leaves the key out on purpose: the host may then answer
-            // from what it has already delivered to this device.
-            if let cursor = afterSeq.fieldValue { fields["afterSeq"] = cursor }
+            let fields = messagesFields(
+                sessionId: sessionId,
+                beforeSeq: beforeSeq,
+                afterSeq: afterSeq,
+                maxMessages: ask,
+            )
             do {
                 return try await call(
                     "session.messages",
@@ -5825,6 +6170,46 @@ final class AppModel {
                 ask = smaller
             }
         }
+    }
+
+    /// The payload one `session.messages` read sends.
+    ///
+    /// Split out of ``messages`` because the history sync now builds the same
+    /// payload for a batch of concurrent reads: one description of the request
+    /// means the serial path and the fan-out cannot drift into asking for
+    /// different pages.
+    ///
+    /// - Parameters:
+    ///   - sessionId: the session to read.
+    ///   - beforeSeq: the log position to page back from, when paging.
+    ///   - afterSeq: what this phone already holds; only newer records travel.
+    ///   - maxMessages: how many records to ask for.
+    /// - Returns: the object to send as the frame's payload.
+    private func messagesFields(
+        sessionId: String,
+        beforeSeq: Int? = nil,
+        afterSeq: SessionMessagesCursor,
+        maxMessages: Int,
+    ) -> [String: JSONValue] {
+        // Only a delegated child has one. A fork carries a parent and is not a
+        // subagent -- it is the operator's own conversation, addressable as a
+        // session like any other, and sending a parent for it would be a claim
+        // about a log that is not a child's.
+        let parentSessionId: String? = sessions
+            .first { $0.sessionId == sessionId && $0.isSubagent }?
+            .parentSessionId
+        var fields: [String: JSONValue] = [
+            "sessionId": .string(sessionId),
+            // The host trims the page to what the transport can carry; asking
+            // for more only costs a bigger request.
+            "maxMessages": .number(Double(maxMessages)),
+        ]
+        if let parentSessionId { fields["parentSessionId"] = .string(parentSessionId) }
+        if let beforeSeq { fields["beforeSeq"] = .number(Double(beforeSeq)) }
+        // `.unstated` leaves the key out on purpose: the host may then answer
+        // from what it has already delivered to this device.
+        if let cursor = afterSeq.fieldValue { fields["afterSeq"] = cursor }
+        return fields
     }
 
     /// Sessions whose context compaction is still in flight.
@@ -6862,6 +7247,22 @@ final class AppModel {
             ("p2p", "\(endpointId) via \(relayBaseURL)")
         case .relay(let baseURL): ("relay", baseURL)
         }
+    }
+
+    /// What the host's device roster calls this install.
+    ///
+    /// `UIDevice.name` returns the model name ("iPhone" or "iPad") on iOS 16+
+    /// unless the app holds the user-assigned-name entitlement, so both an
+    /// iPhone and an iPad used to pair as "iPhone" -- the host had two identical
+    /// rows and no way to tell which was which. The idiom is what the roster
+    /// needs; a name the person actually chose wins over it.
+    static var deviceName: String {
+        let idiom = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        let reported = UIDevice.current.name
+        if !reported.isEmpty, reported != "iPhone", reported != "iPad" {
+            return reported
+        }
+        return idiom
     }
 
     /// The hardware model, for the host's device roster and the log.

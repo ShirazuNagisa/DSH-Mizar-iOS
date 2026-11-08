@@ -348,6 +348,23 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
     /// `claude_desktop` / `codex_desktop` for GUI-owned transcripts; `nil` for
     /// the CLI surface. Additive: an older host does not send it.
     public let source: String?
+    /// The row's title, when the host sends one.
+    ///
+    /// Additive, and load-bearing for transfer cost: the sidebar used to learn
+    /// every title from a separate `session.stats` call, so a 342-session
+    /// machine cost 342 round trips through the relay to name its own list. A
+    /// host older than this field sends nothing, and the app falls back to the
+    /// per-row read exactly as it did before.
+    public let title: String?
+    /// The model the session is using, when the host says.
+    ///
+    /// Same source and same reason as ``title``. Additive.
+    public let model: String?
+    /// How full the model's context window is, when the host can tell.
+    ///
+    /// `nil` is "this host cannot say", not zero. Additive: it is the third
+    /// field that used to cost one `session.stats` request per row.
+    public let context: ContextPressure?
 
     public var id: String { sessionId }
 
@@ -361,6 +378,9 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
         parentSessionId: String? = nil,
         origin: String? = nil,
         source: String? = nil,
+        title: String? = nil,
+        model: String? = nil,
+        context: ContextPressure? = nil,
     ) {
         self.sessionId = sessionId
         self.updatedAt = updatedAt
@@ -371,6 +391,9 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
         self.parentSessionId = parentSessionId
         self.origin = origin
         self.source = source
+        self.title = title
+        self.model = model
+        self.context = context
     }
 
     /// Last activity as a date.

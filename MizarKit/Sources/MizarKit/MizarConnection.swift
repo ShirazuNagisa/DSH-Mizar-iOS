@@ -555,6 +555,101 @@ public actor MizarConnection {
         return try value.decoded(as: Result.self)
     }
 
+    // MARK: - Calls, several at once
+
+    /// One answer from a fan-out of calls.
+    ///
+    /// A failure is a value rather than a thrown error because the caller asked
+    /// for several answers: one session that refused must not discard the pages
+    /// that arrived. ``MizarError`` and not `any Error` because that is the one
+    /// error type this facade produces for a host failure, and because the
+    /// result crosses back to the caller's actor and must be `Sendable`.
+    public enum CallOutcome: Sendable {
+        /// The host answered.
+        case value(JSONValue?)
+        /// The call failed, timed out, or the socket closed.
+        case failure(MizarError)
+
+        /// The answer, when there was one.
+        public var value: JSONValue? {
+            if case .value(let value) = self { return value }
+            return nil
+        }
+
+        /// The failure, when there was one.
+        public var error: MizarError? {
+            if case .failure(let error) = self { return error }
+            return nil
+        }
+    }
+
+    /// Send several unary calls at once, keeping at most `concurrency` in flight.
+    ///
+    /// The socket has always been multiplexed -- every frame carries the id it
+    /// answers -- but the one caller that matters used to issue its requests one
+    /// after another, so a machine with 342 sessions spent 342 round trips over
+    /// the relay learning one page each. The waiting, not the bytes, was the
+    /// cost: the relay's servers sat idle while a phone painted a progress bar.
+    ///
+    /// The bound is deliberate. Every request is a frame on a socket that shares
+    /// one uplink with the desktop's own traffic, and the desktop fans each one
+    /// out into its own task; six keeps a page arriving while the next is being
+    /// asked for without turning a sync into a burst the far end has to queue.
+    ///
+    /// Ordering is not preserved -- the answer arrives when it arrives -- and
+    /// callers key by `id` for that reason.
+    ///
+    /// - Parameters:
+    ///   - requests: what to ask, each with the id its answer will carry.
+    ///   - concurrency: how many may be in flight at once, at least one.
+    /// - Returns: one outcome per distinct id.
+    public func requestAll(
+        _ requests: [(id: String, method: String, payload: JSONValue?)],
+        concurrency: Int = 6,
+    ) async -> [String: CallOutcome] {
+        guard !requests.isEmpty else { return [:] }
+        let limit = max(1, concurrency)
+        var outcomes: [String: CallOutcome] = [:]
+        outcomes.reserveCapacity(requests.count)
+
+        await withTaskGroup(of: (String, CallOutcome).self) { group in
+            var next = 0
+            var inFlight = 0
+            while next < requests.count || inFlight > 0 {
+                while inFlight < limit, next < requests.count {
+                    let request = requests[next]
+                    next += 1
+                    inFlight += 1
+                    group.addTask {
+                        do {
+                            return (request.id, .value(try await self.request(request.method, payload: request.payload)))
+                        } catch let error as MizarError {
+                            return (request.id, .failure(error))
+                        } catch {
+                            // Not the host's words, but the same shape: the
+                            // caller needs one sendable failure per request and
+                            // the description is all a transport error has.
+                            return (
+                                request.id,
+                                .failure(
+                                    MizarError(
+                                        code: "REQUEST_FAILED",
+                                        message: String(describing: error),
+                                        retryable: true,
+                                    ),
+                                ),
+                            )
+                        }
+                    }
+                }
+                guard let (id, outcome) = await group.next() else { break }
+                inFlight -= 1
+                outcomes[id] = outcome
+            }
+        }
+        return outcomes
+    }
+
     // MARK: - Internals
 
     private func sendAndAwait(id: String, text: String) async throws -> JSONValue? {
@@ -702,6 +797,24 @@ public actor MizarConnection {
         case .failure(let error, let id):
             if let id, let continuation = pending.removeValue(forKey: id) {
                 continuation.resume(throwing: error)
+            } else if case .connecting = state, failureError == nil {
+                // A rejection before the welcome carries no id: the host is
+                // still refusing the *connection*, not answering a call.
+                // `DEVICE_REVOKED`, a cross-account hello and a blocked device
+                // all arrive this way, and handing the error to the handshake
+                // is what keeps their codes attached -- without this the caller
+                // only ever saw the close that follows and reported "the host
+                // closed the connection" for every one of them.
+                //
+                // The `state == .connecting` case matters on its own: the frame
+                // can arrive after `hello` was sent but before `awaitHandshake`
+                // stored its continuation, and `failHandshake` would then have
+                // nothing to resume. Recording the failure in the state lets
+                // `settledHandshake` answer at once instead of waiting out the
+                // 20 s handshake deadline.
+                failureError = error
+                state = .failed(Self.reason(error))
+                failHandshake(with: error)
             } else {
                 // An uncorrelated failure — the host refused something the
                 // client did not ask for, or a socket-level complaint. Telling

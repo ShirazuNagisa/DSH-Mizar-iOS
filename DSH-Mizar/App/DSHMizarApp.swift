@@ -27,6 +27,21 @@ struct DSHMizarApp: App {
     /// a notification looks like while the app is open, and what a tap does.
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
 
+    init() {
+        // The Live Activity buttons are declared in the widget extension, so
+        // only that binary references these two intent types. MizarKit is
+        // statically linked into this app, and without an app-side reference the
+        // linker dead-strips the implementations -- while App Intents metadata is
+        // still generated from the module, so the system picks the app to run the
+        // action and then finds no `perform()`. The symptom is
+        // `LNContextErrorDomain` 2002 and a Lock Screen button that does nothing.
+        //
+        // A runtime read of the array, not an unused type reference: the
+        // compiler may fold `_ = AllowOnceIntent.self` away, and then the
+        // linker never sees the implementation. See LiveActivityIntentLink.
+        _ = LiveActivityIntentLink.types.count
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -36,7 +51,7 @@ struct DSHMizarApp: App {
                     // parse path for both means a scanned code and a tapped
                     // link cannot behave differently.
                     guard let target = PairingURI.parse(url.absoluteString) else { return }
-                    Task { await model.pair(with: target, deviceName: "iPhone") }
+                    Task { await model.pair(with: target, deviceName: AppModel.deviceName) }
                 }
         }
     }

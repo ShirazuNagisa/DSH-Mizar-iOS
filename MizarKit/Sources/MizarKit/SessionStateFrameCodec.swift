@@ -148,6 +148,13 @@ public struct StateChannel: Sendable {
             if frame.flags.contains(.snapshot) {
                 text = frame.text
             } else if frame.flags.contains(.append) {
+                // An append names its byte offset in the interval. A gap means
+                // a frame was lost, and splicing two unrelated stretches
+                // together draws a sentence that was never said; wait for the
+                // next snapshot instead (the protocol's rule).
+                if frame.textSeq != UInt32(text.utf8.count) {
+                    return .stale
+                }
                 text += frame.text
             }
             if frame.flags.contains(.final) {
