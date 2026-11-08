@@ -58,8 +58,8 @@ unknown-file full fallback until the snapshot target is wired in (phase 3).
 
 `DSH-MizarTests` (scheme `DSH-Mizar-Snapshots`, separate from `DSH-Mizar`) renders
 leaf SwiftUI views with `ImageRenderer` and compares reference PNGs in
-`DSH-MizarTests/Snapshots/__Snapshots__/`. Six tests / ten references execute in
-about 0.3 s, against 22.6 s per XCUITest. Record only deliberately with
+`DSH-MizarTests/Snapshots/__Snapshots__/`. 16 test files / 35 references (some
+parameterised) execute in well under a second, against 22.6 s per XCUITest. Record only deliberately with
 `MIZAR_SNAPSHOT_RECORD=1`; a missing reference fails and a mismatch never
 rewrites one. Command and limits: `docs/snapshots.md`. XCUITest keeps the key
 business flows; the migration plan (80 -> <=16 kept) is `docs/phase2-triage.md`.

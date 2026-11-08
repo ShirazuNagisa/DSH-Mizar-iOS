@@ -77,7 +77,7 @@ struct AttachmentStrip: View {
             VStack(spacing: 4) {
                 Image(systemName: draft.isImage ? "photo" : "doc")
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Theme.accentText)
                 Text(draft.shortLabel)
                     .font(.caption2)
                     .lineLimit(1)

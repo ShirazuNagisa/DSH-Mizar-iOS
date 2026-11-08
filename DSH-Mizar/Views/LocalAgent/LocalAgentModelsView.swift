@@ -39,6 +39,7 @@ struct LocalAgentModelsView: View {
                     Button("Retry") {
                         Task { await store.load(agent: agent) }
                     }
+                    .tint(Theme.accentText)
                 }
             case .ready:
                 providersSection
@@ -126,7 +127,7 @@ private struct ProviderRow: View {
                 if isDefault {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Theme.accentText)
                         .accessibilityLabel(Text("Default model"))
                 }
             }

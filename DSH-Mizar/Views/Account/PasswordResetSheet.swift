@@ -71,6 +71,7 @@ struct PasswordResetSheet: View {
                         }
                         .font(.headline)
                         .frame(maxWidth: .infinity)
+                        .foregroundStyle(Theme.onAccent)
                     }
                     .buttonStyle(.glassProminent)
                     .controlSize(.large)
@@ -106,6 +107,7 @@ struct PasswordResetSheet: View {
                         }
                         .font(.headline)
                         .frame(maxWidth: .infinity)
+                        .foregroundStyle(Theme.onAccent)
                     }
                     .buttonStyle(.glassProminent)
                     .controlSize(.large)

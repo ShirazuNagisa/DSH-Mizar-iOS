@@ -73,7 +73,7 @@ struct AgentSwitcher: View {
                 if isCurrent {
                     Image(systemName: "checkmark")
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Theme.accentText)
                 }
             }
             .padding(.horizontal, 14)

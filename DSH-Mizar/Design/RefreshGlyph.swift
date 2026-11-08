@@ -62,7 +62,7 @@ struct RefreshGlyph: View {
             if phase == .landed {
                 Image(systemName: "checkmark")
                     .font(.system(size: size * 0.92, weight: .bold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Theme.accentText)
                     .transition(.opacity.combined(with: .scale(scale: 0.6)))
             }
         }

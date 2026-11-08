@@ -135,10 +135,10 @@ struct SettingsView: View {
     private var header: some View {
         Section {
             HStack(spacing: 16) {
-                // The app's own icon, drawn rather than pasted: the star nudges
-                // both layers once as the screen opens, which is the only place
-                // in this sheet where the brand is allowed to introduce itself.
-                MizarIconTile(size: 64, motion: .flick)
+                // The app's own icon, drawn rather than pasted: the ring loads
+                // itself once as the screen opens, which is the only place in
+                // this sheet where the brand is allowed to introduce itself.
+                MizarIconTile(size: 64, motion: .once)
                     .shadow(color: Theme.navy.opacity(0.22), radius: 8, y: 3)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(verbatim: "DSH-Mizar")
@@ -177,7 +177,7 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings.account.name")
                         Text(model.account.isPaid ? String(localized: "Paid account") : String(localized: "Free account"))
                             .font(.caption)
-                            .foregroundStyle(model.account.isPaid ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(model.account.isPaid ? Theme.accentText : Color.secondary)
                             .accessibilityIdentifier("settings.account.plan")
                     }
                 }
@@ -206,6 +206,7 @@ struct SettingsView: View {
             LabeledContent {
                 Button("Details") { showingPlanDetail = true }
                     .font(.footnote.weight(.medium))
+                    .tint(Theme.accentText)
                     .accessibilityIdentifier("settings.plan.detail")
             } label: {
                 Label("Mizar Paid", systemImage: "star.circle")
@@ -268,7 +269,12 @@ struct SettingsView: View {
         Section {
             ForEach(NotificationKind.allCases, id: \.self) { kind in
                 Toggle(isOn: binding(for: kind)) {
-                    Label(title(for: kind), systemImage: symbol(for: kind))
+                    Label {
+                        Text(title(for: kind))
+                    } icon: {
+                        Image(systemName: symbol(for: kind))
+                            .foregroundStyle(Theme.accentText)
+                    }
                 }
                 .accessibilityIdentifier(identifier(for: kind))
             }
@@ -628,6 +634,7 @@ struct SettingsView: View {
             Button("Pair a computer") {
                 showingPairing = true
             }
+            .tint(Theme.accentText)
             .accessibilityIdentifier("settings.pair")
         } header: {
             Text("Developer")

@@ -181,7 +181,7 @@ struct LiveTurnBlock: View {
             }
             // Done lines stay quiet; the running line is the one that moves
             // and takes the accent.
-            .foregroundStyle(text.isEmpty ? Color.accentColor : Color.secondary)
+            .foregroundStyle(text.isEmpty ? Theme.accentText : Color.secondary)
             .modifier(LiveShimmer(active: text.isEmpty))
             // Swapped in place, not animated as layout: the line is the same
             // line with a new sentence, and a cross-fade is what "it changed its

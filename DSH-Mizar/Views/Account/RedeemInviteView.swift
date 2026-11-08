@@ -76,7 +76,7 @@ struct RedeemInviteView: View {
             if let result {
                 Section {
                     Label(result, systemImage: succeeded ? "checkmark.seal" : "exclamationmark.triangle")
-                        .foregroundStyle(succeeded ? Color.accentColor : Theme.failed)
+                        .foregroundStyle(succeeded ? Theme.accentText : Theme.failed)
                         .accessibilityIdentifier("account.redeem.result")
                 }
             }

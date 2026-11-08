@@ -80,7 +80,7 @@ struct PopoverHeader<Trailing: View>: View {
             if let systemImage {
                 Image(systemName: systemImage)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Theme.accentText)
             }
             Text(title)
                 .font(.headline)

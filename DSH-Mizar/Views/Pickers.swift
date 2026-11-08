@@ -290,7 +290,7 @@ struct ModelPickerRow: View {
                     if isChosen {
                         Image(systemName: "checkmark")
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(Theme.accentText)
                             .matchedGeometryEffect(id: "tick", in: tick)
                             .transition(.pop)
                     }
@@ -543,7 +543,9 @@ struct PermissionPickerView: View {
                 Button(role: .destructive) {
                     Task { await apply(option) }
                 } label: {
-                    Text("Allow").frame(maxWidth: .infinity)
+                    Text("Allow")
+                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(Theme.onAccent)
                 }
                 .buttonStyle(.glassProminent)
                 .tint(Theme.waiting)
@@ -587,7 +589,7 @@ struct PermissionPickerView: View {
             } else if option.value == inForce {
                 Image(systemName: "checkmark")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Theme.accentText)
                     .matchedGeometryEffect(id: "tick", in: tick)
                     .transition(.pop)
             }

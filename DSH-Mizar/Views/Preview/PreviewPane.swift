@@ -190,6 +190,7 @@ struct PreviewPane: View {
             Button("Try again") { preview.retry() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .tint(Theme.accentText)
                 .accessibilityIdentifier("preview.retry")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -295,7 +296,7 @@ struct DeliveredFileIcon: View {
                 .fill(Color.accentColor.opacity(0.14))
             Image(systemName: symbol)
                 .font(.system(size: size * 0.52, weight: .regular))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Theme.accentText)
             Text(kind.badge)
                 .font(.system(size: size * 0.24, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.onAccent)

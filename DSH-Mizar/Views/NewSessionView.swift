@@ -72,6 +72,7 @@ struct NewSessionView: View {
                         Button("Start session") {
                             Task { await create(path.trimmingCharacters(in: .whitespacesAndNewlines)) }
                         }
+                        .tint(Theme.accentText)
                         .disabled(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creating)
                     } footer: {
                         Text("The host opens this directory and starts a session in it.")

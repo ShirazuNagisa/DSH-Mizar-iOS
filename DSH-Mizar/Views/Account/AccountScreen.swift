@@ -351,7 +351,7 @@ struct AccountScreen: View {
                         .accessibilityIdentifier("account.username")
                     Text(model.account.isPaid ? String(localized: "Paid account") : String(localized: "Free account"))
                         .font(.subheadline)
-                        .foregroundStyle(model.account.isPaid ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(model.account.isPaid ? Theme.accentText : Color.secondary)
                         .accessibilityIdentifier("account.plan")
                 }
             }
@@ -473,6 +473,7 @@ struct AccountScreen: View {
                     showingResetForm = true
                 }
                 .font(.footnote.weight(.medium))
+                .tint(Theme.accentText)
                 .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 .accessibilityIdentifier("account.forgot")
             }
@@ -704,7 +705,7 @@ struct AccountScreen: View {
                         if device.current {
                             Text("Current")
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(Theme.accentText)
                         }
                     }
                     .accessibilityIdentifier("account.device.\(device.id)")
@@ -749,7 +750,7 @@ struct AccountScreen: View {
                         Text(desktop.name)
                         Text(desktop.online ? String(localized: "Online") : String(localized: "Offline"))
                             .font(.caption)
-                            .foregroundStyle(desktop.online ? Color.accentColor : .secondary)
+                            .foregroundStyle(desktop.online ? Theme.accentText : .secondary)
                     }
                     Spacer(minLength: 8)
                     if desktop.online {
@@ -760,6 +761,7 @@ struct AccountScreen: View {
                                 connect(to: desktop)
                             }
                             .buttonStyle(.borderless)
+                            .tint(Theme.accentText)
                             .accessibilityIdentifier("account.computer.connect.\(desktop.deviceId)")
                         }
                     }

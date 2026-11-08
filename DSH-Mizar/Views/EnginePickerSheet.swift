@@ -62,7 +62,7 @@ struct EnginePickerSheet: View {
                             if target == current {
                                 Image(systemName: "checkmark")
                                     .font(.caption.weight(.bold))
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(Theme.accentText)
                             } else {
                                 Image(systemName: "chevron.right")
                                     .font(.caption.weight(.semibold))

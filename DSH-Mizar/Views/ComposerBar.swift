@@ -284,7 +284,7 @@ struct CommandList: View {
                             Image(systemName: command.symbol)
                                 .font(.body.weight(.medium))
                                 .frame(width: 30, height: 30)
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(Theme.accentText)
                                 .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                             Text(command.title)
                             Spacer(minLength: 12)
@@ -323,7 +323,7 @@ struct CommandList: View {
             VStack(spacing: 6) {
                 Image(systemName: symbol)
                     .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(canAttach ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(canAttach ? Theme.accentText : Color.secondary)
                 HStack(spacing: 3) {
                     if !canAttach {
                         Image(systemName: "lock.fill")
@@ -379,7 +379,7 @@ struct ContextRing: View {
         guard let percent else { return .secondary }
         if percent >= 90 { return Theme.failed }
         if percent >= 75 { return Theme.waiting }
-        return .accentColor
+        return Theme.accentText
     }
 }
 
@@ -443,6 +443,7 @@ private struct ContextDetail: View {
                             .font(.subheadline.weight(.medium))
                     }
                     .frame(maxWidth: .infinity)
+                    .foregroundStyle(Theme.onAccent)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(compacting)
