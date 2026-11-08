@@ -33,6 +33,24 @@ struct DeepSeekBalanceTests {
         #expect(!isOfficialDeepSeekTopUpURL(link))
     }
 
+
+    @MainActor @Test func accountDeviceIdAndHostInfoIdAreDifferentNamespaces() async throws {
+        let ready = try decode(#"{"status":"ready","wallets":[{"currency":"CNY","balance":"1"}],"bonusWallets":[],"topUpURL":"https://platform.deepseek.com/top_up"}"#)
+        let controller = DeepSeekBalanceController()
+        var calls = 0
+        controller.configure(
+            tag: HostTag(hostId: "account-device-id", epoch: 1),
+            readHost: { host("mizar-host-id") },
+            readBalance: {
+                calls += 1
+                return ready
+            },
+        )
+        await controller.refresh()
+        #expect(calls == 1)
+        guard case .ready = controller.state else { Issue.record("expected ready"); return }
+    }
+
     @MainActor @Test(arguments: [HostPlugin(id: "other", capabilities: ["deepseek.balance.v1"])])
     func explicitlyOtherPluginsNeverQueryBalance(_ plugin: HostPlugin?) async {
         let controller = DeepSeekBalanceController()

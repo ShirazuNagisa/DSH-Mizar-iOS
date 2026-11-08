@@ -120,10 +120,13 @@ public final class DeepSeekBalanceController {
         do {
             let host = try await readHost()
             guard request == generation, !Task.isCancelled else { return }
-            guard host.hostId == connectionTag?.hostId else {
-                state = .unsupported
-                return
-            }
+            // Do not compare `host.info.hostId` with the connection tag. An
+            // account host is filed under its account `deviceId`, while
+            // `host.info` reports the Mizar host id; those are different
+            // namespaces by design. The tag's generation already rejects a
+            // response from a replaced socket, and the host id check made every
+            // account-connected balance card "unsupported" before a request.
+            //
             // The capability is a hint, not a second authorization gate. A host
             // that predates the plugin identity, or an app that decoded an older
             // `host.info`, can omit `plugin` while `account.balance` still works;
