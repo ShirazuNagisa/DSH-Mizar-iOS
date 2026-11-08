@@ -59,7 +59,39 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
         // sets: a background task handler registered later than launch is a
         // handler the system does not know about when it prepares the wake.
         BackgroundRefresh.shared.register()
+        // Push-to-start wakes the app in the background to create the activity.
+        // That wake is the only chance to learn the activity token before the
+        // session finishes; without this, a card created while the phone was in
+        // a pocket has no address the relay can end.
+        // A push-to-start wake may still be `.inactive` while the delegate is
+        // running. Check again once the launch has settled; a normal foreground
+        // launch has become `.active` by then and is left to RootView's start.
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard UIApplication.shared.applicationState != .active else { return }
+            await AppModel.shared.registerPushInBackground()
+        }
         return true
+    }
+
+    /// A silent end push is the one notification that must work with no screen.
+    ///
+    /// The relay sends this beside the activity-token end. It carries no alert
+    /// and no content: its only job is the background wake, after which the app
+    /// can enumerate its own ActivityKit cards and end the one that is done.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void,
+    ) {
+        guard userInfo["mizarEndLiveActivity"] as? Bool == true else {
+            completionHandler(.noData)
+            return
+        }
+        Task { @MainActor in
+            await AppModel.shared.endLiveActivitiesFromPush()
+            completionHandler(.newData)
+        }
     }
 
     func application(

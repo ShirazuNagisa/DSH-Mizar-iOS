@@ -121,6 +121,10 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
+		<!-- A silent turn-end push is the last chance to take down a card whose
+		     activity token never reached the host. Without this mode iOS can
+		     deliver the notification but cannot wake the app to end it. -->
+		<string>remote-notification</string>
 	</array>
 	<!--
 	  The local agent keeps its workspaces in Documents, and the operator is

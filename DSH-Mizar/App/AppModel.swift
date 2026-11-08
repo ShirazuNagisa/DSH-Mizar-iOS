@@ -1038,7 +1038,18 @@ final class AppModel {
             object: nil,
             queue: .main,
         ) { [weak self] _ in
-            Task { await self?.syncPushRegistration() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // A push-to-start wake can create the activity with no live
+                // socket: this process was launched in the background, not
+                // opened. Connect once so the new end address can be published
+                // before the session finishes.
+                if self.connection == nil {
+                    await self.registerPushInBackground()
+                } else {
+                    await self.syncPushRegistration()
+                }
+            }
         }
         // The other token the registration carries, and the one that arrives
         // earliest: the push-to-start token is issued after a launch, possibly
@@ -1671,6 +1682,40 @@ final class AppModel {
     /// makes the app drivable from `simctl launch` and from a UI test without
     /// typing into fields or tapping through an alert. It is the same payload
     /// the QR carries, so the path exercised is the real one.
+    /// One background launch's attempt to register the activity the system just
+    /// started, without pretending that a scene has appeared.
+    ///
+    /// The push-to-start push wakes the process only for a short window. If the
+    /// app had been suspended, no connection exists yet, so the token observer
+    /// alone cannot send the new activity token to the host. This opens the
+    /// already-stored pairing and registers once; the next foreground launch
+    /// still runs the ordinary `start()` and replaces this connection.
+    private var backgroundRegistrationStarted = false
+
+    func registerPushInBackground() async {
+        guard !backgroundRegistrationStarted, !isLocalAgentMode else { return }
+        backgroundRegistrationStarted = true
+        if connection == nil {
+            do {
+                if host == nil {
+                    hosts = try await credentials.loadAll().sorted { $0.pairedAt < $1.pairedAt }
+                    guard let stored = HostSelection.preferred(
+                        in: hosts,
+                        lastOpenedId: LastOpenedHostStore.stored(),
+                    ) else { return }
+                    host = stored
+                }
+                guard let host else { return }
+                try await connect(using: host)
+            } catch {
+                backgroundRegistrationStarted = false
+                log.add(.connection, "background activity registration could not connect: \(Self.describe(error))")
+                return
+            }
+        }
+        await syncPushRegistration()
+    }
+
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
@@ -6336,6 +6381,15 @@ final class AppModel {
             statsError = message.isEmpty ? "The computer did not answer." : message
             return nil
         }
+    }
+
+    /// The relay's silent end push woke the app to take the card down.
+    ///
+    /// Deliberately local and token-free: this path exists precisely because a
+    /// push-to-start card may not have an activity token yet. No session read is
+    /// needed; the host already made the decision, and the card is the app's.
+    func endLiveActivitiesFromPush() async {
+        await liveActivity.endForRemoteFinish()
     }
 
     /// Tell the host where to reach this phone, and whether it is on screen.

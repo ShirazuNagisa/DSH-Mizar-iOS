@@ -70,12 +70,13 @@
 //  after that: a start event arrives as an activity that is already there, and
 //  the next `refresh` adopts it, updates it, or ends it.
 //
-//  **Such a card is not end-addressable until this app runs.** An end push
-//  addresses the activity's own token, and only this app ever learns that token
-//  -- by reading `Activity.activities` while it is running. A card started
-//  remotely therefore comes down here, on the first refresh that finds nothing
-//  running, and not by an end push; the relay's end path still covers only the
-//  cards this app started itself.
+//  **Push-to-start cards become end-addressable through the wake ActivityKit
+//  grants.** The activity's own token is not in the start push, but the system
+//  wakes the app when it creates the card; `activityUpdates` (started in the
+//  controller's initializer, not only in `appOpened`) is read during that wake
+//  and the token is reported to the host. If iOS does not wake the app -- most
+//  notably after a force-quit -- no local code can learn the token; that case is
+//  an Apple platform limit, not a missing local timer.
 //
 //  **The three tokens are not interchangeable.** The device token addresses the
 //  phone's alerts. The activity token (`Activity.pushToken`, `pushType: .token`
@@ -155,6 +156,16 @@ final class LiveActivityController {
     /// the address that makes a pocketed phone show the island.
     private var startTokenWatch: Task<Void, Never>?
 
+    /// The subscription to cards the system created from a push-to-start event.
+    ///
+    /// An activity the host starts while this app is suspended is not handed to
+    /// the app as a function call: ActivityKit publishes it on `activityUpdates`,
+    /// and the app only has the window the system grants after the start push.
+    /// Reading that window is what turns a remote start into an end-addressable
+    /// card; relying on the next foreground refresh is what left a finished
+    /// session on the Lock Screen until somebody opened the app.
+    private var activityWatch: Task<Void, Never>?
+
     /// How long after a start to look for the token again.
     ///
     /// ActivityKit does not hand the token over with `request`: it is sometimes
@@ -172,6 +183,12 @@ final class LiveActivityController {
     init(settings: AppSettings = .shared, log: ActivityLog = .shared) {
         self.settings = settings
         self.log = log
+        // At launch, not at `appOpened`: a push-to-start wake creates this
+        // object without a scene, and the activity it just created is the one
+        // whose token has to reach the host. `activityUpdates` is the ActivityKit
+        // API that reports cards created while the app is off screen.
+        watchForRemoteStart()
+        watchForActivities()
     }
 
     // MARK: - What the app tells this object
@@ -210,6 +227,26 @@ final class LiveActivityController {
                     // Length, never the token: see ``ActivityLog``.
                     self.log.add(.live, "live-activity start token: \(hex.count) characters")
                 }
+            }
+        }
+    }
+
+    /// Watch for an activity the system created from a push-to-start event, and
+    /// capture its end address while the wake is still running.
+    ///
+    /// The initial scan covers the activity that already exists when the system
+    /// launches the app for the push. The sequence covers one that arrives
+    /// immediately afterwards; both paths are required because ActivityKit does
+    /// not promise which side of `didFinishLaunching` the activity is created.
+    /// Only the static scan is held on to -- no `Activity` leaves this method --
+    /// so the same Swift 6 boundary as {@link ActivityCalls.pushToken} applies.
+    private func watchForActivities() {
+        guard activityWatch == nil else { return }
+        _ = capturePushToken()
+        activityWatch = Task { [weak self] in
+            for await _ in Activity<DSHMizarActivityAttributes>.activityUpdates {
+                guard !Task.isCancelled, let self else { return }
+                _ = self.capturePushToken()
             }
         }
     }
@@ -310,6 +347,25 @@ final class LiveActivityController {
             await ActivityCalls.endAll(
                 with: LiveActivityState(),
                 why: "the on-device agent has no off-screen channel",
+            ),
+        )
+        forgetPushToken()
+    }
+
+    /// Take the card down when a silent end push wakes the app in the background.
+    ///
+    /// This is the fallback for a card whose activity token never reached this
+    /// process: ActivityKit can still enumerate its own activities here, and an
+    /// end caused locally needs no token at all. The relay sends the wake beside
+    /// the activity-token end, so a card that *was* addressable is ended twice
+    /// (idempotent), and one that was not gets its only possible end.
+    func endForRemoteFinish() async {
+        guard ActivityCalls.hasPresentable else { return }
+        log.add(
+            .live,
+            await ActivityCalls.endAll(
+                with: LiveActivityState(),
+                why: "the host said the running turn ended",
             ),
         )
         forgetPushToken()
