@@ -120,9 +120,21 @@ public final class DeepSeekBalanceController {
         do {
             let host = try await readHost()
             guard request == generation, !Task.isCancelled else { return }
-            guard host.hostId == connectionTag?.hostId,
-                  host.plugin?.supportsDeepSeekBalance == true
-            else { state = .unsupported; return }
+            guard host.hostId == connectionTag?.hostId else {
+                state = .unsupported
+                return
+            }
+            // The capability is a hint, not a second authorization gate. A host
+            // that predates the plugin identity, or an app that decoded an older
+            // `host.info`, can omit `plugin` while `account.balance` still works;
+            // gating on the hint made the page say "unsupported" forever without
+            // ever asking the account endpoint. Only an explicitly different
+            // plugin is a definitive no; everything else asks, and the endpoint's
+            // own `unsupported` status remains authoritative.
+            if let plugin = host.plugin, plugin.id != "dsh-mizar" {
+                state = .unsupported
+                return
+            }
             let response = try await readBalance()
             guard request == generation, !Task.isCancelled else { return }
             switch response {

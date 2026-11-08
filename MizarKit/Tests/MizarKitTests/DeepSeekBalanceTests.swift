@@ -33,8 +33,8 @@ struct DeepSeekBalanceTests {
         #expect(!isOfficialDeepSeekTopUpURL(link))
     }
 
-    @MainActor @Test(arguments: [nil, HostPlugin(id: "other", capabilities: ["deepseek.balance.v1"]), HostPlugin(id: "dsh-mizar", capabilities: [])])
-    func unsupportedHostsNeverQueryBalance(_ plugin: HostPlugin?) async {
+    @MainActor @Test(arguments: [HostPlugin(id: "other", capabilities: ["deepseek.balance.v1"])])
+    func explicitlyOtherPluginsNeverQueryBalance(_ plugin: HostPlugin?) async {
         let controller = DeepSeekBalanceController()
         var calls = 0
         controller.configure(tag: HostTag(hostId: "a", epoch: 1), readHost: { host("a", plugin) }, readBalance: {
@@ -44,6 +44,19 @@ struct DeepSeekBalanceTests {
         await controller.refresh()
         #expect(controller.state == .unsupported)
         #expect(calls == 0)
+    }
+
+    @MainActor @Test(arguments: [nil, HostPlugin(id: "dsh-mizar", capabilities: [])])
+    func aMissingOrIncompleteHintStillAsksTheEndpoint(_ plugin: HostPlugin?) async {
+        let controller = DeepSeekBalanceController()
+        var calls = 0
+        controller.configure(tag: HostTag(hostId: "a", epoch: 1), readHost: { host("a", plugin) }, readBalance: {
+            calls += 1
+            return .unavailable
+        })
+        await controller.refresh()
+        #expect(controller.state == .unavailable)
+        #expect(calls == 1)
     }
 
     @MainActor @Test func lateConnectionAndRefreshResultsAreRejected() async throws {
