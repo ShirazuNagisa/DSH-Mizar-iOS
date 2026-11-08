@@ -758,6 +758,8 @@ final class AppModel {
     }
     /// The task consuming host-pushed events.
     private var eventListener: Task<Void, Never>?
+    /// One coalesced session-catalog refresh for a burst of `session.changed`.
+    private var sessionChangedRefresh: Task<Void, Never>?
     /// The resident task that asks the local network whether the computer is on
     /// it. See ``lanWatchTick()``.
     ///
@@ -783,10 +785,11 @@ final class AppModel {
 
     /// How often to re-read pending interactions when nothing has been pushed.
     ///
-    /// Deliberately slow. The host announces changes, so a short interval would
-    /// be pure traffic; this only exists so that a notification lost to a
-    /// reconnect cannot leave a card on screen that no longer exists.
-    private static let interactionPollSeconds: Duration = .seconds(45)
+    /// Deliberately slow. The host announces interactions, and session.changed
+    /// covers the catalog; this is the fallback for a notification lost to a
+    /// reconnect. It also reads the session list, so a new desktop session appears
+    /// even when that event was missed.
+    private static let interactionPollSeconds: Duration = .seconds(20)
 
     private let credentials: any CredentialStore
     /// Conversations kept on the phone, so history survives a lost network.
@@ -2397,7 +2400,15 @@ final class AppModel {
         interactionPoll?.cancel()
         interactionPoll = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.refreshInteractions()
+                guard let self else { return }
+                await self.refreshInteractions()
+                // A notification lost by the host must not leave a newly
+                // started desktop session invisible until the next app launch.
+                // This is the slow safety net; the host's session.changed
+                // event is the fast path.
+                if self.appIsActive {
+                    await self.refreshRunningSessionList()
+                }
                 try? await Task.sleep(for: Self.interactionPollSeconds)
             }
         }
@@ -2416,6 +2427,10 @@ final class AppModel {
                 self.noteHostEvent(name)
                 if name == "relay.changed" {
                     await self.applyRelayChanged(data)
+                    continue
+                }
+                if name == "session.changed" {
+                    await self.handleSessionChanged()
                     continue
                 }
                 // Any other event name is for a future build; ignoring it is not
@@ -2497,6 +2512,26 @@ final class AppModel {
     /// identical from the screen, and they have completely different answers.
     ///
     /// - Parameter name: the event name.
+    /// Refresh the catalog after the host says a session appeared or changed.
+    ///
+    /// Coalesced: a desktop turn emits several summary updates, and each one is
+    /// not worth a session.list/workspace.list pair. A short delay makes the
+    /// burst one read while keeping a newly started session visibly immediate.
+    private func handleSessionChanged() async {
+        guard appIsActive, sessionChangedRefresh == nil else { return }
+        sessionChangedRefresh = Task { [weak self] in
+            defer { self?.sessionChangedRefresh = nil }
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, self.appIsActive else { return }
+            await self.refreshSessions(reconnectingIfNeeded: false)
+            // The host emits one summary event per session when its catalog is
+            // refreshed, which can be hundreds in a row. Hold the coalescing
+            // slot briefly after the read so a new-session event cannot turn
+            // that burst into a full session/workspace write every 200 ms.
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
     private func noteHostEvent(_ name: String) {
         // Scoped to the machine that pushed it. The export's "did the host tell
         // us anything" question is about *this* host, and a list that survived a
