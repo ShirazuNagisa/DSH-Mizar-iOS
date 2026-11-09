@@ -23,7 +23,7 @@ LocalKernel/
       host/host.ts               ← PlatformHost 接口（平台注入点）
       core/
         kernel.ts                ← 装配、连接、分派
-        methods.ts               ← 方法表（22 个协议方法 + kernel.* 扩展）
+        methods.ts               ← 方法表（27 个协议方法 + 6 个 kernel.* 扩展，共 33 个）
         session-store.ts         ← 会话持久化（JSONL + meta）
         turn-runner.ts           ← 回合运行器（Agent 主循环）
         interactions.ts          ← 审批/提问 broker（fail-closed）
