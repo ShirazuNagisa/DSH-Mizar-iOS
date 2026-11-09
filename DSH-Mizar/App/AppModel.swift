@@ -769,6 +769,17 @@ final class AppModel {
     /// one a manual refresh makes, and its record is the log.
     private var lanWatch: Task<Void, Never>?
 
+    /// The resident ping that notices a socket Apple still calls "connected".
+    ///
+    /// A TCP socket does not fail when the network carrying it disappears; it
+    /// goes quiet. The event stream is only a signal if the transport closes,
+    /// so a phone that lost the LAN sat on "connecting" with a dead socket and
+    /// no request ever reached the reconnect path. This asks the cheapest
+    /// question the host answers (`ping`) with its own deadline, independent of
+    /// the 60 s request timeout, and drops a socket that missed twice.
+    private var linkWatchdog: Task<Void, Never>?
+    private var linkWatchdogMisses = 0
+
     /// Host events that mean the pending set moved.
     ///
     /// `interactions.changed` covers every case on its own, and the four
@@ -2240,6 +2251,11 @@ final class AppModel {
         appIsActive = active
         updateRunningPoll()
         updateLanWatch()
+        if active {
+            startLinkWatchdog()
+        } else {
+            stopLinkWatchdog()
+        }
         // A prompt held while the app was in the background is due the moment
         // the operator is back: the turn may have ended ten minutes ago and the
         // list the app came back with is the one that says so.
@@ -2501,6 +2517,7 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             await self.noteSocketClosed(opened)
         }
+        startLinkWatchdog()
     }
 
     /// Note that the socket behind the current connection has gone.
@@ -2530,35 +2547,110 @@ final class AppModel {
             trafficNotice = true
         }
 
-        // A socket that dies on the operator's own network is the one close
-        // that cannot be left to the next read. Waiting for one would ask the
-        // lost address again and again -- the reported bug: the phone sat in a
-        // reconnect loop on the LAN it had left while the relay in the same
-        // pairing was never tried. The relay goes first here because the one
-        // fact this close carries is that the local network is gone; the direct
-        // address is still in the plan behind it, for a Wi-Fi blip.
-        guard activeEndpoint?.isLocalNetwork == true, appIsActive, !reconnecting else { return }
-        if settings.values.localNetworkFirst {
-            // The operator asked to look for the computer on their own network
-            // before giving up on it. On a phone that changed Wi-Fi networks
-            // the stored address is often dead but the *new* one answers, and
-            // this is the one automatic reconnect that can still find it.
-            log.add(.connection, "the local link closed; asking the local network before the relay")
-            Task { [weak self] in
-                guard let self else { return }
-                let switched = await self.scanForLocalNetwork()
-                if !switched, !(await self.reconnect(preferringRelay: true)) { return }
-                await self.refreshSessions(reconnectingIfNeeded: false)
-                await self.refreshInteractions()
-            }
-            return
-        }
-        log.add(.connection, "the local link closed; failing over to the relay")
+        // A socket that dies cannot be left to the next read: if the request
+        // that fails is a 60 s one, the screen says "connecting" for a minute
+        // before anything retries. The relay goes first when the local network
+        // was the route that died -- that is the one route which does not share
+        // the network that broke -- and the LAN is asked again only *after* a
+        // working socket exists. The old order asked the dead LAN first, spent
+        // its probe timeout, and on a hotspot that had changed address never
+        // reached the relay at all.
+        guard appIsActive, !reconnecting else { return }
+        let wasLocal = activeEndpoint?.isLocalNetwork == true
+        log.add(.connection, wasLocal
+            ? "the local link closed; failing over to the relay"
+            : "the socket closed; reconnecting")
         Task { [weak self] in
             guard let self else { return }
-            guard await self.reconnect(preferringRelay: true) else { return }
-            await self.refreshSessions(reconnectingIfNeeded: false)
-            await self.refreshInteractions()
+            // One dial is not always enough on a phone that changed networks:
+            // the first attempt can land while the radio is still selecting the
+            // new interface, and the old build then sat on "offline" until the
+            // operator pressed a button. Back off and try again while the app
+            // is on screen; the fourth failure is the honest one and leaves the
+            // failure card up.
+            for attempt in 0..<4 {
+                if await self.reconnect(preferringRelay: wasLocal) {
+                    await self.refreshSessions(reconnectingIfNeeded: false)
+                    await self.refreshInteractions()
+                    // The relay is up, so asking the LAN cannot delay recovery.
+                    // A Wi-Fi blip that came back gets its direct route; a
+                    // genuinely lost one stays on the relay without another
+                    // dead probe first.
+                    if wasLocal, await self.scanForLocalNetwork() {
+                        await self.refreshSessions(reconnectingIfNeeded: false)
+                        await self.refreshInteractions()
+                    }
+                    return
+                }
+                guard self.appIsActive, attempt < 3 else { return }
+                try? await Task.sleep(for: .seconds(1 << attempt))
+            }
+        }
+    }
+
+    /// Start the resident link watchdog for the current socket.
+    ///
+    /// Replaced on every connection and stopped when the app leaves the screen.
+    /// A watchdog from the previous socket is harmless -- it checks identity --
+    /// but replacing it is what keeps one task per process.
+    private func startLinkWatchdog() {
+        stopLinkWatchdog()
+        guard appIsActive, connection != nil else { return }
+        linkWatchdogMisses = 0
+        linkWatchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(8))
+                } catch {
+                    return
+                }
+                guard let self, self.appIsActive, !self.reconnecting,
+                      let watched = self.connection else { return }
+                let answered = await self.pingAnswered(watched, within: .seconds(4))
+                guard !Task.isCancelled, self.connection === watched else { return }
+                if answered {
+                    self.linkWatchdogMisses = 0
+                    continue
+                }
+                self.linkWatchdogMisses += 1
+                if self.linkWatchdogMisses < 2 { continue }
+                self.log.add(.connection, "link watchdog: no ping answer twice; dropping the socket")
+                self.linkWatchdogMisses = 0
+                await watched.disconnect()
+                await self.noteSocketClosed(watched)
+                return
+            }
+        }
+    }
+
+    private func stopLinkWatchdog() {
+        linkWatchdog?.cancel()
+        linkWatchdog = nil
+        linkWatchdogMisses = 0
+    }
+
+    /// One ping with a deadline of its own, not the request timeout.
+    ///
+    /// A dead TCP socket accepts a write and never answers. Racing the call
+    /// against a sleep is what turns that silence into a decision; the pending
+    /// continuation is cleaned up when the socket is closed immediately after.
+    private func pingAnswered(_ connection: MizarConnection, within timeout: Duration) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    _ = try await connection.call("ping", as: PingResult.self)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let answered = await group.next() ?? false
+            group.cancelAll()
+            return answered
         }
     }
 
