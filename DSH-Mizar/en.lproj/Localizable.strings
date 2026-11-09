@@ -698,6 +698,8 @@
 "Developer" = "Developer";
 "Earlier %lld steps" = "Earlier %lld steps";
 "Earlier process was omitted." = "Earlier process was omitted.";
+"Hide the process" = "Hide the process";
+"Show the process" = "Show the process";
 "Enter the code that was emailed to you." = "Enter the code that was emailed to you.";
 "Expand the composer" = "Expand the composer";
 "Hide keyboard" = "Hide keyboard";

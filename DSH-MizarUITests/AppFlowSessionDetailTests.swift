@@ -46,6 +46,50 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         XCTAssertTrue(app.frame.contains(answer.frame), "the settled answer is below the fold")
     }
 
+    /// A settled turn keeps its answer and folds the process away, and the
+    /// header brings the process back.
+    ///
+    /// The fold is the point: after a turn ends, the answer is what the reader
+    /// came for, and the status lines and the narration that came before it
+    /// are one tap away rather than in the way.
+    func testASettledTurnFoldsTheProcessAndTheHeaderBringsItBack() {
+        let app = launch(pending: false, running: true, states: true)
+        let header = app.descendants(matching: .any)["conversation.stream.header"]
+        expect(header, "the settled header is missing")
+
+        // The answer is on screen; the narration behind it is not.
+        let answer = app.staticTexts["三处都改完了，测试全绿。"]
+        expect(answer, "the answer is missing")
+        let narration = app.staticTexts["我先看一下现有的实现。"]
+        XCTAssertFalse(narration.exists, "the process is still on the page")
+
+        // A tap on the header brings the process back.
+        header.tap()
+        let unfolded = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true"),
+            object: narration,
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [unfolded], timeout: 5),
+            .completed,
+            "the process did not come back",
+        )
+        XCTAssertTrue(answer.exists, "the answer went away with the fold")
+
+        // And a second tap folds it away again.
+        header.tap()
+        let folded = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: narration,
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [folded], timeout: 5),
+            .completed,
+            "the process did not fold away",
+        )
+        XCTAssertTrue(answer.exists, "the answer went away with the fold")
+    }
+
     /// A long streaming turn survives repeated fast scrolling.
     ///
     /// The reported freeze happened while scrolling a conversation whose stream
@@ -1036,5 +1080,4 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         XCTAssertTrue(answered, "the conversation stopped answering after repeated scrolling")
         XCTAssertLessThan(waited, 6, "the conversation took \(waited)s to answer after repeated scrolling")
     }
-
 }

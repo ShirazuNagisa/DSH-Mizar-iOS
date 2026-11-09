@@ -698,6 +698,8 @@
 "Developer" = "开发者";
 "Earlier %lld steps" = "更早的 %lld 步";
 "Earlier process was omitted." = "更早的过程已省略。";
+"Hide the process" = "收起中间过程";
+"Show the process" = "展开中间过程";
 "Enter the code that was emailed to you." = "输入发送到你邮箱的验证码。";
 "Expand the composer" = "展开输入框";
 "Hide keyboard" = "收起键盘";
