@@ -18,6 +18,7 @@
 //  called.
 //
 
+import MizarKit
 import SwiftUI
 
 /// One shelf of the settings screen.
@@ -88,6 +89,16 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
     @MainActor
     @ViewBuilder
     func page(onDone: (() -> Void)?) -> some View {
+        pageBody(onDone: onDone)
+            // The shelf's identity, for the tests (and for a banner that opens
+            // one): the title is localized, the id is not.
+            .accessibilityIdentifier("settings.page.\(rawValue)")
+    }
+
+    /// The page itself, without the wrapper the identifier needs.
+    @MainActor
+    @ViewBuilder
+    private func pageBody(onDone: (() -> Void)?) -> some View {
         switch self {
         case .notifications: NotificationsSettingsView(onDone: onDone)
         case .sending: SendingSettingsView(onDone: onDone)
@@ -125,5 +136,29 @@ struct SettingsTopicRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+
+/// Where a server-sent banner's button goes.
+///
+/// The relay names a settings page by the shelf's own id. `account` is the one
+/// that is not a shelf -- it is the row above the directory -- so it opens the
+/// directory and stops there. A name this build does not know never reaches
+/// here: the banner hides a button it cannot place.
+extension AnnouncementTarget {
+    /// The shelf to push, or `nil` for the directory itself.
+    var settingsTopic: SettingsTopic? {
+        switch self {
+        case .account: nil
+        case .notifications: .notifications
+        case .sending: .sending
+        case .transfer: .transfer
+        case .localAgent: .localAgent
+        case .files: .files
+        case .community: .community
+        case .logs: .logs
+        case .about: .about
+        }
     }
 }

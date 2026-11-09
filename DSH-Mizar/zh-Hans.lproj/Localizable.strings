@@ -924,3 +924,30 @@
 "Deletes the conversations, the session list and the workspaces this phone kept, then reads them from your computer again. Nothing on the computer changes." = "会删除这台手机保存的对话、会话列表和工作区列表，然后重新从电脑读取。电脑上的内容不会改变。";
 "Everything this phone kept about your sessions is deleted first, then read again from your computer. Your account and your settings are kept." = "这台手机上关于会话的一切会先被删除，然后重新从电脑读取。你的账户和设置都会保留。";
 "Reload" = "重新加载";
+
+/* 问卷，以及宣布它的横幅。 */
+"Questionnaires" = "问卷";
+"Questionnaire" = "问卷";
+"Loading questionnaires…" = "正在读取问卷…";
+"There are no questionnaires right now." = "现在没有问卷。";
+"Fill one in and the reward it carries is added to your account. Each account can answer each questionnaire once." = "填写后奖励会加到你的账户上。每份问卷每个账户只能填写一次。";
+"Answering one adds the reward it shows to your account. Each account can answer each questionnaire once." = "填写后会把上面显示的奖励加到你的账户上。每份问卷每个账户只能填写一次。";
+"Done" = "完成";
+"%lld days" = "%lld 天";
+"Reward: %lld days of paid access" = "奖励：%lld 天付费权益";
+"Questions" = "问题";
+"Answers are sent to the Mizar survey server and are not used to train anything in this app." = "答案会发送到 Mizar 问卷服务器，不会用于在这款应用里训练任何东西。";
+"Thank you — %lld days have been added." = "谢谢，已增加 %lld 天。";
+"You have already answered this questionnaire." = "你已经填写过这份问卷。";
+"Sending…" = "正在提交…";
+"Submit" = "提交";
+"Required" = "必填";
+"Your answer" = "你的回答";
+"The questionnaire could not be submitted." = "问卷没能提交。";
+"Sign in first to fill in a questionnaire." = "请先登录再填写问卷。";
+"Questionnaires are unavailable right now. Try again later." = "问卷暂时不可用，请稍后再试。";
+"That questionnaire is no longer available." = "这份问卷已经不可用了。";
+"You have already filled in this questionnaire." = "你已经填写过这份问卷。";
+"Some answers were not accepted. Check the form and try again." = "有些答案没有被接受，请检查后重试。";
+"This account has already used that invite code." = "这个账户已经用过该邀请码。";
+"Dismiss" = "关闭";

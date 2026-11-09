@@ -73,6 +73,9 @@ struct RootView: View {
         }
         .task {
             await model.account.start()
+            // The announcement socket's identity is the session, and `start()`
+            // is what reads it: after this there is a token or there is not.
+            model.syncAnnouncements()
             // A subscription bought on another device, or before a reinstall,
             // exists only in Apple's records: the relay has to be told what the
             // App Store holds, or the plan lapses at the end of the period.

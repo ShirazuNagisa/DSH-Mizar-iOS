@@ -923,3 +923,30 @@
 "Deletes the conversations, the session list and the workspaces this phone kept, then reads them from your computer again. Nothing on the computer changes." = "Deletes the conversations, the session list and the workspaces this phone kept, then reads them from your computer again. Nothing on the computer changes.";
 "Everything this phone kept about your sessions is deleted first, then read again from your computer. Your account and your settings are kept." = "Everything this phone kept about your sessions is deleted first, then read again from your computer. Your account and your settings are kept.";
 "Reload" = "Reload";
+
+/* Questionnaires, in the settings sheet and in the banner that announces one. */
+"Questionnaires" = "Questionnaires";
+"Questionnaire" = "Questionnaire";
+"Loading questionnaires…" = "Loading questionnaires…";
+"There are no questionnaires right now." = "There are no questionnaires right now.";
+"Fill one in and the reward it carries is added to your account. Each account can answer each questionnaire once." = "Fill one in and the reward it carries is added to your account. Each account can answer each questionnaire once.";
+"Answering one adds the reward it shows to your account. Each account can answer each questionnaire once." = "Answering one adds the reward it shows to your account. Each account can answer each questionnaire once.";
+"Done" = "Done";
+"%lld days" = "%lld days";
+"Reward: %lld days of paid access" = "Reward: %lld days of paid access";
+"Questions" = "Questions";
+"Answers are sent to the Mizar survey server and are not used to train anything in this app." = "Answers are sent to the Mizar survey server and are not used to train anything in this app.";
+"Thank you — %lld days have been added." = "Thank you — %lld days have been added.";
+"You have already answered this questionnaire." = "You have already answered this questionnaire.";
+"Sending…" = "Sending…";
+"Submit" = "Submit";
+"Required" = "Required";
+"Your answer" = "Your answer";
+"The questionnaire could not be submitted." = "The questionnaire could not be submitted.";
+"Sign in first to fill in a questionnaire." = "Sign in first to fill in a questionnaire.";
+"Questionnaires are unavailable right now. Try again later." = "Questionnaires are unavailable right now. Try again later.";
+"That questionnaire is no longer available." = "That questionnaire is no longer available.";
+"You have already filled in this questionnaire." = "You have already filled in this questionnaire.";
+"Some answers were not accepted. Check the form and try again." = "Some answers were not accepted. Check the form and try again.";
+"This account has already used that invite code." = "This account has already used that invite code.";
+"Dismiss" = "Dismiss";

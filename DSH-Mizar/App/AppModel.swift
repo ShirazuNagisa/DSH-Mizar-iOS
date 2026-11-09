@@ -84,6 +84,24 @@ final class AppModel {
     let subscription: SubscriptionController
     /// The GitHub contributors shown in Settings, cached for a day.
     let credits = CreditsController()
+    /// The operator's banners, and the socket they arrive on.
+    ///
+    /// Owned here rather than by the shell because the socket's lifetime is the
+    /// account's, not a screen's: it opens when a session exists and the app is
+    /// in the foreground, and closes when either stops being true.
+    let announcements = AnnouncementCenter()
+
+    /// A settings page something outside the settings sheet asked to open.
+    ///
+    /// The sidebar consumes it, opens the sheet and pushes the page. One value
+    /// with an id rather than a boolean, so asking for the same page twice in a
+    /// row is still two requests.
+    struct SettingsRequest: Identifiable, Equatable {
+        let id = UUID()
+        /// The shelf to push; `nil` opens the directory itself.
+        let topic: SettingsTopic?
+    }
+    private(set) var settingsRequest: SettingsRequest?
 
     /// The machine whose pairing just completed and has not been named yet.
     ///
@@ -2260,6 +2278,43 @@ final class AppModel {
         // the operator is back: the turn may have ended ten minutes ago and the
         // list the app came back with is the one that says so.
         if active { deliverHeldPromptsIfDue() }
+        // A banner is only useful while somebody can see it, and the relay
+        // broadcasts to whoever is connected. Closing the socket in the
+        // background is also what keeps iOS from treating us as an app that
+        // holds a socket for no reason.
+        syncAnnouncements()
+    }
+
+    /// Ask the settings sheet to open on one page.
+    ///
+    /// Used by the banner's button and by anything else that knows the operator
+    /// belongs somewhere specific. The sidebar is the owner of the sheet; this
+    /// is only the request.
+    ///
+    /// - Parameter topic: the shelf to push.
+    func openSettings(_ topic: SettingsTopic?) {
+        settingsRequest = SettingsRequest(topic: topic)
+    }
+
+    /// Mark the request as handled, so the sheet does not reopen for it.
+    func consumeSettingsRequest() {
+        settingsRequest = nil
+    }
+
+    /// Start or stop the announcement socket to match the account and the app.
+    func syncAnnouncements() {
+        #if DEBUG
+        // A UI test whose account server is a local mock must not reach the
+        // real banner socket with a fixture token: it would either be refused
+        // (noise in production logs) or, worse, deliver a real banner over the
+        // screen the test is reading. The suite that wants banners passes
+        // `-mizarAnnouncementURL` and gets a mock socket.
+        if AnnouncementCenter.overrideURL == nil,
+           ProcessInfo.processInfo.arguments.contains("-mizarAccountURL") {
+            return
+        }
+        #endif
+        announcements.update(token: account.token, active: appIsActive && account.isLoggedIn)
     }
 
     /// Tell the running poll what the open conversation is drawing.
@@ -3267,6 +3322,9 @@ final class AppModel {
     /// than a dropped socket should cost either way, but a phone that has just
     /// signed in should show as signed in on the relay within a round trip.
     private func accountIdentityChanged() {
+        // The socket's identity is the session token, so any change is a
+        // reconnect; done before the guard below, which is about the host.
+        syncAnnouncements()
         guard host != nil else { return }
         accountReconnectTask?.cancel()
         accountReconnectTask = Task { [weak self] in

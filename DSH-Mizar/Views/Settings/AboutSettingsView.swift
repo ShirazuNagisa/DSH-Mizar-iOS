@@ -31,6 +31,7 @@ struct AboutSettingsView: View {
         SettingsPage(title: "About & More", onDone: onDone) {
             List {
                 aboutSection
+                surveysSection
                 creditsSection
                 if AppModel.showsManualPairing {
                     developerSection
@@ -78,6 +79,28 @@ struct AboutSettingsView: View {
             .accessibilityIdentifier("settings.about.version")
         } header: {
             SettingsSectionHeader("About")
+        }
+    }
+
+    // MARK: - 问卷
+
+    /// The operator's questionnaires, one row in and one shelf further.
+    ///
+    /// It lives on this page because a questionnaire is about the product the
+    /// way "about" is: the operator asks, the operator pays in paid days, and
+    /// nothing about using the app changes while one is open.
+    private var surveysSection: some View {
+        Section {
+            NavigationLink {
+                SurveysView()
+            } label: {
+                SettingsRowLabel("Questionnaires", systemImage: "checklist")
+            }
+            .accessibilityIdentifier("settings.about.surveys")
+        } header: {
+            SettingsSectionHeader("Questionnaires")
+        } footer: {
+            Text("Fill one in and the reward it carries is added to your account. Each account can answer each questionnaire once.")
         }
     }
 

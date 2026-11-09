@@ -17,13 +17,16 @@ import Testing
 @Suite("Relay tiers")
 struct RelayTierTests {
     private let free = "https://dshmizar.shirazu-nagisa.com"
-    // The account-gated relay: same host, own port, no anonymous traffic.
+    // The account-gated relay on its own port, kept for 0.9.8 and older builds.
     private let paid = "https://dshmizar-1.shirazu-nagisa.com:8443"
+    // What 0.9.9 uses for every plan: the account relay on 443.
+    private let unified = "https://dshmizar-1.shirazu-nagisa.com"
 
-    @Test("the plan chooses the matching public relay")
+    @Test("every plan is on the account relay from 0.9.9")
     func baseURLByPlan() {
-        #expect(RelayTier.baseURL(paid: true) == paid)
-        #expect(RelayTier.baseURL(paid: false) == free)
+        #expect(RelayTier.baseURL(paid: true) == unified)
+        #expect(RelayTier.baseURL(paid: false) == unified)
+        #expect(RelayTier.unifiedBaseURL == unified)
     }
 
     @Test("recognises the public relays through a room path")
@@ -31,7 +34,9 @@ struct RelayTierTests {
         #expect(RelayTier.isPublicRelay(free))
         #expect(RelayTier.isPublicRelay("\(free)/r/ROOM"))
         #expect(RelayTier.isPublicRelay(paid))
+        #expect(RelayTier.isPublicRelay(unified))
         #expect(RelayTier.isPaidRelay("\(paid)/r/ROOM"))
+        #expect(RelayTier.isPaidRelay("\(unified)/r/ROOM"))
         #expect(!RelayTier.isPaidRelay(free))
         #expect(!RelayTier.isPublicRelay("https://relay.example.com/r/ROOM"))
         #expect(!RelayTier.isPublicRelay("ftp://dshmizar.shirazu-nagisa.com"))

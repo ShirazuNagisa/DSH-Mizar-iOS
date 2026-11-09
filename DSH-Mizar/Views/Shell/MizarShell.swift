@@ -71,22 +71,49 @@ struct MizarShell: View {
             // indicator. The reader itself stays inside the safe area so it can
             // say how big the screen is; each layer's hosting controller takes
             // its own safe area, and the keyboard's, from the window.
-            DrawerContainer(
-                shell: shell,
-                compact: compact,
-                leadingWidth: leading,
-                trailingWidth: trailing,
-                pinnedVisible: shell.pinnedVisible,
-                indexColumnShown: indexColumnShown,
-                roots: roots ?? makeRoots(),
-                layers: layers,
-            )
+            ZStack(alignment: .top) {
+                DrawerContainer(
+                    shell: shell,
+                    compact: compact,
+                    leadingWidth: leading,
+                    trailingWidth: trailing,
+                    pinnedVisible: shell.pinnedVisible,
+                    indexColumnShown: indexColumnShown,
+                    roots: roots ?? makeRoots(),
+                    layers: layers,
+                )
                 .frame(width: size.width, height: size.height)
                 .ignoresSafeArea()
                 .onChange(of: leading, initial: true) { _, width in shell.leadingWidth = width }
                 .onChange(of: trailing, initial: true) { _, width in shell.trailingWidth = width }
                 .onChange(of: size.width, initial: true) { _, width in shell.containerWidth = width }
                 .onChange(of: compact, initial: true) { _, compact in layers.compact = compact }
+
+                // The banner is above the card, the sidebar and the composer:
+                // it is the app talking, not a screen. It is placed inside the
+                // safe area's top so it clears the island and the status bar,
+                // and it never takes a tap meant for the screen underneath --
+                // only the card itself is interactive.
+                if let announcement = model.announcements.banner {
+                    AnnouncementBanner(
+                        announcement: announcement,
+                        onAction: { destination in
+                            model.openSettings(destination.settingsTopic)
+                        },
+                        onDismiss: { model.announcements.dismiss() },
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.top, insets.top + 8)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity,
+                        ),
+                    )
+                    .zIndex(1)
+                }
+            }
+            .animation(Motion.pick(.mizarBouncy), value: model.announcements.banner?.id)
                 // No second launch animation. The root's `LaunchingView`
                 // already covers the wait; once the phase is an answer the
                 // shell is the page, directly. The old turning mark here was a

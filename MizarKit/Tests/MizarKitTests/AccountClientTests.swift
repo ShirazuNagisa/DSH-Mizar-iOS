@@ -72,6 +72,64 @@ struct AccountClientTests {
         #expect(sentDevice["appVersion"] as? String == "0.9.2")
     }
 
+    @Test("asks for the questionnaires and submits answers with the documented body")
+    func surveysRoute() async throws {
+        let transport = ScriptedHTTPTransport()
+        await transport.on(
+            "surveys",
+            body: #"{"surveys":[{"id":"s1","title":"T","questions":[],"rewardDays":7,"active":true,"completed":false}]}"#,
+        )
+        await transport.on(
+            "surveys/submit",
+            body: #"{"user":\#(Self.userJSON),"rewardDays":7}"#,
+        )
+        let client = makeClient(transport)
+
+        let surveys = try await client.surveys(token: "mza_token")
+        #expect(surveys.count == 1)
+        #expect(surveys[0].id == "s1")
+
+        let submission = try await client.submitSurvey(
+            token: "mza_token",
+            surveyID: "s1",
+            answers: [
+                SurveyAnswer(questionId: "useful", value: .text("yes")),
+                SurveyAnswer(questionId: "more", value: .choices(["a", "b"])),
+            ],
+        )
+        #expect(submission.rewardDays == 7)
+        #expect(submission.user.username == "shirazu")
+
+        let requests = await transport.recorded()
+        #expect(requests.count == 2)
+        #expect(requests[0].url?.path == "/account/v1/surveys")
+        #expect(requests[0].value(forHTTPHeaderField: "authorization") == "Bearer mza_token")
+        #expect(requests[1].url?.path == "/account/v1/surveys/submit")
+        let body = try jsonBody(of: requests[1])
+        #expect(body["surveyId"] as? String == "s1")
+        let answers = try #require(body["answers"] as? [[String: Any]])
+        #expect(answers.count == 2)
+        #expect(answers[0]["questionId"] as? String == "useful")
+        #expect(answers[0]["value"] as? String == "yes")
+        #expect(answers[1]["value"] as? [String] == ["a", "b"])
+    }
+
+    @Test("reads the banners through the polling twin")
+    func announcementsRoute() async throws {
+        let transport = ScriptedHTTPTransport()
+        await transport.on(
+            "announcements",
+            body: #"{"announcements":[{"id":"a1","title":"Hi","body":"There","active":true}]}"#,
+        )
+        let client = makeClient(transport)
+        let list = try await client.announcements(token: "mza_token")
+        #expect(list.count == 1)
+        #expect(list[0].title == "Hi")
+        let request = try #require(await transport.recorded().first)
+        #expect(request.url?.path == "/account/v1/announcements")
+        #expect(request.value(forHTTPHeaderField: "authorization") == "Bearer mza_token")
+    }
+
     @Test("sends the bearer token on every authenticated route")
     func bearerHeader() async throws {
         let transport = ScriptedHTTPTransport()

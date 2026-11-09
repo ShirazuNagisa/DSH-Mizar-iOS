@@ -1892,6 +1892,22 @@ const ACCOUNT_PREFIX = '/account/v1'
 const INVITE_CODE = 'MOCK-INVITE'
 /** How much paid time redeeming the invite adds. */
 const INVITE_DAYS = 30
+/** The survey the questionnaire test fills in. */
+const SURVEY_ID = 'mock-survey'
+/** What filling it in pays. */
+const SURVEY_DAYS = 7
+/** The banner the announcement socket sends on connection. */
+const ANNOUNCEMENT = {
+  id: 'mock-announcement',
+  title: 'Mock announcement',
+  body: 'A banner from the fixture relay.',
+  symbol: 'megaphone.fill',
+  tone: 'info',
+  button: { label: 'Open notifications', target: 'notifications' },
+  createdAt: Date.now(),
+  expiresAt: null,
+  active: true,
+}
 /** The password of the fixture account, for the sign-in test. */
 const FIXTURE_PASSWORD = 'mizar-test-password'
 /** The product the App Store transaction route accepts. */
@@ -1907,6 +1923,8 @@ const SUBSCRIPTION_PRODUCT = 'me.shirazu.dshmizar.paid.monthly'
 let accounts = new Map()
 let accountSessions = new Map()
 let accountSerial = 0
+/** Survey ids each user id has answered. */
+let surveyResponses = new Map()
 /** How many App Store transactions the fixture has been sent. */
 let appStoreTransactions = 0
 
@@ -1917,6 +1935,7 @@ function resetAccounts() {
   accountSessions = new Map()
   accountSerial = 0
   appStoreTransactions = 0
+  surveyResponses = new Map()
   const id = '11111111-2222-4333-8444-555555555555'
   accounts.set(id, {
     id,
@@ -2222,6 +2241,89 @@ function handleAccount(request, response, url) {
       const base = Math.max(now, user.grantedPaidUntil ?? 0)
       user.grantedPaidUntil = base + INVITE_DAYS * 24 * 60 * 60 * 1000
       answer(200, { user: publicUser(user, user.devices.at(-1)?.id) })
+    })
+    return true
+  }
+
+  if (method === 'GET' && route === '/announcements') {
+    const user = accountFor(request)
+    if (!user) return refusal(401, 'UNAUTHENTICATED', 'sign in required'), true
+    answer(200, { announcements: [ANNOUNCEMENT] })
+    return true
+  }
+
+  if (method === 'GET' && route === '/surveys') {
+    const user = accountFor(request)
+    if (!user) return refusal(401, 'UNAUTHENTICATED', 'sign in required'), true
+    const done = surveyResponses.get(user.id) ?? new Set()
+    answer(200, {
+      surveys: [
+        {
+          id: SURVEY_ID,
+          title: 'How is 0.9.9?',
+          summary: 'Two questions, seven days.',
+          rewardDays: SURVEY_DAYS,
+          active: true,
+          expiresAt: null,
+          completed: done.has(SURVEY_ID),
+          completedAt: null,
+          questions: [
+            {
+              id: 'rating',
+              type: 'single',
+              prompt: 'How is it?',
+              required: true,
+              options: [
+                { id: 'good', label: 'Good' },
+                { id: 'bad', label: 'Bad' },
+              ],
+            },
+            {
+              id: 'used',
+              type: 'multi',
+              prompt: 'What did you use?',
+              required: false,
+              options: [
+                { id: 'banner', label: 'Banner' },
+                { id: 'survey', label: 'Survey' },
+              ],
+            },
+            {
+              id: 'note',
+              type: 'text',
+              prompt: 'Anything else?',
+              required: false,
+              maxLength: 200,
+            },
+          ],
+        },
+      ],
+    })
+    return true
+  }
+
+  if (method === 'POST' && route === '/surveys/submit') {
+    const user = accountFor(request)
+    if (!user) return refusal(401, 'UNAUTHENTICATED', 'sign in required'), true
+    withBody((parsed) => {
+      const surveyId = String(parsed.surveyId ?? '')
+      if (surveyId !== SURVEY_ID) {
+        return refusal(404, 'SURVEY_NOT_FOUND', 'no such survey')
+      }
+      const done = surveyResponses.get(user.id) ?? new Set()
+      if (done.has(SURVEY_ID)) {
+        return refusal(409, 'SURVEY_ALREADY_DONE', 'already answered')
+      }
+      const answers = Array.isArray(parsed.answers) ? parsed.answers : []
+      const rating = answers.find((answer) => answer.questionId === 'rating')
+      if (!rating || !['good', 'bad'].includes(rating.value)) {
+        return refusal(400, 'SURVEY_INVALID_ANSWERS', 'the rating is missing')
+      }
+      done.add(SURVEY_ID)
+      surveyResponses.set(user.id, done)
+      const base = Math.max(now, user.grantedPaidUntil ?? 0)
+      user.grantedPaidUntil = base + SURVEY_DAYS * 24 * 60 * 60 * 1000
+      answer(200, { user: publicUser(user, user.devices.at(-1)?.id), rewardDays: SURVEY_DAYS })
     })
     return true
   }
@@ -2740,8 +2842,20 @@ wss.on('connection', (socket) => {
   handleSocket(socket)
 })
 
+const announcementWss = new WebSocketServer({ noServer: true })
+announcementWss.on('connection', (socket) => {
+  // The snapshot frame, exactly as the relay sends it: a phone that connects
+  // while the banner is live draws it without waiting for a new one.
+  socket.send(JSON.stringify({ type: 'snapshot', announcements: [ANNOUNCEMENT] }))
+})
+
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`)
+  if (url.pathname === '/app/v1/announcements') {
+    console.log(`announcement socket: ${request.socket.remoteAddress} session=${request.headers['x-mizar-session'] ? 'yes' : 'no'}`)
+    announcementWss.handleUpgrade(request, socket, head, (ws) => announcementWss.emit('connection', ws, request))
+    return
+  }
   if (url.pathname !== WS_PATH) {
     // The same refusal the library gives for an upgrade to a path this listener
     // does not serve; nothing in this fixture dials any other path except the

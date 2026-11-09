@@ -319,6 +319,51 @@ public struct AccountClient: Sendable {
         ).user
     }
 
+    // MARK: - Surveys
+
+    /// The questionnaires this account may fill in.
+    ///
+    /// - Parameter token: the bearer token.
+    /// - Returns: the open surveys, each carrying whether this account already
+    ///   answered it and the reward it pays.
+    public func surveys(token: String) async throws -> [Survey] {
+        try await get("surveys", token: token, as: SurveyListEnvelope.self).surveys
+    }
+
+    /// Submit one filled-in questionnaire.
+    ///
+    /// - Parameters:
+    ///   - token: the bearer token.
+    ///   - surveyID: the survey's id.
+    ///   - answers: one answer per answered question. Unanswered optional
+    ///     questions are simply absent.
+    /// - Returns: the updated profile and the reward that was granted.
+    public func submitSurvey(
+        token: String,
+        surveyID: String,
+        answers: [SurveyAnswer],
+    ) async throws -> SurveySubmission {
+        try await post(
+            "surveys/submit",
+            token: token,
+            body: SurveySubmitBody(surveyId: surveyID, answers: answers),
+            as: SurveySubmission.self,
+        )
+    }
+
+    // MARK: - Announcements
+
+    /// The banners live right now.
+    ///
+    /// The polling twin of the announcement socket: what a phone that cannot
+    /// hold a socket reads on the foreground, and what a test asserts against.
+    ///
+    /// - Parameter token: the bearer token.
+    /// - Returns: every live banner, oldest first.
+    public func announcements(token: String) async throws -> [Announcement] {
+        try await get("announcements", token: token, as: AnnouncementListEnvelope.self).announcements
+    }
+
     // MARK: - Internals
 
     /// A JSON body to send.
@@ -379,6 +424,19 @@ public struct AccountClient: Sendable {
     /// The `{user}` envelope.
     struct UserEnvelope: Codable, Sendable {
         let user: AccountUser
+    }
+
+    struct SurveyListEnvelope: Codable, Sendable {
+        let surveys: [Survey]
+    }
+
+    struct AnnouncementListEnvelope: Codable, Sendable {
+        let announcements: [Announcement]
+    }
+
+    struct SurveySubmitBody: Codable, Sendable {
+        let surveyId: String
+        let answers: [SurveyAnswer]
     }
 
     /// The error body the account API documents.

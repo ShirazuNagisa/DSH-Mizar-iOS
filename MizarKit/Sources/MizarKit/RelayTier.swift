@@ -2,17 +2,22 @@
 //  RelayTier.swift
 //  MizarKit
 //
-//  The two public relays, and how a pairing moves between them.
+//  The public relays, and how a pairing moves between them.
 //
-//  A paid account's tunnel belongs on the account relay; a free account's on the
-//  free relay. The host cannot know which one a phone's account is, so the phone
-//  asks the host to move (`relay.set`) and keeps the base URL it stores in
+//  **From 0.9.9 every phone uses the account relay**, free plan included: one
+//  origin, one certificate, one place to send an announcement from. The free
+//  relay still exists -- older builds pair on it and keep working -- and its
+//  origin stays in the lists below so a stored URL from one of them can still
+//  be recognised and repaired.
+//
+//  The host cannot know which relay a phone should be on, so the phone asks it
+//  to move (`relay.set`) and keeps the base URL it stores in
 //  `PairedHost.baseURL` in step with the answer.
 //
 //  Two rules keep that safe:
 //
-//  1. **Only these two origins are selectable.** The host owns the same
-//     allowlist; this side never asks for anywhere else.
+//  1. **Only these origins are selectable.** The host owns the same allowlist;
+//     this side never asks for anywhere else.
 //  2. **The room is in the path, not the origin.** Moving relays keeps
 //     `/r/<room>` and only swaps the scheme and host, which is what lets an old
 //     stored URL be repaired by trying the other relay with the same room.
@@ -31,25 +36,42 @@ public enum RelayTier {
     /// not know this address simply never dials it.
     public static let paidBaseURL = "https://dshmizar-1.shirazu-nagisa.com:8443"
 
+    /// The origin every 0.9.9 phone uses, whatever its plan.
+    ///
+    /// The account relay (443, the same process that owns accounts, the paid
+    /// gate, the traffic ledger and the admin page). It carries a signed-in
+    /// free account at the free allowance and a paid one at the paid allowance;
+    /// the anonymous caller is still refused, so the anti-abuse rules are what
+    /// protect the paid lane rather than the hostname.
+    public static let unifiedBaseURL = "https://dshmizar-1.shirazu-nagisa.com"
+
     /// The origin the tunnel should use for an account.
+    ///
+    /// One answer since 0.9.9: free and paid traffic both ride the account
+    /// relay. The parameter is kept because callers still phrase the question
+    /// that way, and because a future split would come back through here.
+    ///
     /// - Parameter paid: whether the signed-in account is paid.
-    /// - Returns: the matching relay origin.
+    /// - Returns: the relay origin.
     public static func baseURL(paid: Bool) -> String {
-        paid ? paidBaseURL : freeBaseURL
+        _ = paid
+        return unifiedBaseURL
     }
 
     /// Whether an origin is one of the two public relays.
     /// - Parameter baseURL: a relay origin or a room URL under one.
     /// - Returns: whether it is a public relay.
     public static func isPublicRelay(_ baseURL: String) -> Bool {
-        canonicalOrigin(baseURL) == freeBaseURL || canonicalOrigin(baseURL) == paidBaseURL
+        canonicalOrigin(baseURL) == freeBaseURL
+            || canonicalOrigin(baseURL) == paidBaseURL
+            || canonicalOrigin(baseURL) == unifiedBaseURL
     }
 
     /// Whether an origin is the account relay.
     /// - Parameter baseURL: a relay origin or a room URL under one.
     /// - Returns: whether it is the paid relay.
     public static func isPaidRelay(_ baseURL: String) -> Bool {
-        canonicalOrigin(baseURL) == paidBaseURL
+        canonicalOrigin(baseURL) == paidBaseURL || canonicalOrigin(baseURL) == unifiedBaseURL
     }
 
     /// The scheme-and-host of a URL, lowercased, without a trailing slash.

@@ -535,6 +535,15 @@ public enum AccountErrorCode {
     public static let inviteInvalid = "INVITE_INVALID"
     public static let inviteExpired = "INVITE_EXPIRED"
     public static let inviteUsedUp = "INVITE_USED_UP"
+    /// This account already collected what that code gives.
+    public static let inviteAlreadyUsed = "INVITE_ALREADY_USED"
+    /// Surveys are not configured on the relay, or it could not reach the store.
+    public static let surveyUnavailable = "SURVEY_UNAVAILABLE"
+    public static let surveyNotFound = "SURVEY_NOT_FOUND"
+    /// This account already answered that survey and was already paid for it.
+    public static let surveyAlreadyDone = "SURVEY_ALREADY_DONE"
+    /// An answer was missing, unknown, or did not fit its question.
+    public static let surveyInvalidAnswers = "SURVEY_INVALID_ANSWERS"
     public static let appStoreTokenInvalid = "APPSTORE_TOKEN_INVALID"
     public static let appStoreProductMismatch = "APPSTORE_PRODUCT_MISMATCH"
     public static let appStoreAccountMismatch = "APPSTORE_ACCOUNT_MISMATCH"

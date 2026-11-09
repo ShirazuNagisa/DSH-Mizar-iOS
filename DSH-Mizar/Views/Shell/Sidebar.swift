@@ -621,6 +621,8 @@ private struct SidebarFooter: View {
     /// Bumped on every open so the header's icon starts a fresh load rather
     /// than finishing behind the sheet presentation.
     @State private var settingsAnimationToken = 0
+    /// The shelf a banner (or anything else outside the sheet) asked to open.
+    @State private var settingsInitialTopic: SettingsTopic?
     @State private var showingBalance = false
     @Environment(AppModel.self) private var model
 
@@ -730,9 +732,24 @@ private struct SidebarFooter: View {
                 SettingsView(
                     onDone: { showingSettings = false },
                     animationToken: settingsAnimationToken,
+                    initialTopic: settingsInitialTopic,
                 )
+                    // One identity per request: a banner that asks for a page
+                    // while the sheet is already open must land on that page,
+                    // and a fresh stack is the smallest way to say so.
+                    .id(settingsAnimationToken)
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
+            }
+            // The gear is not the only way in any more: a banner's button can
+            // ask for one page, and this is what turns that request into the
+            // sheet the operator sees.
+            .onChange(of: model.settingsRequest) { _, request in
+                guard let request else { return }
+                settingsInitialTopic = request.topic
+                settingsAnimationToken += 1
+                showingSettings = true
+                model.consumeSettingsRequest()
             }
         }
         .padding(.horizontal, 12)

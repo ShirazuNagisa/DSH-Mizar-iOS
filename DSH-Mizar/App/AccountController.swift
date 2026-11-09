@@ -80,6 +80,24 @@ final class AccountController {
     /// and overrides the relay's Gravatar/generated/Apple-monogram fallback.
     private(set) var customAvatar: UIImage?
 
+    /// How a questionnaire fetch went.
+    enum SurveyPhase: Equatable {
+        case idle
+        case loading
+        case loaded
+        case failed
+    }
+
+    /// The questionnaires the relay dispatched, with this account's state.
+    ///
+    /// Reloaded when the questionnaires page opens and after a submission; the
+    /// list is the server's answer rather than a cache, because "已填写" is
+    /// decided there.
+    private(set) var surveys: [Survey] = []
+    private(set) var surveyPhase: SurveyPhase = .idle
+    /// Why the last survey fetch failed, for the page to show.
+    private(set) var surveyError: String?
+
     /// The install id: this phone's device id, and the relay client id.
     let installId: String
 
@@ -505,6 +523,62 @@ final class AccountController {
         }
     }
 
+    // MARK: - Questionnaires
+
+    /// Read the questionnaires this account may fill in.
+    ///
+    /// Safe while signed out: it clears the list instead of failing, so a
+    /// signed-out page never shows forms from a previous session.
+    func loadSurveys() async {
+        guard let session, session.isUsable else {
+            surveys = []
+            surveyError = nil
+            surveyPhase = .idle
+            return
+        }
+        surveyPhase = .loading
+        do {
+            surveys = try await client.surveys(token: session.token)
+            surveyError = nil
+            surveyPhase = .loaded
+        } catch {
+            surveyError = (error as? AccountError).map(message(for:)) ?? error.localizedDescription
+            surveyPhase = .failed
+        }
+    }
+
+    /// Submit one questionnaire and collect its reward.
+    ///
+    /// - Parameters:
+    ///   - survey: the questionnaire, as it was handed to the form.
+    ///   - answers: one answer per answered question.
+    /// - Returns: the paid days granted, or `nil` when the relay refused the
+    ///   submission; ``lastError`` says why.
+    func submitSurvey(_ survey: Survey, answers: [SurveyAnswer]) async -> Int? {
+        guard let session, session.isUsable else {
+            lastError = String(localized: "Sign in first to fill in a questionnaire.")
+            return nil
+        }
+        working = true
+        lastError = nil
+        defer { working = false }
+        do {
+            let result = try await client.submitSurvey(
+                token: session.token,
+                surveyID: survey.id,
+                answers: answers,
+            )
+            apply(user: result.user)
+            // The server decides "已填写"; ask it again rather than marking the
+            // row here, so the page and the server cannot disagree.
+            await loadSurveys()
+            return result.rewardDays
+        } catch {
+            lastError = message(for: AccountError.transport(error))
+            return nil
+        }
+    }
+
     /// Ask one connected computer for a token this phone may use.
     ///
     /// - Parameter desktop: the computer, from ``desktops``.
@@ -774,6 +848,16 @@ final class AccountController {
             String(localized: "That invite code has expired.")
         case AccountErrorCode.inviteUsedUp:
             String(localized: "That invite code has been used up.")
+        case AccountErrorCode.inviteAlreadyUsed:
+            String(localized: "This account has already used that invite code.")
+        case AccountErrorCode.surveyUnavailable:
+            String(localized: "Questionnaires are unavailable right now. Try again later.")
+        case AccountErrorCode.surveyNotFound:
+            String(localized: "That questionnaire is no longer available.")
+        case AccountErrorCode.surveyAlreadyDone:
+            String(localized: "You have already filled in this questionnaire.")
+        case AccountErrorCode.surveyInvalidAnswers:
+            String(localized: "Some answers were not accepted. Check the form and try again.")
         case AccountErrorCode.appStoreTokenInvalid:
             String(localized: "The App Store receipt could not be verified. Try restoring purchases.")
         case AccountErrorCode.appStoreProductMismatch:

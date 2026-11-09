@@ -35,17 +35,32 @@ struct SettingsView: View {
     /// identity so one load starts when the sheet opens, not when its view was
     /// first built.
     var animationToken: Int = 0
+    /// The shelf to push as the sheet opens, when something outside asked for
+    /// one (the announcement banner's button, today).
+    var initialTopic: SettingsTopic?
+    /// What is pushed above the directory. Empty is the front page.
+    @State private var path: [SettingsTopic] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 header
                 accountSection
                 topicsSection
             }
+            .navigationDestination(for: SettingsTopic.self) { topic in
+                topic.page(onDone: onDone)
+            }
             .navigationTitle("")
             // A small window keeps its title small.
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                // An entry that named a page lands on it; the gear names none
+                // and lands on the directory, as it always has.
+                if let initialTopic, path.isEmpty {
+                    path = [initialTopic]
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Settings")
@@ -155,9 +170,7 @@ struct SettingsView: View {
     private var topicsSection: some View {
         Section {
             ForEach(SettingsTopic.allCases) { topic in
-                NavigationLink {
-                    topic.page(onDone: onDone)
-                } label: {
+                NavigationLink(value: topic) {
                     SettingsTopicRow(topic: topic)
                 }
                 .accessibilityIdentifier("settings.topic.\(topic.rawValue)")
