@@ -77,6 +77,7 @@ final class LanPriorityUITests: XCTestCase {
         let app = launchPaired()
         openSidebar(app)
         openSettings(app)
+        openTransferTopic(app)
 
         // The switch exists, in a section a person can reach, and starts off.
         // The rows below Live Activity are below the fold of the settings
@@ -133,6 +134,7 @@ final class LanPriorityUITests: XCTestCase {
 
         // --- On: the same refresh is allowed to ask the question --------------
         openSettings(app)
+        openTransferTopic(app)
         let offControl = settingControl(Self.toggleIdentifier, in: app)
         XCTAssertTrue(
             revealInSettings(offControl, in: app, attempts: 10),
@@ -178,6 +180,7 @@ final class LanPriorityUITests: XCTestCase {
         let reopened = relaunch()
         openSidebar(reopened)
         openSettings(reopened)
+        openTransferTopic(reopened)
         let persisted = settingControl(Self.toggleIdentifier, in: reopened)
         XCTAssertTrue(
             revealInSettings(persisted, in: reopened, attempts: 10),
@@ -319,6 +322,24 @@ final class LanPriorityUITests: XCTestCase {
         expect(gear, "there is no way to the settings")
         gear.tap()
         expect(app.buttons["settings.done"], "the settings window did not open")
+    }
+
+    /// Open the 传输 shelf, where the two route switches live.
+    ///
+    /// The settings screen is a directory now: the switches are one level down,
+    /// behind the row that names their shelf. Everything below still works from
+    /// the page because the page carries its own Done button.
+    ///
+    /// - Parameter app: the running app.
+    private func openTransferTopic(_ app: XCUIApplication) {
+        let row = app.buttons["settings.topic.transfer"]
+        XCTAssertTrue(revealInSettings(row, in: app), "the settings directory has no 传输 shelf")
+        row.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(identifier: Self.toggleIdentifier).firstMatch
+                .waitForExistence(timeout: Self.patience),
+            "the 传输 shelf opened without its local-network switch",
+        )
     }
 
     /// Put the settings window away.

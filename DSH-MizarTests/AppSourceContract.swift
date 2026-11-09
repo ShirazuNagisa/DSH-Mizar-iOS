@@ -52,22 +52,30 @@ enum AppSourceContract {
     ///
     /// Use this for copy (`String(localized: "…")`) and for identifiers that are
     /// applied to the exact view the snapshot covers.
+    /// Read one app source file, for a contract that is about what a file does
+    /// *not* say.
+    ///
+    /// - Parameter relativePath: the file, relative to the iOS root.
+    /// - Returns: its text.
+    static func text(at relativePath: String) throws -> String {
+        let url = iosRoot.appendingPathComponent(relativePath)
+        do {
+            return try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            throw ContractFailure(description: """
+            Could not read \(url.path). \
+            Unit tests run in the simulator and read the checkout through the path the \
+            compiler used; if the checkout moved since the build, rebuild before running.
+            """)
+        }
+    }
+
     static func expectFragments(
         _ fragments: [String],
         in relativePath: String,
         describing kind: String = "source fragment",
     ) throws {
-        let url = iosRoot.appendingPathComponent(relativePath)
-        let source: String
-        do {
-            source = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw ContractFailure(description: """
-            Could not read \(url.path) to check \(kind)s. \
-            Unit tests run in the simulator and read the checkout through the path the \
-            compiler used; if the checkout moved since the build, rebuild before running.
-            """)
-        }
+        let source = try text(at: relativePath)
         let missing = fragments.filter { !source.contains($0) }
         guard missing.isEmpty else {
             throw ContractFailure(description: """

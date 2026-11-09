@@ -137,22 +137,38 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         XCTAssertTrue(appeared, "the app reached neither the pairing screen nor the session list")
     }
 
-    /// The settings: the four sections, each with something in it.
+    /// The settings: a directory of shelves, each with its page behind it.
     ///
     /// Opened from the gear at the foot of the sidebar, and asked for as a
-    /// settings screen rather than a placeholder. What is asserted is that each
-    /// of the four sections has its control -- the switches, the export button
-    /// and the source link -- because a screen can be present and empty.
+    /// settings screen rather than a placeholder. The screen is a directory now,
+    /// so what is asserted is the directory itself: the account row stays on the
+    /// front page, the eight shelves are there in the order the screen declares
+    /// them, and each one opens a page that carries what it always carried.
+    /// Every shelf is opened and closed, because "the row is there" and "the row
+    /// goes somewhere" are different claims.
     func testTheSidebarOpensSettings() {
         let app = launch(session: nil)
         openSettings(app)
-        // 发送: whether a message sent into a running turn is guidance, or waits
-        // for the end of that turn above the field. It sits above 通知.
+
+        // 账户与计划 stays on the front page: who is signed in is a fact about
+        // the person, not a shelf.
+        expect(
+            app.descendants(matching: .any).matching(identifier: "settings.account").firstMatch,
+            "the settings screen has no account row",
+        )
+
+        // 消息发送偏好: whether a message sent into a running turn is guidance, or
+        // waits for the end of that turn above the field.
+        openSettingsTopic("sending", in: app)
         XCTAssertTrue(
             revealInSettings(settingControl("settings.send.guidedSend", in: app), in: app),
             "there is no guided-send switch",
         )
-        // 通知: the four switches, and the system permission they sit under.
+        closeSettingsTopic(app)
+
+        // 通知与实时活动: the four switches, the system permission they sit under,
+        // and the Live Activity below them.
+        openSettingsTopic("notifications", in: app)
         expect(settingControl("settings.notify.turn-finished", in: app), "there is no 任务完成 switch")
         expect(settingControl("settings.notify.turn-interrupted", in: app), "there is no 任务中断 switch")
         expect(settingControl("settings.notify.question", in: app), "there is no 模型询问 switch")
@@ -161,28 +177,81 @@ final class AppFlowLaunchTests: AppFlowTestBase {
             app.descendants(matching: .any).matching(identifier: "settings.notify.authorization").firstMatch,
             "the system notification permission is not shown",
         )
-        // 实时活动. The settings are a small window out of the gear now, not a
-        // sheet, and this section starts below its fold -- so it is scrolled to
-        // before it is asked for, since a lazy list has not built it yet.
         XCTAssertTrue(
             revealInSettings(settingControl("settings.liveActivity", in: app), in: app),
             "there is no live activity switch",
         )
-        // 日志 and 关于 are below the fold too.
+        closeSettingsTopic(app)
+
+        // 日志 and 关于与更多.
+        openSettingsTopic("logs", in: app)
         XCTAssertTrue(
             revealInSettings(app.buttons["settings.logs.export"], in: app),
             "there is no log export button",
         )
+        closeSettingsTopic(app)
+
+        openSettingsTopic("about", in: app)
         XCTAssertTrue(
             revealInSettings(app.descendants(matching: .any)["settings.about.version"], in: app),
             "the about section is missing",
         )
-        // And it can be left, so a sheet that opened over a screen it cannot
-        // close would not pass.
+        closeSettingsTopic(app)
+
+        // 本地文件与缓存 carries the two ways to get the space back, including
+        // the one that reads the sessions from the computer again.
+        openSettingsTopic("files", in: app)
+        XCTAssertTrue(
+            revealInSettings(app.descendants(matching: .any)["settings.files.size"].firstMatch, in: app),
+            "the files shelf has no cache figure",
+        )
+        XCTAssertTrue(
+            revealInSettings(app.buttons["settings.sessions.reload"], in: app),
+            "the files shelf has no way to reload the local session data",
+        )
+        closeSettingsTopic(app)
+
+        // And it can be left from the directory, so a sheet that opened over a
+        // screen it cannot close would not pass.
         let done = app.buttons["settings.done"]
         expect(done, "the settings cannot be closed")
         done.tap()
         expect(app.buttons["sessions.new"], "closing the settings did not go back to the sessions")
+    }
+
+    /// 本地文件与缓存: the button that empties what this phone kept about the
+    /// sessions and reads it again.
+    ///
+    /// It asks first -- it throws away the list the screen is made of -- and then
+    /// reports what the computer answered, which is the part that makes it a
+    /// reload rather than a delete.
+    func testTheFilesShelfReloadsTheSessionData() {
+        let app = launch(session: nil)
+        openSettings(app)
+        openSettingsTopic("files", in: app)
+
+        let reload = app.buttons["settings.sessions.reload"]
+        XCTAssertTrue(revealInSettings(reload, in: app), "there is no way to reload the local session data")
+        reload.tap()
+
+        let confirm = app.buttons["Reload"]
+        expect(confirm, "the reload did not ask before emptying the phone")
+        confirm.tap()
+
+        let status = app.descendants(matching: .any).matching(identifier: "settings.sessions.status").firstMatch
+        expect(status, "the reload never said what it read")
+        XCTAssertFalse(
+            status.label.contains("did not answer"),
+            "the mock host never answered the reload: \(status.label)",
+        )
+
+        // And the shelf is still reachable afterwards: a reload that threw the
+        // operator out of the screen would be a different bug.
+        closeSettingsTopic(app)
+        XCTAssertTrue(
+            revealInSettings(settingsTopicRow("files", in: app), in: app),
+            "the files shelf disappeared after the reload",
+        )
     }
 
     /// A switch is a setting, not a picture of one.
@@ -196,6 +265,7 @@ final class AppFlowLaunchTests: AppFlowTestBase {
     func testANotificationSwitchSurvivesARelaunch() {
         let app = launch(session: nil)
         openSettings(app)
+        openSettingsTopic("notifications", in: app)
         // The identifier is built from the notification kind's wire name, which
         // is hyphenated -- `settings.notify.turn-finished`, not `turnFinished`.
         let identifier = "settings.notify.turn-finished"
@@ -218,6 +288,7 @@ final class AppFlowLaunchTests: AppFlowTestBase {
         app.terminate()
         let reopened = launch(session: nil, freshStart: false)
         openSettings(reopened)
+        openSettingsTopic("notifications", in: reopened)
         expect(settingControl(identifier, in: reopened), "the settings screen did not come back")
         XCTAssertEqual(
             settingState(identifier, in: reopened),
@@ -239,6 +310,7 @@ final class AppFlowLaunchTests: AppFlowTestBase {
     func testTheLogExportMakesAZipAndOffersIt() {
         let app = launch(session: nil)
         openSettings(app)
+        openSettingsTopic("logs", in: app)
         let export = app.buttons["settings.logs.export"]
         XCTAssertTrue(revealInSettings(export, in: app), "there is no log export button")
         export.tap()
@@ -274,6 +346,7 @@ final class AppFlowLaunchTests: AppFlowTestBase {
     func testTheAboutSectionShowsTheVersionAndBothCredits() {
         let app = launch(session: nil)
         openSettings(app)
+        openSettingsTopic("about", in: app)
         let source = app.buttons["settings.about.source"]
         XCTAssertTrue(revealInSettings(source, in: app), "there is no source code button")
         XCTAssertTrue(source.isEnabled, "the source code button cannot be tapped")

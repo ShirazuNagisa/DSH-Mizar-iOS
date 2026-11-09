@@ -276,7 +276,7 @@
 "There are no other steps." = "没有别的步骤。";
 "Paired with %@" = "已与 %@ 配对";
 "Haptics" = "触感反馈";
-"Feel" = "手感";
+"Feel" = "触感";
 "A light tap when a turn you are watching finishes, when a request is answered, and when a message is sent." = "你正在看的一轮完成、回答请求、发送消息时，轻轻震动一下。";
 "Choose another computer" = "选择其他电脑";
 "Scan a code" = "扫描二维码";
@@ -904,3 +904,23 @@
 "Your computer did not answer." = "电脑没有回应。";
 "You can continue; the sessions are loaded again when it answers." = "你可以继续；等电脑回应后会再次读取会话。";
 "The sessions are loaded again every time you open the guide, so what you see afterwards is what your computer says now." = "每次打开新手教程都会重新读取会话，所以之后看到的就是电脑现在的样子。";
+
+/* 设置目录：每个主题的标题，和它里面有什么。 */
+"Sending Preferences" = "消息发送偏好";
+"Files & Cache" = "本地文件与缓存";
+"About & More" = "关于与更多";
+"Notification kinds, the Live Activity and haptics." = "通知类型、实时活动与触感。";
+"What happens to a message sent while a turn is running." = "执行中再发一条消息会怎么处理。";
+"Local network first, and the P2P direct connection." = "局域网优先与 P2P 直连。";
+"Model configuration, and the sessions it keeps on this phone." = "模型配置，以及它在这台手机上保存的会话。";
+"Previewed files, the file cache, and the local session data." = "预览过的文件、文件缓存与本地会话数据。";
+"The project's website and the feedback group." = "项目网站与反馈群。";
+"Export a diagnostic log for one problem." = "导出一次问题的诊断日志。";
+"Version, source code, credits and the developer tools." = "版本、源代码、鸣谢与开发者工具。";
+
+/* 本地文件与缓存：清空保存的会话再重新读取。 */
+"Session data" = "会话数据";
+"Reload all local session data" = "完全刷新本地会话数据";
+"Deletes the conversations, the session list and the workspaces this phone kept, then reads them from your computer again. Nothing on the computer changes." = "会删除这台手机保存的对话、会话列表和工作区列表，然后重新从电脑读取。电脑上的内容不会改变。";
+"Everything this phone kept about your sessions is deleted first, then read again from your computer. Your account and your settings are kept." = "这台手机上关于会话的一切会先被删除，然后重新从电脑读取。你的账户和设置都会保留。";
+"Reload" = "重新加载";

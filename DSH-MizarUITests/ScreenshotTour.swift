@@ -181,6 +181,25 @@ final class ScreenshotTour: XCTestCase {
                 if app.buttons["settings.done"].waitForExistence(timeout: 4) { break }
             }
             shoot("08-settings\(suffix)")
+            // The directory is the front page now, so the two shelves whose
+            // shape matters most are captured too: the switches, and the button
+            // that empties what the phone kept about the sessions.
+            let notifications = app.buttons["settings.topic.notifications"]
+            if settled(notifications) {
+                notifications.tap()
+                if app.descendants(matching: .any)["settings.notify.authorization"]
+                    .waitForExistence(timeout: 6) {
+                    shoot("08b-settings-notifications\(suffix)")
+                    app.navigationBars.buttons.element(boundBy: 0).tap()
+                }
+            }
+            let files = app.buttons["settings.topic.files"]
+            if settled(files) {
+                files.tap()
+                if app.buttons["settings.sessions.reload"].waitForExistence(timeout: 6) {
+                    shoot("08c-settings-files\(suffix)")
+                }
+            }
             app.terminate()
         }
     }

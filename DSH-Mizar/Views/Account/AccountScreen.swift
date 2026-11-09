@@ -549,10 +549,7 @@ struct AccountScreen: View {
 
     private var subscriptionTeaserSection: some View {
         Section {
-            LabeledContent {
-                Text(model.subscription.priceText)
-                    .monospacedDigit()
-            } label: {
+            planDetailRow {
                 HStack(spacing: 8) {
                     Label("Mizar Paid", systemImage: "star.circle")
                     Text("Sign in to subscribe. The subscription is bound to your account, so the plan follows you to every device.")
@@ -567,13 +564,34 @@ struct AccountScreen: View {
         }
     }
 
+    /// The first row of the subscription section: what the plan is, and the way
+    /// to the page that explains what it pays for.
+    ///
+    /// It used to show the price and open nothing. The price belongs on the
+    /// purchase row below it -- that is where it comes from StoreKit, and where
+    /// it has to be if the row is going to charge it -- so this row says 详情 and
+    /// pushes ``MizarPaidDetailView``, which is the same sentence the settings
+    /// screen used to open from its own 计划 section.
+    ///
+    /// - Parameter label: the row's title and its one-line explanation.
+    /// - Returns: the row.
+    private func planDetailRow(@ViewBuilder label: () -> some View) -> some View {
+        NavigationLink {
+            MizarPaidDetailView()
+        } label: {
+            LabeledContent {
+                Text("Details")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Theme.accentText)
+            } label: {
+                label()
+            }
+        }
+    }
+
     private var subscriptionSection: some View {
         Section {
-            LabeledContent {
-                Text(model.subscription.priceText)
-                    .monospacedDigit()
-                    .accessibilityIdentifier("account.subscription.priceValue")
-            } label: {
+            planDetailRow {
                 HStack(spacing: 8) {
                     Label("Mizar Paid", systemImage: "star.circle")
                     Text("Auto-renewing monthly subscription")
@@ -583,6 +601,7 @@ struct AccountScreen: View {
                 }
             }
             .accessibilityIdentifier("account.subscription.price")
+            .accessibilityValue(model.subscription.priceText)
 
             if model.account.isPaid, let user = model.account.user, user.paidViaInvite {
                 Label(

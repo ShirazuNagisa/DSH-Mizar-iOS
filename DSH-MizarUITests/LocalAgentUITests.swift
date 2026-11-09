@@ -62,6 +62,7 @@ final class LocalAgentUITests: AppFlowTestBase {
         let app = launch(session: nil)
 
         openSettings(app)
+        openSettingsTopic("localAgent", in: app)
         let row = app.buttons["settings.localAgent.models"]
         XCTAssertTrue(
             revealInSettings(row, in: app),
@@ -97,6 +98,7 @@ final class LocalAgentUITests: AppFlowTestBase {
         let app = launch(session: nil)
 
         openSettings(app)
+        openSettingsTopic("localAgent", in: app)
         let row = app.buttons["settings.localAgent.models"]
         XCTAssertTrue(revealInSettings(row, in: app), "no model configuration row")
         row.tap()

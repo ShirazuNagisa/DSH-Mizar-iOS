@@ -46,30 +46,45 @@ struct SettingsLanguageSnapshotTests {
         // What the UI test asserted, pinned where it lives: the identifier it
         // queried on the credits row, the section headers, the rows' copy keys,
         // and the wire-named notification identifier built from the kind's raw
-        // value.
+        // value. The copy moved when the settings screen became a directory --
+        // one file per shelf -- so each fragment is pinned in the page that now
+        // draws it, which is the point of the contract: it fails if a fragment
+        // is deleted, wherever it was moved to.
         try AppSourceContract.expectFragments(
             [
                 #".accessibilityIdentifier("settings.credits.row.\(contributor.login)")"#,
+                #"SettingsSectionHeader("Credits")"#,
+                #"SettingsRowLabel("Source code", systemImage: "chevron.left.forwardslash.chevron.right")"#,
             ],
-            in: "DSH-Mizar/Views/SettingsView.swift",
-            describing: "the credits row identifier the language UI test asserted",
+            in: "DSH-Mizar/Views/Settings/AboutSettingsView.swift",
+            describing: "the credits and About rows the language UI test asserted",
         )
         try AppSourceContract.expectFragments(
             [
-                #"Text("Sending")"#,
-                #"Text("Notifications")"#,
-                #"Text("Live Activity")"#,
-                #"Text("Credits")"#,
-                #"String(localized: "Task complete")"#,
-                #"Label("Default to guided send", systemImage: "paperplane")"#,
-                #"accessibilityIdentifier("settings.send.guidedSend")"#,
-                #"Label("Live Activity", systemImage: "bolt.horizontal.circle")"#,
-                #"Label("Source code", systemImage: "chevron.left.forwardslash.chevron.right")"#,
-                #"localized: "Off is a rule, not a preference: this phone does not use the computer's local address at all. An open local link is closed at once and reconnects use the relay, which also makes every reconnect faster.""#,
+                #"SettingsSectionHeader("Notifications")"#,
+                #"SettingsSectionHeader("Live Activity")"#,
+                #"SettingsRowLabel("Live Activity", systemImage: "bolt.horizontal.circle")"#,
+                #""Task complete""#,
                 #""settings.notify.\(kind.rawValue)""#,
             ],
-            in: "DSH-Mizar/Views/SettingsView.swift",
-            describing: "the copy and identifiers the language UI test asserted",
+            in: "DSH-Mizar/Views/Settings/NotificationsSettingsView.swift",
+            describing: "the notification and Live Activity copy the language UI test asserted",
+        )
+        try AppSourceContract.expectFragments(
+            [
+                #"SettingsSectionHeader("Sending")"#,
+                #"SettingsRowLabel("Default to guided send", systemImage: "paperplane")"#,
+                #"accessibilityIdentifier("settings.send.guidedSend")"#,
+            ],
+            in: "DSH-Mizar/Views/Settings/SendingSettingsView.swift",
+            describing: "the sending copy the language UI test asserted",
+        )
+        try AppSourceContract.expectFragments(
+            [
+                #"localized: "Off is a rule, not a preference: this phone does not use the computer's local address at all. An open local link is closed at once and reconnects use the relay, which also makes every reconnect faster.""#,
+            ],
+            in: "DSH-Mizar/Views/Settings/TransferSettingsView.swift",
+            describing: "the transfer footer the language UI test asserted",
         )
 
         let snapshot = try SnapshotHarness.assertSnapshot(

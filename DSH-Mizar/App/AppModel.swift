@@ -4363,7 +4363,43 @@ final class AppModel {
     /// page is where its turns, their summaries and their usage come from, and
     /// those are what the turn rows draw.
     func reloadSessionMetadata() async -> MetadataReload {
+        await reloadSessionData(clearingIndex: false)
+    }
+
+    /// Throw away every stored answer about the sessions -- the list and the
+    /// workspaces as well -- and read them again from the desktop.
+    ///
+    /// This is the settings screen's 完全刷新本地会话数据 button. The softer
+    /// ``reloadSessionMetadata()`` is what the guide does at the end of a first
+    /// walk: it clears the cached conversation pages and asks the desktop again.
+    /// This one empties the session index too and drops the rows built from it,
+    /// so a phone carrying a list from an older build shows what the desktop says
+    /// today with nothing of the old one left underneath.
+    ///
+    /// The remembered session is kept. Which conversation is open is not session
+    /// data, and closing it would turn a refresh into a redirect; the page behind
+    /// it is re-read like every other cached page.
+    ///
+    /// - Returns: what the desktop answered, and whether it answered at all.
+    func clearSessionDataAndReload() async -> MetadataReload {
+        await reloadSessionData(clearingIndex: true)
+    }
+
+    /// The one reload, with or without the session index.
+    ///
+    /// - Parameter clearingIndex: whether the stored session list goes too.
+    /// - Returns: what the desktop answered.
+    private func reloadSessionData(clearingIndex: Bool) async -> MetadataReload {
         await conversations.clear()
+        if clearingIndex {
+            await indexStore.clear()
+            // The rows built from the index are stale the moment it is gone:
+            // leaving them up until the read lands would draw a list that this
+            // phone has already deleted.
+            sessions = []
+            workspaces = []
+            sessionsAreKnown = false
+        }
         await refreshSessions(reconnectingIfNeeded: true)
         var reloaded = 0
         if let sessionId = selectedSessionId {

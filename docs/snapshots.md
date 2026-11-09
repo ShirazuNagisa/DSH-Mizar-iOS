@@ -206,7 +206,8 @@ UIKit. Verified here rather than assumed:
 The settings row's layout itself is a private computed property inside
 `SettingsView`, so the pilot reconstructs the row from the app's own
 `AccountAvatarView` and the same English copy, and pins the row's identifiers and
-copy literals against `SettingsView.swift`. It covers what
+copy literals against the directory's source
+(`DSH-Mizar/Views/Settings/SettingsView.swift`). It covers what
 `AccountUITests.testSignedOutSettingsShowsBlankAccountRow` asserts except the
 `List` chrome; it is **not** a full replacement until the row is extracted.
 

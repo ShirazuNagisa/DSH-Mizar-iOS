@@ -903,3 +903,23 @@
 "Your computer did not answer." = "Your computer did not answer.";
 "You can continue; the sessions are loaded again when it answers." = "You can continue; the sessions are loaded again when it answers.";
 "The sessions are loaded again every time you open the guide, so what you see afterwards is what your computer says now." = "The sessions are loaded again every time you open the guide, so what you see afterwards is what your computer says now.";
+
+/* The settings directory: one title per shelf, and one line about what is on it. */
+"Sending Preferences" = "Sending Preferences";
+"Files & Cache" = "Files & Cache";
+"About & More" = "About & More";
+"Notification kinds, the Live Activity and haptics." = "Notification kinds, the Live Activity and haptics.";
+"What happens to a message sent while a turn is running." = "What happens to a message sent while a turn is running.";
+"Local network first, and the P2P direct connection." = "Local network first, and the P2P direct connection.";
+"Model configuration, and the sessions it keeps on this phone." = "Model configuration, and the sessions it keeps on this phone.";
+"Previewed files, the file cache, and the local session data." = "Previewed files, the file cache, and the local session data.";
+"The project's website and the feedback group." = "The project's website and the feedback group.";
+"Export a diagnostic log for one problem." = "Export a diagnostic log for one problem.";
+"Version, source code, credits and the developer tools." = "Version, source code, credits and the developer tools.";
+
+/* Files & Cache: throwing away the stored sessions and reading them again. */
+"Session data" = "Session data";
+"Reload all local session data" = "Reload all local session data";
+"Deletes the conversations, the session list and the workspaces this phone kept, then reads them from your computer again. Nothing on the computer changes." = "Deletes the conversations, the session list and the workspaces this phone kept, then reads them from your computer again. Nothing on the computer changes.";
+"Everything this phone kept about your sessions is deleted first, then read again from your computer. Your account and your settings are kept." = "Everything this phone kept about your sessions is deleted first, then read again from your computer. Your account and your settings are kept.";
+"Reload" = "Reload";

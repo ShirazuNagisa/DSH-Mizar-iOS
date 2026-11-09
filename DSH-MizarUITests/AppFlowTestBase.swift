@@ -716,12 +716,46 @@ class AppFlowTestBase: XCTestCase {
     /// Found by identifier and never by its label: the label is 设置 in
     /// Chinese, and a query for "Settings" passes only in one language.
     ///
+    /// Tapped until the window is up, not once. The gear is at the *foot* of the
+    /// sidebar, and `openSidebar` can only prove the *top* of it arrived: a tap
+    /// that lands while the footer is still sliding in is a tap on a control
+    /// that is moving, it does nothing, and the failure then surfaces three
+    /// steps later as "the settings screen has no such row". Retrying here names
+    /// the failure where it happens.
+    ///
     /// - Parameter app: the running app.
     func openSettings(_ app: XCUIApplication) {
         openSidebar(app)
         let gear = app.buttons["sidebar.settings"]
         expect(gear, "there is no way to the settings")
-        gear.tap()
+        for _ in 0..<3 {
+            // Re-open the drawer when it went away under us. The gear's frame is
+            // only where the gear is while the drawer is out: a tap at that frame
+            // on a closed drawer lands on the context chip underneath, and the
+            // popover it opens covers the screen -- which then looks like a
+            // settings window that will not open, three steps later.
+            if !gear.isHittable {
+                let settled = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "exists == true AND hittable == true"),
+                    object: gear,
+                )
+                if XCTWaiter().wait(for: [settled], timeout: 2) != .completed {
+                    openSidebar(app)
+                    _ = XCTWaiter().wait(for: [settled], timeout: 4)
+                }
+            }
+            guard gear.isHittable else { continue }
+            gear.tap()
+            if app.buttons["settings.done"].waitForExistence(timeout: 4) { return }
+        }
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "settings-window-did-not-open"
+        shot.lifetime = .keepAlways
+        add(shot)
+        XCTFail(
+            "the settings window did not open (gear exists \(gear.exists), hittable \(gear.isHittable), "
+                + "frame \(gear.frame))",
+        )
     }
 
     /// Bring the sidebar out, if it is not out already.
@@ -891,6 +925,73 @@ class AppFlowTestBase: XCTestCase {
         case "0", "off", "false": false
         default: nil
         }
+    }
+
+    /// The directory row for one settings shelf.
+    ///
+    /// The settings screen is a directory now: a switch lives one level down,
+    /// behind the row that names its shelf. A `NavigationLink` row is exposed as
+    /// a button, but where an identifier lands is the system's decision, so both
+    /// shapes are tried -- the same lesson the setting controls already carry.
+    ///
+    /// - Parameters:
+    ///   - topic: the shelf's identifier suffix -- `notifications`, `logs`, …
+    ///   - app: the running app.
+    /// - Returns: the row to tap.
+    func settingsTopicRow(_ topic: String, in app: XCUIApplication) -> XCUIElement {
+        let row = app.buttons["settings.topic.\(topic)"]
+        if row.exists { return row }
+        return app.descendants(matching: .any).matching(identifier: "settings.topic.\(topic)").firstMatch
+    }
+
+    /// The first control on each shelf, used to prove the page opened.
+    ///
+    /// A shelf is checked by something on it rather than by its title: a title
+    /// is copy and follows the phone's language, and a page that opened empty
+    /// would still show the right title.
+    static let settingsTopicLandmark: [String: String] = [
+        "notifications": "settings.notify.authorization",
+        "sending": "settings.send.guidedSend",
+        "transfer": "settings.transfer.lanPriority",
+        "localAgent": "settings.localAgent.models",
+        "files": "settings.files.size",
+        "community": "settings.community.website",
+        "logs": "settings.logs.export",
+        "about": "settings.about.version",
+    ]
+
+    /// Open one shelf of the settings directory, and wait for its first control.
+    ///
+    /// - Parameters:
+    ///   - topic: the shelf's identifier suffix.
+    ///   - app: the running app.
+    func openSettingsTopic(_ topic: String, in app: XCUIApplication) {
+        let row = settingsTopicRow(topic, in: app)
+        XCTAssertTrue(revealInSettings(row, in: app), "the settings directory has no \(topic) shelf")
+        row.tap()
+        if let landmark = Self.settingsTopicLandmark[topic] {
+            let landed = app.descendants(matching: .any).matching(identifier: landmark).firstMatch
+            XCTAssertTrue(
+                landed.waitForExistence(timeout: Self.patience),
+                "the \(topic) shelf opened without its first control (\(landmark))",
+            )
+        }
+    }
+
+    /// Go back from a settings shelf to the directory.
+    ///
+    /// - Parameter app: the running app.
+    func closeSettingsTopic(_ app: XCUIApplication) {
+        // The back button carries an identifier on recent iOS; the first button
+        // in the navigation bar is the same control on any that does not.
+        let named = app.buttons["BackButton"]
+        let back = named.exists ? named : app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "the shelf has no way back to the settings directory")
+        back.tap()
+        XCTAssertTrue(
+            app.buttons["settings.topic.notifications"].waitForExistence(timeout: 5),
+            "going back from a shelf did not return to the settings directory",
+        )
     }
 
     /// The element carrying an identifier whose label says something.

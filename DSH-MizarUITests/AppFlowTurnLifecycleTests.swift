@@ -549,6 +549,7 @@ final class AppFlowTurnLifecycleTests: AppFlowTestBase {
     func testGuidedSendHandsTheMessageOverAtOnce() {
         let app = launch()
         openSettings(app)
+        openSettingsTopic("sending", in: app)
         let identifier = "settings.send.guidedSend"
         let toggle = settingControl(identifier, in: app)
         XCTAssertTrue(revealInSettings(toggle, in: app), "there is no guided-send switch")
@@ -604,6 +605,7 @@ final class AppFlowTurnLifecycleTests: AppFlowTestBase {
         // And back to the default, so the rest of the suite measures what a
         // fresh install has rather than this test's choice.
         openSettings(app)
+        openSettingsTopic("sending", in: app)
         let again = settingControl(identifier, in: app)
         XCTAssertTrue(revealInSettings(again, in: app), "the guided-send switch is gone")
         if settingState(identifier, in: app) == true {

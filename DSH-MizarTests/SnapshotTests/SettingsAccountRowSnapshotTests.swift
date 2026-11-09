@@ -40,7 +40,7 @@ struct SettingsAccountRowSnapshotTests {
         // two labels are addressable, and the copy is exactly these strings.
         try AppSourceContract.expectIdentifiers(
             ["settings.account", "settings.account.name", "settings.account.plan"],
-            in: "DSH-Mizar/Views/SettingsView.swift",
+            in: "DSH-Mizar/Views/Settings/SettingsView.swift",
         )
         try AppSourceContract.expectFragments(
             [
@@ -48,7 +48,7 @@ struct SettingsAccountRowSnapshotTests {
                 #"String(localized: "Paid account")"#,
                 #"String(localized: "Free account")"#,
             ],
-            in: "DSH-Mizar/Views/SettingsView.swift",
+            in: "DSH-Mizar/Views/Settings/SettingsView.swift",
             describing: "localized copy",
         )
 

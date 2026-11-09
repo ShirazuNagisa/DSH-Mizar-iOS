@@ -210,12 +210,26 @@ final class AccountUITests: XCTestCase {
         let app = launch(session: nil, mockSubscription: true)
         signIn(app)
 
-        let price = element("account.subscription.price", in: app)
-        XCTAssertTrue(revealInSettings(price, in: app), "the subscription section has no price")
-        XCTAssertTrue(price.label.contains("¥6.00"), "the price is not the product's own: \(price.label)")
+        // 订阅 opens with the plan row. It used to carry the price and open
+        // nothing; it says 详情 now and pushes the page that explains what the
+        // money pays for. The price is on the purchase row, which is where it
+        // has to be if that row is going to charge it.
+        let details = element("account.subscription.price", in: app)
+        XCTAssertTrue(revealInSettings(details, in: app), "the subscription section has no plan row")
+        XCTAssertTrue(details.label.contains("Details"), "the plan row does not say 详情: \(details.label)")
+        details.tap()
+
+        let explanation = element("account.subscription.detail.text", in: app)
+        expect(explanation, "the 详情 row did not open the plan's detail page")
+        XCTAssertTrue(
+            explanation.label.contains("Mizar Paid"),
+            "the detail page does not explain the plan: \(explanation.label)",
+        )
+        app.buttons["BackButton"].tap()
 
         let cta = app.buttons["account.subscription.cta"]
         XCTAssertTrue(revealInSettings(cta, in: app), "the subscription section has no subscribe button")
+        XCTAssertTrue(cta.label.contains("¥6.00"), "the purchase row does not carry the product's own price: \(cta.label)")
         cta.tap()
 
         let plan = element("account.plan", in: app)
