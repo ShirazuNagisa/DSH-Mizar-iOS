@@ -15,10 +15,10 @@
 //  own, whatever the main thread is doing.
 //
 //  Every value is the one the SwiftUI shell drew, from the same progress: the
-//  sidebar's 44-point travel and its fade, the card's shrink over the first
-//  third of the travel, its corner, shade, rim and shadow, and the dismiss
-//  surface over the part of the card still on screen. On a regular width the
-//  drawers are columns and the card is laid out beside them, as before.
+//  sidebar's 44-point travel and its fade, the card's shrink across the
+//  travel, its corner, shade, rim and shadow, and the dismiss surface over the
+//  part of the card still on screen. On a regular width the drawers are
+//  columns and the card is laid out beside them, as before.
 //
 
 import SwiftUI
@@ -73,13 +73,15 @@ struct DrawerContainer: UIViewControllerRepresentable {
 ///
 /// A pure function of the progress and the geometry, so the frame a finger
 /// draws and every keyframe of a settle are the same computation.
-private struct DrawerLook {
+///
+/// Internal rather than private so the narrowing can be pinned by a test
+/// (see ``cardScale(reveal:)``).
+struct DrawerLook {
     /// The card's corner once pushed aside: the smallest corner of any Face ID
     /// iPhone, so at rest it hides inside the display's mask on every device,
     /// and pushed aside it reads as the screen itself.
     static let cardCorner: CGFloat = 39
-    /// How far the card shrinks once pushed aside, over the first third of the
-    /// drawer's travel.
+    /// How far the card shrinks once pushed aside, over the drawer's travel.
     static let cardShrink: CGFloat = 0.06
     /// How far the drawer under the card travels as it comes forward.
     static let drawerTravel: CGFloat = 44
@@ -100,6 +102,18 @@ private struct DrawerLook {
     /// The dismiss surface: the part of the screen the pushed card still covers.
     let dismissFrame: CGRect
 
+    /// The card's scale at a reveal.
+    ///
+    /// The narrowing runs with the travel: one at rest, `1 - cardShrink` with
+    /// the drawer out, and linear in between -- so the card is exactly as
+    /// narrow as it will be, at the moment the drawer arrives. The card used
+    /// to arrive at its narrowest over the first third of the travel and then
+    /// only translated for the rest of it, which read as a card that had
+    /// finished shrinking while the drawer was still coming.
+    static func cardScale(reveal: CGFloat) -> CGFloat {
+        1 - cardShrink * min(1, max(0, reveal))
+    }
+
     init(progress p: CGFloat, leadingWidth: CGFloat, trailingWidth: CGFloat, size: CGSize) {
         lead = max(0, min(1, p))
         trail = max(0, min(1, -p))
@@ -112,10 +126,11 @@ private struct DrawerLook {
         // The corner is the screen's own or it is nothing: two values, so the
         // mask changes at most once per gesture.
         corner = reveal > 0.001 ? Self.cardCorner : 0
-        // The shrink arrives early -- over the first third of the travel, the
-        // way the corner does -- and then holds; from there the card only
-        // translates. Scaled about its leading or trailing edge, then moved.
-        let scale = 1 - Self.cardShrink * min(1, reveal * 3)
+        // The shrink runs with the travel: the card narrows as it is pushed
+        // aside, and is fully narrow when the drawer arrives, so the two
+        // finish together. Scaled about its leading or trailing edge, then
+        // moved.
+        let scale = Self.cardScale(reveal: reveal)
         let anchor = (towardsTrailing ? 1 : -1) * size.width / 2
         let offset = towardsTrailing ? -trailingWidth * trail : leadingWidth * p
         var transform = CATransform3DMakeTranslation(-anchor, 0, 0)
@@ -144,6 +159,25 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
     private let panCoordinator: DrawerPanCoordinator
 
     private var compact = true
+    /// The card's corner as last drawn, and the rim's direction: each of them
+    /// switches at most once per gesture, so they are written only when they
+    /// change and not on every frame of a drag.
+    private var drawnCorner: CGFloat = -1
+    private var drawnRimTowardsTrailing: Bool?
+    /// The interaction and accessibility flags as last written: each of them
+    /// changes at most once per gesture.
+    private var drawnSidebarOpen = false
+    private var drawnPlaneOpen = false
+    private var drawnCardHidden = false
+    private var drawnDismissOpen = false
+    private var drawnDismissLabel: String?
+    /// Whether the card's content is being held as a still picture, and the
+    /// task that lets it live again (see ``holdContentWhileMoving()``).
+    private var contentFrozen = false
+    private var thawTask: Task<Void, Never>?
+    /// When the drawer is due to be at rest: the end of the settle being
+    /// played. Zero while a finger is on the card.
+    private var motionEndsAt: CFTimeInterval = 0
     private var leadingWidth: CGFloat = 320
     private var trailingWidth: CGFloat = 300
     private var reduceMotion = false
@@ -188,7 +222,11 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
         cardShadow.isUserInteractionEnabled = false
         cardShadow.layer.shadowColor = UIColor.black.cgColor
         cardShadow.layer.shadowRadius = 30
-        cardShadow.layer.shadowOpacity = 0
+        // The shadow is drawn at full strength and faded with the view's
+        // alpha, so a drag does not ask for the shadow to be drawn again for
+        // every frame: only the reveal changes, and that is a compositing.
+        cardShadow.layer.shadowOpacity = shadowStrength
+        cardShadow.alpha = 0
         view.addSubview(cardShadow)
 
         cardView.layer.cornerCurve = .continuous
@@ -330,6 +368,7 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
     /// conversation laid out in what is left.
     private func layoutColumns() {
         guard !compact, isViewLoaded else { return }
+        thawContent()
         let bounds = view.bounds
         let lead = columns.lead
         let trail = columns.trail
@@ -357,7 +396,7 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
             shadeView.frame = cardView.bounds
             rimView.frame = cardView.bounds
             cardView.layer.cornerRadius = 0
-            cardShadow.layer.shadowOpacity = 0
+            cardShadow.alpha = 0
             shadeView.alpha = 0
             rimView.alpha = 0
             sidebarHost.view.alpha = 1
@@ -388,10 +427,13 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
         }
         applyState(look)
         fadeSides(to: look)
+        holdContentWhileMoving()
     }
 
     func play(_ path: DrawerPath) {
         progress = path.target
+        // The settle is over when the path is: the content is held until then.
+        motionEndsAt = path.endTime
         guard compact, isViewLoaded, view.bounds.width > 0 else { return }
         let looks = path.samples.map { look(at: $0) }
         guard let last = looks.last else { return }
@@ -399,6 +441,7 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
             apply(last)
         }
         applyState(last)
+        holdContentWhileMoving()
         // The fade between drawers is part of the path: it can only change at
         // the very end, when the card is home and covers both.
         sidebarHost.view.alpha = last.leadingShown ? 1 : 0
@@ -424,7 +467,7 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
         add(rimView.borderLayer, "cornerRadius", looks.map { $0.corner }, discrete: true)
         add(cardShadow.layer, "shadowPath", looks.map { shadowPath(bounds, corner: $0.corner) }, discrete: true)
         add(cardShadow.layer, "shadowOffset", looks.map { NSValue(cgSize: shadowOffset($0)) }, discrete: true)
-        add(cardShadow.layer, "shadowOpacity", looks.map { Float($0.reveal) * shadowStrength })
+        add(cardShadow.layer, "opacity", looks.map { Float($0.reveal) })
         add(shadeView.layer, "opacity", looks.map { Float($0.reveal) })
         add(rimView.layer, "opacity", looks.map { Float($0.reveal) })
         add(rimView.gradient, "startPoint", looks.map { NSValue(cgPoint: rimStart($0)) }, discrete: true)
@@ -452,6 +495,13 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
     }
 
     /// The layer properties of one look, set directly.
+    ///
+    /// Only what changed is written. The corner switches once per gesture and
+    /// the rim's direction switches when the drag crosses over, but writing
+    /// either of them every frame marks the layer as needing to be drawn
+    /// again, and the rim's gradient is the size of the whole card. The
+    /// shadow's fade is the view's alpha, not the shadow's opacity, so the
+    /// shadow itself is drawn once and then composited.
     private func apply(_ look: DrawerLook) {
         let bounds = cardView.bounds
         // Through UIView, not the layer: UIKit is told the card's geometry has
@@ -459,15 +509,24 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
         // controller then puts back to the screen's.
         cardView.transform = CATransform3DGetAffineTransform(look.cardTransform)
         cardShadow.transform = cardView.transform
-        cardView.layer.cornerRadius = look.corner
-        rimView.borderLayer.cornerRadius = look.corner
-        cardShadow.layer.shadowPath = shadowPath(bounds, corner: look.corner)
-        cardShadow.layer.shadowOffset = shadowOffset(look)
-        cardShadow.layer.shadowOpacity = Float(look.reveal) * shadowStrength
+        if look.corner != drawnCorner {
+            drawnCorner = look.corner
+            cardView.layer.cornerRadius = look.corner
+            rimView.borderLayer.cornerRadius = look.corner
+            cardShadow.layer.shadowPath = shadowPath(bounds, corner: look.corner)
+        }
+        if look.towardsTrailing != drawnRimTowardsTrailing {
+            drawnRimTowardsTrailing = look.towardsTrailing
+            cardShadow.layer.shadowOffset = shadowOffset(look)
+            rimView.gradient.startPoint = rimStart(look)
+            rimView.gradient.endPoint = rimEnd(look)
+        }
+        // The shadow's own opacity is fixed: the reveal fades the whole view,
+        // which is a compositing the render server does, rather than a shadow
+        // drawn again for every frame.
+        cardShadow.alpha = look.reveal
         shadeView.alpha = look.reveal
         rimView.alpha = look.reveal
-        rimView.gradient.startPoint = rimStart(look)
-        rimView.gradient.endPoint = rimEnd(look)
         // Through UIView, as the card's transform is: a transform set on the
         // layer moves the picture and the touches but not what UIKit tells
         // accessibility, which went on reading the drawer 44 points off.
@@ -475,20 +534,98 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
         planeHost.view.transform = CGAffineTransform(translationX: look.planeShift, y: 0)
     }
 
+    /// The card's content is a still image while the drawer moves.
+    ///
+    /// The conversation page is a live SwiftUI tree under a full-screen mask, a
+    /// shadow and glass. While the card is scaled and slid, that tree has to
+    /// be drawn again for every frame, and a tree under a scale is drawn at
+    /// the scale it is scaled to: the picture is redrawn, at a new size, as
+    /// the card narrows, and the elements inside it move by a hair each time.
+    /// The tree itself holds while a drawer moves (see `drawersStill`), so it
+    /// is the same picture every frame -- so it is drawn once into a texture,
+    /// and the render server moves that texture. The elements inside the card
+    /// then travel as one body, at the display's own rate, and a main thread
+    /// that is busy cannot make them jump.
+    ///
+    /// It is thawed when the drawer is at rest, so the page is live again for
+    /// reading, for a new message and for the typewriter.
+    private func freezeContent() {
+        guard !contentFrozen else { return }
+        contentFrozen = true
+        let scale = view.window?.screen.scale ?? UIScreen.main.scale
+        cardHost.view.layer.shouldRasterize = true
+        cardHost.view.layer.rasterizationScale = scale
+    }
+
+    private func thawContent() {
+        thawTask?.cancel()
+        thawTask = nil
+        guard contentFrozen else { return }
+        contentFrozen = false
+        cardHost.view.layer.shouldRasterize = false
+    }
+
+    /// Hold the card's content for as long as the drawer is moving, and let it
+    /// live again once the drawer is at rest.
+    private func holdContentWhileMoving() {
+        let moving = shell.isDragging || shell.isSettling || CACurrentMediaTime() < motionEndsAt
+        guard moving else {
+            thawContent()
+            return
+        }
+        freezeContent()
+        guard thawTask == nil else { return }
+        thawTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(80))
+                guard let self else { return }
+                if !self.shell.isDragging, !self.shell.isSettling, CACurrentMediaTime() >= self.motionEndsAt {
+                    self.thawContent()
+                    return
+                }
+            }
+        }
+    }
+
     /// Who may be touched and who is read out: decided by where the drawers
     /// are going, as it was when these were SwiftUI modifiers.
+    ///
+    /// The flags are the same on every frame of a gesture, so they are written
+    /// when they change: each one asks UIKit to redo the work of the
+    /// accessibility tree, and a drag does not need that work sixty times a
+    /// second.
     private func applyState(_ look: DrawerLook) {
-        sidebarHost.view.isUserInteractionEnabled = look.lead > 0.5
-        sidebarHost.view.accessibilityElementsHidden = look.lead < 0.5
-        planeHost.view.isUserInteractionEnabled = look.trail > 0.5
-        planeHost.view.accessibilityElementsHidden = look.trail < 0.5
-        cardView.accessibilityElementsHidden = look.reveal > 0.5
+        let sidebarOpen = look.lead > 0.5
+        let planeOpen = look.trail > 0.5
+        if sidebarOpen != drawnSidebarOpen {
+            drawnSidebarOpen = sidebarOpen
+            sidebarHost.view.isUserInteractionEnabled = sidebarOpen
+            sidebarHost.view.accessibilityElementsHidden = !sidebarOpen
+        }
+        if planeOpen != drawnPlaneOpen {
+            drawnPlaneOpen = planeOpen
+            planeHost.view.isUserInteractionEnabled = planeOpen
+            planeHost.view.accessibilityElementsHidden = !planeOpen
+        }
+        let cardHidden = look.reveal > 0.5
+        if cardHidden != drawnCardHidden {
+            drawnCardHidden = cardHidden
+            cardView.accessibilityElementsHidden = cardHidden
+        }
         dismissView.frame = look.dismissFrame
-        dismissView.isUserInteractionEnabled = look.lead > 0.5 || look.trail > 0.5
-        dismissView.isAccessibilityElement = look.lead > 0.5 || look.trail > 0.5
-        dismissView.accessibilityLabel = look.lead > 0.02
+        let dismissOpen = sidebarOpen || planeOpen
+        if dismissOpen != drawnDismissOpen {
+            drawnDismissOpen = dismissOpen
+            dismissView.isUserInteractionEnabled = dismissOpen
+            dismissView.isAccessibilityElement = dismissOpen
+        }
+        let label = look.lead > 0.02
             ? String(localized: "Close sidebar")
             : String(localized: "Close turns")
+        if label != drawnDismissLabel {
+            drawnDismissLabel = label
+            dismissView.accessibilityLabel = label
+        }
     }
 
     /// The edge of a gesture is a fade rather than a cut: the drawer under the
@@ -548,9 +685,10 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
             // would grey the fade on its way out.
             UIColor.white.withAlphaComponent(0).cgColor,
         ]
+        cardShadow.layer.shadowOpacity = shadowStrength
         if compact, isViewLoaded {
             withoutActions {
-                cardShadow.layer.shadowOpacity = Float(look(at: progress).reveal) * shadowStrength
+                cardShadow.alpha = look(at: progress).reveal
             }
         }
     }

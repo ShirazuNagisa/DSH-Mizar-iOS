@@ -1487,6 +1487,33 @@ struct SessionDetailView: View {
             await replayTurnInFlight()
         }
 
+        // The frames that arrived while a drawer was moving. They are applied
+        // in order once it stops: a frame that is dropped would lose the text
+        // it carries, and the conversation must not grow under the finger.
+        var heldFrames: [StateFrame] = []
+
+        /// Apply one frame to the stream.
+        ///
+        /// Only a turn that is still running may take over the history or type.
+        /// Frames buffered from a turn that ended before this screen opened are
+        /// history: revealing them on entry starts a typewriter for text nobody
+        /// watched arrive -- and, on a long answer, a Markdown layout per frame
+        /// for the whole reveal.
+        func applyStreamFrame(_ frame: StateFrame) {
+            let turnRunning = streamTurn?.isRunning
+                ?? shownTurns.last?.isRunning
+                ?? false
+            if stream.apply(frame) {
+                sawState = true
+                if turnRunning {
+                    streamSawLive = true
+                    if frame.state.carriesText, !frame.text.isEmpty {
+                        streamTypingEnabled = true
+                    }
+                }
+            }
+        }
+
         while !Task.isCancelled {
             for frame in await model.drainStateFrames(for: sessionId) {
                 // A frame is the first evidence that this host has a state
@@ -1496,24 +1523,33 @@ struct SessionDetailView: View {
                 if streamStartedAt == nil, frame.state != .idle, frame.state != .unknown {
                     streamStartedAt = shownTurns.last?.startedAt ?? Date()
                 }
-                // Only a turn that is still running may take over the history
-                // or type. Frames buffered from a turn that ended before this
-                // screen opened are history: revealing them on entry starts a
-                // typewriter for text nobody watched arrive -- and, on a long
-                // answer, a Markdown layout per frame for the whole reveal.
-                let turnRunning = streamTurn?.isRunning
-                    ?? shownTurns.last?.isRunning
-                    ?? false
                 lastFrameAt = Date()
-                if stream.apply(frame) {
-                    sawState = true
-                    if turnRunning {
-                        streamSawLive = true
-                        if frame.state.carriesText, !frame.text.isEmpty {
-                            streamTypingEnabled = true
-                        }
-                    }
+                // A drawer mid-flight owns the frames, the way it owns the
+                // typewriter and the turning mark: the conversation must not
+                // grow under the finger. A row that grows is a row that moves
+                // -- the page follows it to the bottom -- and the card's own
+                // motion needs these frames more than the answer does.
+                if shell.isDragging || shell.isSettling {
+                    heldFrames.append(frame)
+                    continue
                 }
+                // The drawer may have stopped while the frames were held: they
+                // go in first, in the order they arrived. The stream drops an
+                // older interval as a late frame, so a held frame that came
+                // after this one would lose its text.
+                if !heldFrames.isEmpty {
+                    let held = heldFrames
+                    heldFrames.removeAll()
+                    for heldFrame in held { applyStreamFrame(heldFrame) }
+                }
+                applyStreamFrame(frame)
+            }
+            // The drawer may have stopped and no frame may have arrived since:
+            // the held ones go in now, in the order they arrived.
+            if !heldFrames.isEmpty, !shell.isDragging, !shell.isSettling {
+                let held = heldFrames
+                heldFrames.removeAll()
+                for frame in held { applyStreamFrame(frame) }
             }
 
             if model.connectionGeneration != generation {
@@ -1542,7 +1578,8 @@ struct SessionDetailView: View {
                 stream.markDisconnected()
             }
 
-            if let newest = shownTurns.last, newest.isRunning, replayedTurnId != newest.id {
+            if let newest = shownTurns.last, newest.isRunning, replayedTurnId != newest.id,
+               !shell.isDragging, !shell.isSettling {
                 replayedTurnId = newest.id
                 await replayTurnInFlight()
             }
@@ -1554,13 +1591,16 @@ struct SessionDetailView: View {
             // heavier and only needs the slower history read.
             let liveTurn = shownTurns.last?.isRunning == true
                 || (!stream.finished && streamStartedAt != nil)
-            if liveTurn, Date().timeIntervalSince(lastFrameAt) >= 3, !reloading {
+            if liveTurn, Date().timeIntervalSince(lastFrameAt) >= 3, !reloading,
+               !shell.isDragging, !shell.isSettling {
                 await replayTurnInFlight()
                 lastFrameAt = Date()
             }
             if liveTurn,
                Date().timeIntervalSince(lastHistorySyncAt) >= 8,
-               !reloading {
+               !reloading,
+               !shell.isDragging,
+               !shell.isSettling {
                 let synced = await model.syncConversation(for: sessionId)
                 let cached = await model.cachedConversation(for: sessionId)
                 if !synced.items.isEmpty {
