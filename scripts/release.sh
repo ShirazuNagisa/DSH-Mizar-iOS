@@ -88,12 +88,19 @@ export_ipa() {
   /usr/libexec/PlistBuddy -c "Set :destination $destination" "$options"
   echo "release: exporting ($destination)"
   rm -rf "$EXPORT_DIR"
-  xcodebuild -exportArchive \
+  # The exit status matters, and a pipe to grep hides it: an upload that failed
+  # to authenticate used to be reported as "uploaded to App Store Connect"
+  # because grep found the word "error" in a line that was printed anyway.
+  local log="$CACHE/export.$destination.log"
+  if ! xcodebuild -exportArchive \
     -archivePath "$ARCHIVE" \
     -exportPath "$EXPORT_DIR" \
     -exportOptionsPlist "$options" \
-    -allowProvisioningUpdates \
-    | grep -E "error:|Upload succeeded|Exported|EXPORT (SUCCEEDED|FAILED)" || true
+    -allowProvisioningUpdates >"$log" 2>&1; then
+    grep -E "error:|EXPORT FAILED|Failed to" "$log" | tail -10 || true
+    die "export ($destination) failed — see $log"
+  fi
+  grep -E "error:|Upload succeeded|Exported|EXPORT (SUCCEEDED|FAILED)" "$log" || true
   # An upload destination never produces a local .ipa: the package goes straight
   # to App Store Connect from xcodebuild. Failing here used to report a successful
   # upload as "export produced no .ipa", which is the wrong conclusion to draw
