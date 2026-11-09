@@ -1404,7 +1404,19 @@ struct SessionDetailView: View {
         // `load()` shows the cache, the network answer and the cache again.
         // Republishing the same array invalidates the whole screen and the turn
         // index for nothing; a long conversation paid for that three times.
-        guard turns != self.turns || conversationSessionId != sessionId else { return }
+        let changed = turns != self.turns || conversationSessionId != sessionId
+        guard changed else {
+            // Leaving this screen withdraws the turn index; coming back to the
+            // same session keeps `turns` and `conversationSessionId` unchanged,
+            // so the cheap equality guard used to return here forever. The
+            // header still said "5 turns", but the index page was empty until
+            // the title or the content changed. Re-publish only when the index
+            // itself has been withdrawn or belongs to another session.
+            if turnIndex.sessionId != sessionId {
+                turnIndex.publish(sessionId: sessionId, title: shownStats?.title, turns: turns)
+            }
+            return
+        }
         self.turns = turns
         conversationSessionId = sessionId
         model.noteConversationTurns(turns, for: sessionId)
