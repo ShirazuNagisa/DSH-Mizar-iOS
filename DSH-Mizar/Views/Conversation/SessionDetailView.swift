@@ -468,6 +468,14 @@ struct SessionDetailView: View {
                 }
             }
         }
+        .onAppear {
+            // `onDisappear` withdraws the index. On return, restore the index
+            // from the turns this screen still has even before the reload
+            // below lands; `show(turns:)` is the update for later reads.
+            if turnIndex.sessionId != sessionId {
+                turnIndex.publish(sessionId: sessionId, title: shownStats?.title, turns: shownTurns)
+            }
+        }
         .task(id: sessionId) {
             // A different session is a different conversation, and the typewriter
             // state belongs to the one that was on screen.
