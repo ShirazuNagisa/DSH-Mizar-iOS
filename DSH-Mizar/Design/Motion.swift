@@ -84,6 +84,37 @@ extension EnvironmentValues {
         get { self[DrawersStillKey.self] }
         set { self[DrawersStillKey.self] = newValue }
     }
+
+    /// The same fact as an object, for the code that runs between frames.
+    ///
+    /// The key above is a value: reading it in a body registers a dependency,
+    /// so every view that reads it is re-rendered when a drawer starts or
+    /// stops. The typewriter's answer is a long Markdown, and re-laying it
+    /// out at the moment the finger lands is a frame the card does not move
+    /// on -- which reads as a card that does not follow the finger. This one
+    /// is an object, so reading it registers nothing: the reveal reads it
+    /// between its ticks and the row is not touched.
+    var drawerGate: DrawerMotionGate {
+        get { self[DrawerGateKey.self] }
+        set { self[DrawerGateKey.self] = newValue }
+    }
+}
+
+/// Whether the shell's drawers are moving, for the code that runs between
+/// frames.
+///
+/// A plain class on purpose: reading it does not register a dependency, so
+/// the view that reads it is not re-rendered when a drawer starts or stops.
+final class DrawerMotionGate: @unchecked Sendable {
+    /// Whether the drawers are at rest.
+    ///
+    /// Written and read on the main actor only -- the shell moves the
+    /// drawers, and the reveal reads between its ticks.
+    var still = true
+}
+
+private struct DrawerGateKey: EnvironmentKey {
+    static let defaultValue = DrawerMotionGate()
 }
 
 // MARK: - Transitions

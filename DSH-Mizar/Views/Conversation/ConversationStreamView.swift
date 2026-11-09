@@ -33,6 +33,8 @@ import MizarKit
 
 /// The turn's stream, drawn.
 struct ConversationStreamView: View {
+    /// The gate that holds a reveal while a drawer moves.
+    @Environment(\.drawerGate) private var drawerGate
     let sessionId: String
     /// The blocks, oldest first.
     let stream: TurnStream
@@ -208,7 +210,7 @@ struct ConversationStreamView: View {
                 // No typed reveal: this answer arrived with the history, not
                 // with the stream, and the typewriter belongs to the moment
                 // it lands.
-                TypewriterMessage(text: fallbackAnswer, typing: false)
+                TypewriterMessage(text: fallbackAnswer, typing: false, gate: drawerGate)
                     .padding(.top, 8)
             }
             if stream.truncated {
@@ -369,6 +371,7 @@ struct ConversationStreamView: View {
             TypewriterMessage(
                 text: block.text,
                 typing: typing && block.id == latestBodyId && typedBlockId != block.id,
+                gate: drawerGate,
                 onStarted: {
                     typedBlockId = block.id
                     onTypingStarted()

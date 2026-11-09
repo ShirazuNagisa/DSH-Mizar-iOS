@@ -942,6 +942,8 @@ private struct UserBubble: View {
 
 /// The agent's answer: the page, not a bubble.
 private struct AgentText: View {
+    /// The gate that holds a reveal while a drawer moves.
+    @Environment(\.drawerGate) private var drawerGate
     let text: String
     /// Whether this answer is being typed onto the page as it arrives.
     var typing: Bool = false
@@ -949,7 +951,7 @@ private struct AgentText: View {
     var onTypingStarted: () -> Void = {}
 
     var body: some View {
-        TypewriterMessage(text: text, typing: typing, onStarted: onTypingStarted)
+        TypewriterMessage(text: text, typing: typing, gate: drawerGate, onStarted: onTypingStarted)
             .font(.body)
             .lineSpacing(4)
             .foregroundStyle(.primary)

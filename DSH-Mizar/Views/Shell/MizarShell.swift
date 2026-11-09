@@ -275,6 +275,7 @@ private struct ShellLayer<Content: View>: View {
             .environment(sidePlane)
             .environment(preview)
             .environment(\.drawersStill, !shell.isDragging && !shell.isSettling)
+            .environment(\.drawerGate, shell.gate)
             .environment(\.scenePhase, context.scenePhase)
     }
 

@@ -51,6 +51,9 @@ final class ShellState {
     /// Where `progress` is heading: the finger's position while dragging, the
     /// destination while settling. Every decision is made on this.
     @ObservationIgnored private var goal: CGFloat = 0
+    /// The same fact for the code that runs between frames, where reading an
+    /// observed property would re-render the row that reads it.
+    let gate = DrawerMotionGate()
     @ObservationIgnored private let motion = DrawerMotion()
     /// What draws the drawers.
     @ObservationIgnored private var surfaces: [WeakSurface] = []
@@ -145,6 +148,7 @@ final class ShellState {
     /// Put it somewhere without animating, for the first frame.
     func place(open: Bool) {
         goal = open ? 1 : 0
+        gate.still = true
         motion.stop()
         stopPlaying()
         show(goal)
@@ -178,6 +182,7 @@ final class ShellState {
 
     func beginDrag() {
         isDragging = true
+        gate.still = false
         dragOrigin = goal
         // The finger takes the card over from the spring.
         settleGeneration &+= 1
@@ -304,6 +309,7 @@ final class ShellState {
             try? await Task.sleep(for: .milliseconds(520))
             guard settleGeneration == generation, !isDragging else { return }
             isSettling = false
+            gate.still = true
         }
     }
 

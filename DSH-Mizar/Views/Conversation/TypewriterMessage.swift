@@ -248,9 +248,7 @@ struct TypewriterMessage: View {
             // Fourteen milliseconds: sixty-ish frames a second, and no more
             // precision than a phone display can show. The count is derived
             // from elapsed time, so a missed tick costs nothing but a redraw.
-            // While the reveal is held it costs nothing at all, so it wakes
-            // less often: those frames belong to the card.
-            try? await Task.sleep(for: .milliseconds(held ? 60 : 14))
+            try? await Task.sleep(for: .milliseconds(14))
         }
         guard !Task.isCancelled else { return }
         revealed = plan.totalCharacters
