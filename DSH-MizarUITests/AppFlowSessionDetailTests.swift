@@ -24,7 +24,14 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         expect(header, "the stream header is missing")
         XCTAssertTrue(app.frame.contains(header.frame), "the conversation opened below the stream")
 
-        expect(app.staticTexts["我先看一下现有的实现。"], "the narration is missing")
+        // The turn has settled by the time the header is there, and a settled
+        // turn keeps its answer: the status lines and the narration are folded
+        // away behind the header, one tap away.
+        expect(app.staticTexts["三处都改完了，测试全绿。"], "the answer is missing")
+        XCTAssertFalse(
+            app.staticTexts["我先看一下现有的实现。"].exists,
+            "the process is still on the page",
+        )
     }
 
     /// The turn settles into the header, and the answer stays on screen rather
@@ -57,11 +64,20 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         let header = app.descendants(matching: .any)["conversation.stream.header"]
         expect(header, "the settled header is missing")
 
-        // The answer is on screen; the narration behind it is not.
+        // The answer is on screen; the narration behind it folds away. The
+        // fold takes a moment, so this waits for it rather than racing it.
         let answer = app.staticTexts["三处都改完了，测试全绿。"]
         expect(answer, "the answer is missing")
         let narration = app.staticTexts["我先看一下现有的实现。"]
-        XCTAssertFalse(narration.exists, "the process is still on the page")
+        let foldedAway = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: narration,
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [foldedAway], timeout: 5),
+            .completed,
+            "the process is still on the page",
+        )
 
         // A tap on the header brings the process back.
         header.tap()
