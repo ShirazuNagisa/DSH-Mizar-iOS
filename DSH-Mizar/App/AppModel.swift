@@ -5300,7 +5300,7 @@ final class AppModel {
     ///   all. The caller must not treat `nil` as the end of the conversation:
     ///   every early exit here is a condition that can clear on its own.
     @discardableResult
-    func loadOlder(sessionId: String) async -> Int? {
+    func loadOlder(sessionId: String, force: Bool = false) async -> Int? {
         guard connection != nil else { return nil }
         guard let cached = await conversations.load(sessionId: sessionId),
               let before = cached.historyCursor ?? cached.oldestSeq
@@ -5308,7 +5308,10 @@ final class AppModel {
         // Nothing older to ask for. Without this the scroll-to-top would fire a
         // request on every appearance for a page that cannot change. This one is
         // definitive: the host said so, not a transient failure of ours.
-        guard cached.hasMore else { return 0 }
+        // `force` exists for a manual refresh after a compaction: the stored
+        // `hasMore` was written by an older host that answered from a short
+        // cache, and only a read can replace that stale false with the truth.
+        guard cached.hasMore || force else { return 0 }
 
         do {
             let result = try await messages(
@@ -5349,6 +5352,33 @@ final class AppModel {
             if !message.isEmpty { lastError = message }
             return nil
         }
+    }
+
+    /// A manual refresh also walks one page back when the cache has no
+    /// compaction marker yet.
+    ///
+    /// `hasMore` can be a stale false written after a short cached page from an
+    /// older host. A forced read is the only way to replace it and reach the
+    /// `command/done` divider. One page is enough for the usual case: the
+    /// compaction command sits immediately before the current history cursor.
+    ///
+    /// - Parameter sessionId: the conversation on screen.
+    /// - Returns: whether the cache changed.
+    @discardableResult
+    func refreshCompactionHistory(for sessionId: String) async -> Bool {
+        guard let cached = await conversations.load(sessionId: sessionId),
+              !cached.items.contains(where: { item in
+                  if case .notice(_, let text, _) = item {
+                      return text.lowercased().contains("compacted")
+                          || text.contains("压缩")
+                  }
+                  return false
+              }),
+              let before = cached.historyCursor ?? cached.oldestSeq,
+              before > 0
+        else { return false }
+        guard let changed = await loadOlder(sessionId: sessionId, force: true) else { return false }
+        return changed > 0
     }
 
     /// Fold a page fetched with `beforeSeq` into a stored conversation.

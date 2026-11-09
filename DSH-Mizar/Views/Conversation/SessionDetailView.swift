@@ -2767,6 +2767,15 @@ struct SessionDetailView: View {
             reloadWanted = false
             await load()
         }
+        if await model.refreshCompactionHistory(for: sessionId),
+           let cached = await model.cachedConversation(for: sessionId) {
+            items = cached.items
+            show(turns: cached.turns ?? [])
+            if let frame = cached.stats {
+                stats = frame
+                statsSessionId = sessionId
+            }
+        }
         // A manual refresh is also the operator asking "where is this turn
         // now". `load()` refreshes the history and stats, but the live body
         // comes from the state journal; if the state channel has gone quiet,
