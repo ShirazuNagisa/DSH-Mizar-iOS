@@ -80,7 +80,15 @@ struct InteractionsDock: View {
 
     private var cards: [Card] {
         guard let pending = model.pending else { return [] }
-        return pending.approvals.map(Card.approval) + pending.questions.map(Card.question)
+        let all = pending.approvals.map(Card.approval) + pending.questions.map(Card.question)
+        // A card belongs to one conversation. A sessionless interaction is a
+        // bridge anomaly, not a request made by the session on screen; showing
+        // it here would make every conversation look like it was asking. Keep
+        // the deck scoped to the open session. With no session selected (the
+        // home screen), the list is not filtered so a real global request can
+        // still be answered.
+        guard let selected = model.selectedSessionId else { return all }
+        return all.filter { $0.sessionId == selected }
     }
 
     private var front: Card? {
