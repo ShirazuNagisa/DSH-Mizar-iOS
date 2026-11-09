@@ -4670,7 +4670,13 @@ final class AppModel {
         // starting the second would make a pull-to-refresh cost one timeout per
         // address. The earliest candidate that answered as this computer still
         // wins, so the order continues to decide between two working addresses.
-        let hostId = host.hostId
+        // The identity the socket authenticated as, not the one the pairing
+        // record carries. An account pairing is written with the account's
+        // device/host id (3556… on this phone), while the computer calls itself
+        // 29d9… in `welcome` and `/hello`; comparing the probe's host id to the
+        // stored one rejected the very address that had just answered and left
+        // every LAN scan on "no local address answered".
+        let hostId = welcome?.hostId ?? host.hostId
         let probe = PairingClient(transport: URLSessionHTTPTransport(timeout: Self.lanProbeTimeout))
         var answered: Set<String> = []
         await withTaskGroup(of: (authority: String, matched: Bool).self) { group in
@@ -5141,6 +5147,20 @@ final class AppModel {
                 } catch {
                     break
                 }
+            }
+            // An exact route is a question about one address, not "is there any
+            // socket". Returning the relay connection here reported a LAN move
+            // as successful without ever dialling it -- the footer went back to
+            // "via relay" on the next event and the local socket was never
+            // opened. Wait for the in-flight attempt to finish, then make the
+            // exact dial it was asked for.
+            if let exactRoute, !reconnecting {
+                return await reconnect(
+                    patient: patient,
+                    tryingEveryRoute: tryingEveryRoute,
+                    preferringRelay: preferringRelay,
+                    over: exactRoute,
+                )
             }
             return connection != nil
         }
@@ -7205,6 +7225,14 @@ final class AppModel {
             await rememberRelayBaseURL(baseURL)
         }
         await finishAdopting()
+        // A launch that lands on the relay should ask the LAN question in the
+        // same second, not thirty seconds later. On a phone whose computer is on
+        // the same hotspot, the resident watch was the difference between a
+        // 1.4 s relay link and a 20 ms direct one -- and a user who opened the
+        // app right after launch saw "via relay" and concluded LAN was broken.
+        if case .relay = answer.endpoint, settings.values.localNetworkFirst {
+            Task { [weak self] in await self?.scanForLocalNetwork() }
+        }
     }
 
     /// The on-device agent's handshake has completed: the same tail as a computer.
