@@ -15,13 +15,40 @@ import SwiftUI
 enum OnboardingKeys {
     static let done = "mizar.onboarding.done"
     static let started = "mizar.onboarding.started"
+    /// The version of the guide the operator walked through.
+    ///
+    /// Written when the guide finishes. A phone that was carrying an older
+    /// guide has no value here, and walks this one again -- the account and
+    /// the settings it already has are kept; the guide is a walk-through, not
+    /// a reset.
+    static let version = "mizar.onboarding.version"
+    /// The guide this build wants walked.
+    ///
+    /// 0.9.9 is the one that adds the metadata reload: a phone that came
+    /// from 0.9.8 or older walks the guide once more, and the sessions it
+    /// shows are loaded again from the desktop on the way.
+    static let requiredVersion = "0.9.9"
+
+    /// Whether the guide has been walked in the version this build wants.
+    static func isComplete(storedVersion: String?) -> Bool {
+        guard let storedVersion, !storedVersion.isEmpty else { return false }
+        return storedVersion.compare(requiredVersion, options: .numeric) != .orderedAscending
+    }
 }
 
 struct OnboardingView: View {
+    /// Whether this phone has been here before.
+    ///
+    /// A phone that walks the guide again -- every phone that came from an
+    /// older build -- keeps the account and the settings it has, and must not
+    /// be asked to sign in again.
+    var isUpdate: Bool = false
+
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(OnboardingKeys.done) private var done = false
     @AppStorage(OnboardingKeys.started) private var started = false
+    @AppStorage(OnboardingKeys.version) private var guideVersion = ""
     @State private var wantsLocalAgent = false
 
     @State private var step: Step = Self.debugInitialStep
@@ -31,7 +58,7 @@ struct OnboardingView: View {
     @State private var appeared = false
 
     private enum Step: Int, CaseIterable, Identifiable {
-        case welcome, account, network, agent, alerts, plan, summary
+        case welcome, account, network, agent, alerts, plan, refresh, summary
 
         var id: Int { rawValue }
 
@@ -205,6 +232,8 @@ struct OnboardingView: View {
             alertsPage
         case .plan:
             planPage
+        case .refresh:
+            refreshPage
         case .summary:
             summaryPage
         }
@@ -213,7 +242,9 @@ struct OnboardingView: View {
     private var footer: some View {
         VStack(spacing: Theme.Space.md) {
             if step == .account, !model.account.isLoggedIn {
-                Text("Sign in to continue.")
+                Text(isUpdate
+                    ? String(localized: "You can continue without an account.")
+                    : String(localized: "Sign in to continue."))
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.55))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -623,6 +654,97 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Refresh
+
+    /// What the metadata reload is doing.
+    private enum ReloadState: Equatable {
+        case idle
+        case running
+        case done(AppModel.MetadataReload)
+        case failed
+    }
+
+    @State private var reloadState: ReloadState = .idle
+
+    /// The page that loads the session information again.
+    ///
+    /// Everything this phone shows about the sessions is read from the
+    /// desktop once more, with the rules the desktop uses today: the cached
+    /// pages go first, so nothing an older build left behind is drawn
+    /// afterwards. It is the last thing before the summary, because after it
+    /// the phone's conversations are the desktop's, not a mixture of two.
+    private var refreshPage: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xxl) {
+            pageHeader(
+                icon: "arrow.triangle.2.circlepath",
+                title: "Refresh your conversations",
+                subtitle: "Everything this phone shows about your sessions is read again from your computer, with the rules it uses today.",
+            )
+
+            card {
+                HStack(spacing: Theme.Space.lg) {
+                    switch reloadState {
+                    case .idle, .running:
+                        ProgressView()
+                            .controlSize(.regular)
+                            .tint(Color.accentColor)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Loading your sessions…")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text("Your account and your settings are kept. Only the session information is loaded again.")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                    case .done(let result):
+                        Image(systemName: result.reached ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .font(.title3)
+                            .foregroundStyle(result.reached ? Color.accentColor : Theme.waiting)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(result.reached
+                                ? String(format: String(localized: "%lld sessions loaded"), result.sessions)
+                                : String(localized: "Your computer did not answer."))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text("Your account and your settings are kept.")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                    case .failed:
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.title3)
+                            .foregroundStyle(Theme.waiting)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Your computer did not answer.")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text("You can continue; the sessions are loaded again when it answers.")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .accessibilityIdentifier("onboarding.refresh.state")
+
+            Text("The sessions are loaded again every time you open the guide, so what you see afterwards is what your computer says now.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.48))
+        }
+        .task(id: step) { await runReload() }
+    }
+
+    /// Load the session information again, once.
+    private func runReload() async {
+        guard reloadState == .idle else { return }
+        reloadState = .running
+        let result = await model.reloadSessionMetadata()
+        withMizarAnimation(.mizarSmooth) {
+            reloadState = result.reached ? .done(result) : .failed
+        }
+    }
+
     // MARK: - Values
 
     private var networkSummary: String {
@@ -651,7 +773,12 @@ struct OnboardingView: View {
     }
 
     private var canAdvance: Bool {
-        step != .account || model.account.isLoggedIn
+        guard step == .account else { return true }
+        if model.account.isLoggedIn { return true }
+        // A phone that has been here before does not have to sign up to walk
+        // the guide again: the account is optional, and the one it has -- or
+        // the lack of one -- is what it keeps.
+        return isUpdate
     }
 
     // MARK: - Navigation
@@ -675,6 +802,9 @@ struct OnboardingView: View {
         if step == .summary {
             started = true
             let useLocal = wantsLocalAgent && model.localAgent.hasConfiguredProvider
+            // The guide this phone has walked is the guide this build wants:
+            // the version is what decides whether it is walked again.
+            guideVersion = OnboardingKeys.requiredVersion
             withMizarAnimation(.mizarSmooth) { done = true }
             if useLocal {
                 Task { await model.enterLocalAgent() }

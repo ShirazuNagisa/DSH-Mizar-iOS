@@ -893,3 +893,13 @@
 "Your computer does the work. This phone stays in control." = "Your computer does the work. This phone stays in control.";
 "Your computer runs the agent" = "Your computer runs the agent";
 "iOS will ask for notification permission. You can change both later." = "iOS will ask for notification permission. You can change both later.";
+
+"You can continue without an account." = "You can continue without an account.";
+"Refresh your conversations" = "Refresh your conversations";
+"Everything this phone shows about your sessions is read again from your computer, with the rules it uses today." = "Everything this phone shows about your sessions is read again from your computer, with the rules it uses today.";
+"Loading your sessions…" = "Loading your sessions…";
+"Your account and your settings are kept. Only the session information is loaded again." = "Your account and your settings are kept. Only the session information is loaded again.";
+"%lld sessions loaded" = "%lld sessions loaded";
+"Your computer did not answer." = "Your computer did not answer.";
+"You can continue; the sessions are loaded again when it answers." = "You can continue; the sessions are loaded again when it answers.";
+"The sessions are loaded again every time you open the guide, so what you see afterwards is what your computer says now." = "The sessions are loaded again every time you open the guide, so what you see afterwards is what your computer says now.";

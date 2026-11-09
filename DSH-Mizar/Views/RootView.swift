@@ -12,6 +12,12 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(OnboardingKeys.done) private var onboardingDone = false
     @AppStorage(OnboardingKeys.started) private var onboardingStarted = false
+    /// Whether this phone has been here before, so the guide is a walk-through.
+    ///
+    /// A phone that walks the guide again -- every phone that came from an
+    /// older build -- must not be asked for an account it already has, nor
+    /// for settings it already chose.
+    @State private var onboardingIsUpdate = false
     /// Whether the launch has decided if this is a new install or a migration.
     @State private var onboardingDecided = false
     /// Whether the app has been to the background since it was last active.
@@ -34,7 +40,7 @@ struct RootView: View {
             if model.account.phase == .idle || !onboardingDecided {
                 LaunchingView()
             } else if !Self.skipOnboarding && !onboardingDone {
-                OnboardingView()
+                OnboardingView(isUpdate: onboardingIsUpdate)
             } else if requiresLogin {
                 WelcomeGateView()
             } else {
@@ -233,18 +239,38 @@ private extension RootView {
             onboardingStarted = false
             return
         }
-        guard !onboardingDone else { return }
         guard !onboardingStarted else { return }
 
-        // A fresh install has never asked for permissions; an existing install
-        // did so at launch. That flag is the migration signal even when the
-        // account is currently signed out.
-        let existingInstall = UserDefaults.standard.bool(forKey: "mizar.permissionsAsked")
-        if model.account.isLoggedIn || existingInstall {
-            onboardingDone = true
-        } else {
-            onboardingStarted = true
+        // A test can say which guide the phone is carrying: the migration
+        // rule is about a version that was walked, and a test has to be able
+        // to put one there.
+        #if DEBUG
+        if let seeded = Self.seededGuideVersion() {
+            UserDefaults.standard.set(seeded, forKey: OnboardingKeys.version)
         }
+        #endif
+
+        // The guide this build wants walked. A phone that walked an older
+        // guide -- every phone that came from 0.9.8 or older -- walks this one
+        // again: the account and the settings it already has are kept, and
+        // the guide is where the session information is loaded again from the
+        // desktop, so what the phone shows afterwards is what the desktop
+        // says now.
+        let guideVersion = UserDefaults.standard.string(forKey: OnboardingKeys.version)
+        if OnboardingKeys.isComplete(storedVersion: guideVersion) {
+            onboardingDone = true
+            return
+        }
+        // The phone has been here before: it walked an older guide, or it
+        // has an account, or it asked for its permissions. Any of those means
+        // the guide is a walk-through -- the account and the settings it
+        // already has are kept -- and not a first run that asks for
+        // everything again.
+        onboardingIsUpdate = onboardingDone
+            || model.account.isLoggedIn
+            || UserDefaults.standard.bool(forKey: "mizar.permissionsAsked")
+        onboardingDone = false
+        onboardingStarted = true
     }
 
     /// The UI suite's way past the guide.
@@ -262,6 +288,22 @@ private extension RootView {
         ProcessInfo.processInfo.arguments.contains("-mizarResetOnboarding")
         #else
         false
+        #endif
+    }
+
+    /// A debug-only seed: the version of the guide the phone is carrying.
+    ///
+    /// `-mizarOnboardingVersion 0.9.8` makes the app behave like a phone
+    /// that walked that guide, which is what the migration rule is about.
+    static func seededGuideVersion() -> String? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-mizarOnboardingVersion"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+        #else
+        return nil
         #endif
     }
 

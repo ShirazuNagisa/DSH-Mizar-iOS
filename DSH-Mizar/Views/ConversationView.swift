@@ -300,6 +300,28 @@ struct ConversationView: View {
     }
 }
 
+/// Which of a turn's items are its process.
+///
+/// The turn's last agent message is the summary -- what the turn is read by --
+/// and it stays on the page. Everything the agent said before it is how the
+/// turn got there, and it is folded away behind the row that says how long
+/// the turn took.
+///
+/// The host sends one message per finished turn, so this is empty for most
+/// turns and the row stays a plain line. A turn that carried more than one
+/// gets the fold, the same one the live stream uses.
+enum ConversationProcess {
+    /// The ids of the items that are the process.
+    static func items(in items: [ConversationItem]) -> Set<String> {
+        func isAgent(_ item: ConversationItem) -> Bool {
+            if case .message(_, .assistant, _, _) = item { return true }
+            return false
+        }
+        guard let summary = items.lastIndex(where: isAgent) else { return [] }
+        return Set(items[..<summary].filter(isAgent).map(\.id))
+    }
+}
+
 /// One turn: the prompt, the row that says how it is going, and the answer.
 private struct TurnSection: View {
     let turn: ConversationTurn
@@ -322,6 +344,15 @@ private struct TurnSection: View {
     /// number assigned at the moment of the event -- not when the Task runs --
     /// lets the parent keep the last one that actually happened.
     @State private var realizationSequence = 0
+
+    /// Whether the turn's process is on screen.
+    ///
+    /// A finished turn keeps its answer and folds the process away: the
+    /// status lines and the narration that came before it are one tap away,
+    /// behind the line that says how long the turn took. The same rule the
+    /// live stream follows, so a turn looks the same whether it was watched
+    /// or read back.
+    @State private var showsProcess = false
 
     private func reportRealized(_ built: Bool) {
         realizationSequence &+= 1
@@ -353,6 +384,7 @@ private struct TurnSection: View {
         return false
     }
 
+
     /// Whether the item is part of the agent's work, which is where the
     /// activity row belongs, rather than an operator prompt.
     private func isStep(_ item: ConversationItem) -> Bool {
@@ -373,25 +405,58 @@ private struct TurnSection: View {
         let visible = suppressBody ? items.filter { !isAssistantMessage($0) } : items
         let showsSummary = !suppressBody && !isNoticeOnly
         let summaryIndex = visible.firstIndex(where: isStep) ?? visible.count
+        // The turn's process: the agent's own messages before the last one.
+        // The last one is the summary the turn is read by, and it stays.
+        let process = ConversationProcess.items(in: visible)
 
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(visible.enumerated()), id: \.element.id) { index, item in
                 if showsSummary, index == summaryIndex {
-                    TurnActivitySummary(turn: turn, sessionId: sessionId)
+                    TurnActivitySummary(
+                        turn: turn,
+                        sessionId: sessionId,
+                        showsProcess: !process.isEmpty,
+                        processExpanded: showsProcess,
+                        onToggleProcess: {
+                            withMizarAnimation(.mizarSmooth) { showsProcess.toggle() }
+                        },
+                    )
                 }
-                ConversationRow(
-                    item: item,
-                    isLastPrompt: item.id == turn.prompts.last?.id,
-                    typing: item.id == typingAnswerId,
-                    onTypingStarted: { onAnswerTypingStarted(item.id) },
-                )
-                .transition(.rise(distance: 14, blur: 6))
+                if process.contains(item.id) {
+                    // The process is folded away by default and comes back
+                    // with the same small settle the live stream uses.
+                    if showsProcess {
+                        ConversationRow(
+                            item: item,
+                            isLastPrompt: false,
+                            typing: false,
+                            onTypingStarted: { onAnswerTypingStarted(item.id) },
+                        )
+                        .transition(.rise(distance: 6, blur: 0))
+                    }
+                } else {
+                    ConversationRow(
+                        item: item,
+                        isLastPrompt: item.id == turn.prompts.last?.id,
+                        typing: item.id == typingAnswerId,
+                        onTypingStarted: { onAnswerTypingStarted(item.id) },
+                    )
+                    .transition(.rise(distance: 14, blur: 6))
+                }
             }
 
             // No step (a prompt-only turn): the row still belongs after the
             // prompt, not above it.
             if showsSummary, summaryIndex >= visible.count {
-                TurnActivitySummary(turn: turn, sessionId: sessionId)
+                TurnActivitySummary(
+                    turn: turn,
+                    sessionId: sessionId,
+                    showsProcess: !process.isEmpty,
+                    processExpanded: showsProcess,
+                    onToggleProcess: {
+                        withMizarAnimation(.mizarSmooth) { showsProcess.toggle() }
+                    },
+                )
             }
 
             if !suppressBody {
@@ -611,6 +676,12 @@ private struct TurnSummary: View {
 private struct TurnActivitySummary: View {
     let turn: ConversationTurn
     let sessionId: String
+    /// Whether this turn has a process folded behind the row.
+    var showsProcess = false
+    /// Whether the process is on screen.
+    var processExpanded = false
+    /// Called when the row is tapped to fold or unfold the process.
+    var onToggleProcess: () -> Void = {}
 
     @Environment(AppModel.self) private var model
     /// The shell, for the drawer-motion hold: a poll second that lands
@@ -720,6 +791,20 @@ private struct TurnActivitySummary: View {
             .accessibilityLabel(expanded
                 ? String(localized: "Hide turn details")
                 : String(localized: "Show turn details"))
+        } else if showsProcess {
+            // The row is the way to the process: the turn's own line, with a
+            // mark that says the process is behind it.
+            Button {
+                onToggleProcess()
+            } label: {
+                TurnSummary(turn: turn, showsChevron: true, expanded: processExpanded)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("turn.\(turn.id).process")
+            .accessibilityLabel(processExpanded
+                ? String(localized: "Hide the process")
+                : String(localized: "Show the process"))
         } else {
             TurnSummary(turn: turn)
                 .accessibilityIdentifier("turn.\(turn.id)")

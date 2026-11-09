@@ -894,3 +894,13 @@
 "P2P direct connection (Experimental)" = "P2P 直连（实验性）";
 "Try a direct path when the local network is unavailable." = "局域网不可用时尝试直连。";
 "No phones or iPads are signed in." = "没有已登录的手机或 iPad。";
+
+"You can continue without an account." = "你可以不登录继续使用。";
+"Refresh your conversations" = "刷新会话信息";
+"Everything this phone shows about your sessions is read again from your computer, with the rules it uses today." = "这台手机上关于会话的全部信息，会按电脑今天使用的规则重新读取一次。";
+"Loading your sessions…" = "正在读取你的会话…";
+"Your account and your settings are kept. Only the session information is loaded again." = "你的登录信息和设置都会保留，只会重新读取会话信息。";
+"%lld sessions loaded" = "已读取 %lld 个会话";
+"Your computer did not answer." = "电脑没有回应。";
+"You can continue; the sessions are loaded again when it answers." = "你可以继续；等电脑回应后会再次读取会话。";
+"The sessions are loaded again every time you open the guide, so what you see afterwards is what your computer says now." = "每次打开新手教程都会重新读取会话，所以之后看到的就是电脑现在的样子。";

@@ -1756,6 +1756,18 @@ final class AppModel {
             where key.hasPrefix("lastSession.") || key.hasPrefix("mizar.draft.") {
                 UserDefaults.standard.removeObject(forKey: key)
             }
+            // The guide's own state, and the flag that says the phone asked
+            // for its permissions. A "start from nothing" launch that kept
+            // them would be a phone that has been here before, and the guide
+            // would let a signed-out person walk past the account step.
+            for key in [
+                "mizar.onboarding.done",
+                "mizar.onboarding.started",
+                "mizar.onboarding.version",
+                "mizar.permissionsAsked",
+            ] {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
             log.add(.cache, "starting from nothing: stored conversations and index cleared")
         }
         if !Self.launchPairingURIs.isEmpty {
@@ -4327,6 +4339,42 @@ final class AppModel {
     /// Refresh the session list.
     func refreshSessions() async {
         await refreshSessions(reconnectingIfNeeded: true)
+    }
+
+    /// What a metadata reload brought back.
+    struct MetadataReload: Equatable, Sendable {
+        /// How many sessions the desktop listed.
+        var sessions: Int
+        /// How many conversations were re-read from the desktop.
+        var conversations: Int
+        /// Whether the desktop answered at all.
+        var reached: Bool
+    }
+
+    /// Reload everything the phone shows about the sessions, from the desktop.
+    ///
+    /// The cached pages go first. A phone that carried pages from an older
+    /// build would keep drawing them, and the point of the reload is that
+    /// what is on screen afterwards is what the desktop says now -- the same
+    /// rules the desktop answers with today, read from scratch rather than
+    /// patched onto whatever was here.
+    ///
+    /// The conversation the operator is in is re-read as well: a session's
+    /// page is where its turns, their summaries and their usage come from, and
+    /// those are what the turn rows draw.
+    func reloadSessionMetadata() async -> MetadataReload {
+        await conversations.clear()
+        await refreshSessions(reconnectingIfNeeded: true)
+        var reloaded = 0
+        if let sessionId = selectedSessionId {
+            await syncConversation(for: sessionId)
+            reloaded = 1
+        }
+        return MetadataReload(
+            sessions: sessions.count,
+            conversations: reloaded,
+            reached: connection != nil,
+        )
     }
 
     // MARK: - The operator's own network

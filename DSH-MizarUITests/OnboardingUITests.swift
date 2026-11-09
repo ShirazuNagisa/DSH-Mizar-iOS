@@ -61,4 +61,58 @@ final class OnboardingUITests: XCTestCase {
         )
         app.terminate()
     }
+
+    /// A phone that walked an older guide walks this one again.
+    ///
+    /// The migration is about the guide, not the account: the operator who
+    /// updates from 0.9.8 sees the guide once more, with the account and the
+    /// settings they already have.
+    func testAPhoneThatWalkedAnOlderGuideWalksItAgain() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-mizarFreshStart",
+            "-mizarResetOnboarding",
+            "-mizarSkipSplash",
+            "-mizarSkipPermissionPrompts",
+            "-mizarAccountFreshStart",
+            "-mizarAccountURL", "http://127.0.0.1:1",
+            "-mizarOnboardingVersion", "0.9.8",
+        ]
+        app.launch()
+
+        let next = app.buttons["onboarding.next"]
+        XCTAssertTrue(
+            next.waitForExistence(timeout: 25),
+            "a phone carrying an older guide did not walk this one",
+        )
+        app.terminate()
+    }
+
+    /// The reload of the session information, before the summary.
+    func testTheRefreshPageLoadsTheSessionsAgain() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-mizarFreshStart",
+            "-mizarResetOnboarding",
+            "-mizarSkipSplash",
+            "-mizarSkipPermissionPrompts",
+            "-mizarAccountFreshStart",
+            "-mizarAccountURL", "http://127.0.0.1:1",
+            "-mizarOnboardingStep", "6",
+        ]
+        app.launch()
+
+        let state = app.descendants(matching: .any)["onboarding.refresh.state"]
+        XCTAssertTrue(state.waitForExistence(timeout: 25), "the refresh page did not appear")
+        XCTAssertTrue(
+            app.staticTexts["正在读取你的会话…"].exists
+                || app.staticTexts["Loading your sessions…"].exists
+                || app.staticTexts["电脑没有回应。"].exists
+                || app.staticTexts["Your computer did not answer."].exists,
+            "the refresh page says nothing about the reload",
+        )
+        app.terminate()
+    }
+
+
 }
