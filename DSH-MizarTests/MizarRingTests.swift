@@ -2,7 +2,7 @@
 //  MizarRingTests.swift
 //  DSH-MizarTests
 //
-//  The ring's geometry and its two timelines, as arithmetic.
+//  The ring's geometry and its timelines, as arithmetic.
 //
 //  The animation itself cannot be stepped frame by frame in a test -- a
 //  repeating keyframe animator is not a clock the harness can advance, and the
@@ -102,7 +102,7 @@ struct MizarRingTests {
 
     // MARK: Easing
 
-    @Test("both easings start and end at rest and never go backwards")
+    @Test("the easings start and end at rest and never go backwards")
     func easing() {
         #expect(RingMetrics.easeOutCubic(0) == 0)
         #expect(RingMetrics.easeOutCubic(1) == 1)
@@ -127,72 +127,242 @@ struct MizarRingTests {
         #expect(RingMetrics.easeOutCubic(2) == 1)
         #expect(RingMetrics.easeInOutCubic(-1) == 0)
         #expect(RingMetrics.easeInOutCubic(2) == 1)
+
+        #expect(RingMetrics.easeInOutQuint(0) == 0)
+        #expect(RingMetrics.easeInOutQuint(0.5) == 0.5)
+        #expect(RingMetrics.easeInOutQuint(1) == 1)
+
+        #expect(RingMetrics.easeInOutSine(0) == 0)
+        #expect(abs(RingMetrics.easeInOutSine(0.5) - 0.5) < 1e-9)
+        #expect(RingMetrics.easeInOutSine(1) == 1)
+        // The shrink must actually move at the beginning; a quintic sits
+        // almost still for the first tenth of a second and reads as a stutter.
+        #expect(RingMetrics.easeInOutSine(0.1) > 0.02)
+
+        // The morph overshoots by a hair and lands exactly on 1; the shrink is
+        // a different curve and never crosses below empty.
+        var previousShrink = 0.0
+        var morphPeak = 0.0
+        for step in 0...1000 {
+            let p = Double(step) / 1000
+            let morph = RingMetrics.morph(p)
+            let shrink = RingMetrics.easeInOutQuint(p)
+            morphPeak = max(morphPeak, morph)
+            #expect(shrink >= previousShrink)
+            #expect(shrink >= 0 && shrink <= 1)
+            previousShrink = shrink
+        }
+        #expect(RingMetrics.morph(0) == 0)
+        #expect(RingMetrics.morph(1) == 1)
+        #expect(morphPeak > 1)
+        #expect(morphPeak < 1.05)
+    }
+
+    @Test("the starts accelerate and decelerate instead of ticking")
+    func staggeredStarts() {
+        let starts = (0..<RingGeometry.segments.count).map {
+            RingMetrics.staggeredStart(index: $0, window: 1)
+        }
+        #expect(starts.first == 0)
+        #expect(starts.last == 1)
+        for (earlier, later) in zip(starts, starts.dropFirst()) {
+            #expect(earlier < later)
+        }
+        // Slow, fast, slow: the edge gaps are shorter than the middle ones.
+        #expect(starts[1] - starts[0] < starts[2] - starts[1])
+        #expect(starts[4] - starts[3] < starts[3] - starts[2])
     }
 
     // MARK: The running loop
 
-    @Test("the loop starts and ends on the same empty pose")
+    @Test("the first and last frame are the same full five-dot queue")
     func loopSeam() {
         let start = RingPresentation.running(0)
         let end = RingPresentation.running(1)
+        let expected = RingQueue.initialStarts.map(RingQueue.normalized)
         for index in RingGeometry.segments.indices {
-            #expect(start.state(for: index) == end.state(for: index))
-            #expect(!start.state(for: index).isVisible)
+            let a = start.state(for: index)
+            let b = end.state(for: index)
+            #expect(a == b)
+            #expect(a.opacity == 1)
+            #expect(a.dotOpacity == 1)
+            #expect(a.dotScale == 1)
+            #expect(a.sweepScale == 0)
+            let angle = RingQueue.normalized(
+                RingGeometry.segments[index].start + a.positionOffset,
+            )
+            #expect(abs(angle - expected[index]) < 1e-6)
         }
     }
 
-    @Test("the loop holds with the ring whole")
+    @Test("the finished icon holds with every piece whole")
     func loopHoldsWhole() {
-        // The last reveal has finished, and no retract has started yet.
-        let time = (RingMetrics.runRevealSpan + RingMetrics.runHoldFull / 2) / RingMetrics.runningLoop
+        let time = (RingMetrics.holdStart + RingMetrics.holdFull / 2) / RingMetrics.runningLoop
         let presentation = RingPresentation.running(time)
+        for index in 0..<4 {
+            let state = presentation.state(for: index)
+            #expect(state.isVisible)
+            #expect(abs(state.trimEnd - 1) < 1e-9)
+            #expect(abs(state.sweepScale - 1) < 1e-9)
+            #expect(state.opacity == 1)
+        }
+        let dot = presentation.state(for: 4)
+        #expect(dot.isVisible)
+        #expect(dot.sweepScale == 0)
+        #expect(dot.opacity == 1)
+    }
+
+    @Test("the initial queue is already complete before growth")
+    func loopInitialQueue() {
+        let time = 0.01 / RingMetrics.runningLoop
+        let presentation = RingPresentation.running(time)
+        let expected = RingQueue.initialStarts.map(RingQueue.normalized)
         for index in RingGeometry.segments.indices {
-            #expect(presentation.state(for: index).isVisible)
-            #expect(abs(presentation.state(for: index).trimEnd - 1) < 1e-9)
-            #expect(presentation.state(for: index).opacity == 1)
+            let state = presentation.state(for: index)
+            #expect(state.opacity == 1)
+            #expect(state.dotScale == 1)
+            #expect(state.sweepScale == 0)
+            let angle = RingQueue.normalized(
+                RingGeometry.segments[index].start + state.positionOffset,
+            )
+            #expect(abs(angle - expected[index]) < 1e-6)
         }
     }
 
-    @Test("the loop's last hold is empty before the seam")
-    func loopHoldsEmpty() {
-        let time = 1 - RingMetrics.runHoldEmpty / (2 * RingMetrics.runningLoop)
+    @Test("the front arc grows and pushes the dots behind it clockwise")
+    func loopChainPush() {
+        let time = (RingMetrics.morphPhaseStart + 0.10) / RingMetrics.runningLoop
         let presentation = RingPresentation.running(time)
+
+        let front = presentation.state(for: 0)
+        #expect(front.sweepScale > 0)
+        #expect(front.sweepScale < 1)
+        #expect(front.positionOffset >= 0)
+
+        let second = presentation.state(for: 1)
+        let initialSecond = RingQueue.initialStarts[1]
+        let actualSecond = RingGeometry.segments[1].start + second.positionOffset
+        #expect(actualSecond > initialSecond)
+
+        let frontEnd = RingGeometry.segments[0].start + front.positionOffset
+            + RingGeometry.segments[0].sweep * front.sweepScale
+        #expect(abs((actualSecond - frontEnd) - RingQueue.gaps[0]) < 1e-6)
+    }
+
+    @Test("growth lands exactly on the finished icon")
+    func loopGrowthLands() {
+        let time = (RingMetrics.holdStart + RingMetrics.holdFull / 2) / RingMetrics.runningLoop
+        let presentation = RingPresentation.running(time)
+        for index in 0..<4 {
+            let state = presentation.state(for: index)
+            #expect(abs(state.sweepScale - 1) < 1e-9)
+            #expect(state.trimEnd == 1)
+            #expect(state.dotOpacity == 0)
+            let start = RingGeometry.segments[index].start + state.positionOffset
+            #expect(abs(RingQueue.normalized(start) - RingQueue.finalStarts[index]) < 1e-6)
+        }
+        let dot = presentation.state(for: 4)
+        #expect(dot.dotOpacity > 0)
+        #expect(dot.sweepScale == 0)
+        let dotStart = RingGeometry.segments[4].start + dot.positionOffset
+        #expect(abs(RingQueue.normalized(dotStart) - RingQueue.finalStarts[4]) < 1e-6)
+    }
+
+    @Test("contraction keeps the chain gaps and re-forms the queue in one process")
+    func loopShrink() {
+        let time = (RingMetrics.shrinkPhaseStart + 0.12) / RingMetrics.runningLoop
+        let presentation = RingPresentation.running(time)
+
+        // Every arc has started to contract; the queue starts are still
+        // constrained by the adjacent gaps.
+        for index in 0..<4 {
+            let state = presentation.state(for: index)
+            #expect(state.sweepScale <= 1)
+            #expect(state.sweepScale >= 0)
+            if index > 0 {
+                let previous = presentation.state(for: index - 1)
+                let previousEnd = RingGeometry.segments[index - 1].start
+                    + previous.positionOffset
+                    + RingGeometry.segments[index - 1].sweep * previous.sweepScale
+                let currentStart = RingGeometry.segments[index].start + state.positionOffset
+                #expect(abs((currentStart - previousEnd) - RingQueue.gaps[index - 1]) < 1e-6)
+            }
+        }
+
+        // The debug fronts move strictly clockwise for every piece, across
+        // the twelve o'clock wrap.
+        let early = RingPresentation.running(
+            (RingMetrics.shrinkPhaseStart + 0.08) / RingMetrics.runningLoop,
+        ).shrinkFrontsUnwrapped()
+        let late = RingPresentation.running(
+            (RingMetrics.shrinkPhaseStart + 0.30) / RingMetrics.runningLoop,
+        ).shrinkFrontsUnwrapped()
+        #expect(early != nil)
+        #expect(late != nil)
+        if let early, let late {
+            for index in 0..<4 {
+                #expect(late[index] > early[index])
+            }
+        }
+
+        // The last frame is the initial queue, not a detached set of dots:
+        // the starts have continuously followed the shrinking lengths.
+        let end = RingPresentation.running(
+            (RingMetrics.shrinkPhaseStart + RingMetrics.shrinkSpan) / RingMetrics.runningLoop,
+        )
+        let expected = RingQueue.initialStarts.map(RingQueue.normalized)
         for index in RingGeometry.segments.indices {
-            #expect(!presentation.state(for: index).isVisible)
+            let state = end.state(for: index)
+            #expect(state.opacity == 1)
+            #expect(state.dotScale == 1)
+            #expect(state.sweepScale == 0)
+            let angle = RingQueue.normalized(
+                RingGeometry.segments[index].start + state.positionOffset,
+            )
+            #expect(abs(angle - expected[index]) < 1e-6)
         }
     }
 
-    @Test("the pieces load and erase in clockwise order")
-    func loopOrder() {
-        // Just after the second piece starts, the first is already painting,
-        // the second is painting, and nothing after them has begun. The
-        // stagger overlaps the draws; the order is still one way.
-        let time = (RingMetrics.runRevealStagger + 0.02) / RingMetrics.runningLoop
-        let reveal = RingPresentation.running(time)
-        #expect(reveal.state(for: 0).isVisible)
-        #expect(reveal.state(for: 1).isVisible)
-        #expect(!reveal.state(for: 2).isVisible)
-        #expect(!reveal.state(for: 4).isVisible)
-
-        // The first retract begins before the last piece has started to go.
-        let eraseTime = RingMetrics.runRevealSpan
-            + RingMetrics.runHoldFull
-            + 0.02
-        let erase = RingPresentation.running(eraseTime / RingMetrics.runningLoop)
-        #expect(erase.state(for: 0).trimStart > 0)
-        #expect(abs(erase.state(for: 4).trimStart) < 1e-9)
-        #expect(erase.state(for: 4).opacity == 1)
-    }
-
-    @Test("the loop is long enough to read and short enough to wait on")
+    @Test("one loop is a continuous chain, not a sequence of empty states")
     func loopLength() {
-        #expect(RingMetrics.runningLoop > 1.5)
-        #expect(RingMetrics.runningLoop < 3.0)
-        #expect(RingMetrics.runRevealSpan > 0)
-        #expect(RingMetrics.runRetractSpan > 0)
+        #expect(RingMetrics.runningLoop > 1.2)
+        #expect(RingMetrics.runningLoop < 2.5)
+        #expect(RingMetrics.holdQueue > 0)
+        #expect(RingMetrics.morphSpan > 0)
+        #expect(RingMetrics.shrinkSpan > 0)
     }
 
-    // MARK: The short pass
+    @Test("the settings one-shot starts on the five-dot queue")
+    func assemblyStartsAtDots() {
+        let presentation = RingPresentation.assembling(0)
+        let expected = RingQueue.initialStarts.map(RingQueue.normalized)
+        for index in RingGeometry.segments.indices {
+            let state = presentation.state(for: index)
+            #expect(state.opacity == 1)
+            #expect(state.dotScale == 1)
+            #expect(state.sweepScale == 0)
+            let angle = RingQueue.normalized(
+                RingGeometry.segments[index].start + state.positionOffset,
+            )
+            #expect(abs(angle - expected[index]) < 1e-6)
+        }
+    }
+
+    @Test("the settings one-shot stops on the finished icon")
+    func assemblyEndsOnIcon() {
+        let presentation = RingPresentation.assembling(1)
+        for index in 0..<4 {
+            let state = presentation.state(for: index)
+            #expect(state.isVisible)
+            #expect(abs(state.trimEnd - 1) < 1e-9)
+            #expect(abs(state.sweepScale - 1) < 1e-9)
+            #expect(state.opacity == 1)
+        }
+        let dot = presentation.state(for: 4)
+        #expect(dot.isVisible)
+        #expect(dot.sweepScale == 0)
+        #expect(dot.opacity == 1)
+    }
 
     @Test("the short pass starts and ends on the static icon")
     func onceEndsOnIcon() {
@@ -217,7 +387,7 @@ struct MizarRingTests {
     func onceLength() {
         #expect(RingMetrics.onceDuration > 1.0)
         #expect(RingMetrics.onceDuration < 2.0)
-        #expect(RingMetrics.onceDuration < RingMetrics.runningLoop)
+        #expect(RingMetrics.onceDuration < 2.0)
     }
 
     @Test("the short pass erases and loads in the same order")
@@ -235,6 +405,8 @@ struct MizarRingTests {
         #expect(load.state(for: 0).isVisible)
         #expect(!load.state(for: 2).isVisible)
     }
+
+    // MARK: The settings assembly
 
     // MARK: The progress reading
 

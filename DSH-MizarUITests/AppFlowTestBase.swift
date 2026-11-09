@@ -694,7 +694,7 @@ class AppFlowTestBase: XCTestCase {
         // The app now opens on a login gate. The protocol and layout suites drive
         // screens behind it and have no account to sign in with, so they launch
         // past it; the gate has its own test class.
-        arguments += ["-mizarSkipLoginGate"]
+        arguments += ["-mizarSkipLoginGate", "-mizarSkipOnboarding"]
         // Credits come from GitHub; the suite asserts rows, not the network.
         arguments += ["-mizarCreditsFixture"]
         // No splash: the suite looks for its first control within a few seconds

@@ -10,6 +10,10 @@ import MizarKit
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(OnboardingKeys.done) private var onboardingDone = false
+    @AppStorage(OnboardingKeys.started) private var onboardingStarted = false
+    /// Whether the launch has decided if this is a new install or a migration.
+    @State private var onboardingDecided = false
     /// Whether the app has been to the background since it was last active.
     ///
     /// Kept as a flag rather than read off the previous phase, because the way
@@ -27,8 +31,10 @@ struct RootView: View {
         Group {
             // Nothing is decided until the stored session has been read: the
             // gate must not flash for somebody who is already signed in.
-            if model.account.phase == .idle {
+            if model.account.phase == .idle || !onboardingDecided {
                 LaunchingView()
+            } else if !Self.skipOnboarding && !onboardingDone {
+                OnboardingView()
             } else if requiresLogin {
                 WelcomeGateView()
             } else {
@@ -37,6 +43,17 @@ struct RootView: View {
         }
         .animation(.mizarSmooth, value: phaseKey)
         .animation(.mizarSmooth, value: requiresLogin)
+        .animation(.mizarSmooth, value: onboardingDone)
+        .animation(.mizarSmooth, value: onboardingDecided)
+        .onChange(of: model.account.phase, initial: true) { _, phase in
+            decideOnboarding(for: phase)
+        }
+        // Permissions are the guide's last two pages, not a launch surprise:
+        // wait until the guide is done (or was skipped) before asking.
+        .task(id: onboardingDone) {
+            guard onboardingDone else { return }
+            await model.requestFirstRunPermissions()
+        }
         // One launch screen only: `LaunchingView` covers the wait, and the
         // shell is the page once the phase is an answer. The old turning-mark
         // window was a second animation after this one.
@@ -55,7 +72,6 @@ struct RootView: View {
             // App Store holds, or the plan lapses at the end of the period.
             await model.subscription.syncEntitlements()
         }
-        .task { await model.requestFirstRunPermissions() }
         .task { await model.ensurePushRegistration() }
         .alert(
             Text("This account has been banned"),
@@ -201,6 +217,54 @@ struct RootView: View {
 
 /// Which of the root's screens is up, as something an animation can watch.
 private extension RootView {
+    /// Decide onboarding once per launch, after the stored account has answered.
+    ///
+    /// A fresh install is logged out and gets the guide. An install that is
+    /// already signed in is an existing user, and marking the guide done here is
+    /// the migration: nobody who has used the app before should be shown the
+    /// first-run tour after an update. The `started` flag keeps a tour that was
+    /// interrupted by a relaunch on screen after its login step.
+    func decideOnboarding(for phase: AccountController.Phase) {
+        guard !onboardingDecided, phase != .idle else { return }
+        onboardingDecided = true
+
+        if Self.skipOnboarding || Self.resetOnboarding {
+            onboardingDone = Self.skipOnboarding
+            onboardingStarted = false
+            return
+        }
+        guard !onboardingDone else { return }
+        guard !onboardingStarted else { return }
+
+        // A fresh install has never asked for permissions; an existing install
+        // did so at launch. That flag is the migration signal even when the
+        // account is currently signed out.
+        let existingInstall = UserDefaults.standard.bool(forKey: "mizar.permissionsAsked")
+        if model.account.isLoggedIn || existingInstall {
+            onboardingDone = true
+        } else {
+            onboardingStarted = true
+        }
+    }
+
+    /// The UI suite's way past the guide.
+    static var skipOnboarding: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-mizarSkipOnboarding")
+        #else
+        false
+        #endif
+    }
+
+    /// A debug-only reset, for driving the guide from a clean slate.
+    static var resetOnboarding: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-mizarResetOnboarding")
+        #else
+        false
+        #endif
+    }
+
     /// Whether the login gate is in front of the app.
     var requiresLogin: Bool {
         #if DEBUG

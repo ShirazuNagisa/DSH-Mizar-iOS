@@ -181,4 +181,15 @@ struct AccountModelsTests {
         let existing = AccountError(code: "INVITE_EXPIRED", status: 410, message: "expired")
         #expect(AccountError.transport(existing) == existing)
     }
+
+    @Test("the device ledger distinguishes phones from desktops")
+    func deviceIsMobile() {
+        func device(platform: String) -> AccountDevice {
+            AccountDevice(id: "d", name: "n", model: "m", platform: platform)
+        }
+        #expect(device(platform: "ios").isMobile)
+        #expect(device(platform: "IOS").isMobile)
+        #expect(!device(platform: "macos").isMobile)
+        #expect(!device(platform: "windows").isMobile)
+    }
 }

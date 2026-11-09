@@ -66,7 +66,7 @@ final class WelcomeGateUITests: XCTestCase {
         app.launchArguments = [
             "-mizarFreshStart",
             "-mizarAccountFreshStart",
-            "-mizarSkipPermissionPrompts",
+            "-mizarSkipPermissionPrompts", "-mizarSkipOnboarding",
             "-mizarAccountURL", "http://127.0.0.1:\(MockPorts.port(for: "WelcomeGateUITests"))",
         ]
         app.launch()

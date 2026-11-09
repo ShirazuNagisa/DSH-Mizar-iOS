@@ -11,19 +11,26 @@
 //  ### Why the mark is a ring of unequal pieces
 //
 //  The icon is not a generic spinner: the long right-hand arc, the three short
-//  arcs down the left, and the dot at ten o'clock are one drawing. So the two
+//  arcs down the left, and the dot at ten o'clock are one drawing. So the
 //  motions are the drawing's own pieces, not a rotating copy of it. A spinner
 //  that turned the whole icon would be a different mark every frame; this one
 //  fills itself clockwise and then lets itself go, and every frame is the icon
 //  in some state of being drawn.
 //
-//  ### The two motions
+//  ### The motions
 //
-//  `running` is for waiting: long arc first, then the three short arcs, then
-//  the dot, all in clockwise order; a short hold with the ring complete; then
-//  the same order erases them. The next cycle starts from empty. It is the
-//  Windows 10 boot spinner's grammar -- appear one by one, hold, disappear one
-//  by one -- translated onto arcs of unequal length.
+//  `running` is the loading loop, in four stages plus a breath:
+//
+//    A. five dots appear clockwise, with a soft scale/opacity fade;
+//    B. each dot grows into its final arc **from its own start**, so the dot
+//       becomes the arc's round start cap instead of moving elsewhere;
+//    C. the finished icon holds for a beat;
+//    D. the arcs shrink back into dots, then the dots shrink and fade.
+//
+//  This is not a Windows 10 copy. That spinner supplied the rhythm: a
+//  clockwise cascade, one element at a time, with air between the beats. The
+//  dot→arc morph, the local overshoot, and the different curves for growth and
+//  shrink are this mark's own. Nothing rotates as a whole.
 //
 //  `once` is for arriving: the full icon holds for a beat, the pieces erase
 //  clockwise, and then they load back in. It starts and ends on the static
@@ -33,7 +40,8 @@
 //  gap, so `0` is an empty track and `1` is the icon. It still follows progress
 //  under Reduce Motion, because hiding the progress would hide the download.
 //
-//  Reduce Motion parks `running` and `once` on the icon; `opening` keeps
+//  Reduce Motion parks `running` and `once` on the icon;
+//  `opening` keeps
 //  following its fraction.
 //
 
@@ -151,6 +159,80 @@ enum RingGeometry {
     }
 }
 
+// MARK: - The clockwise queue
+
+/// The five pieces as one queue on the ring.
+///
+/// The queue is what makes this one object instead of five independent dots:
+/// each element starts at the previous element's end plus the same gap the
+/// finished icon has. Growing an element therefore pushes every element behind
+/// it clockwise; shrinking releases that space again.
+enum RingQueue {
+    static let count = RingGeometry.segments.count
+    static let dotIndex = count - 1
+
+    /// Starts in the finished icon, normalised to `0..<360`.
+    static let finalStarts: [Double] = RingGeometry.segments.map {
+        normalized($0.start)
+    }
+
+    /// Arc lengths in the finished icon. The fifth element is the dot (0).
+    static let finalLengths: [Double] = RingGeometry.segments.map(\.sweep)
+
+    /// The four gaps between consecutive elements, **measured from the
+    /// finished icon**. The elements keep these gaps as they grow, so the
+    /// spacing is the icon's own, not an arbitrary spinner spacing.
+    static let gaps: [Double] = (0..<4).map { index in
+        let current = RingGeometry.segments[index]
+        let next = RingGeometry.segments[index + 1]
+        return normalized(next.start - (current.start + current.sweep))
+    }
+
+    /// The queue at rest: five dots near twelve o'clock, each start pushed
+    /// forward by the final gaps. The rear-most dot is position A.
+    static let initialStarts: [Double] = {
+        var starts = [270.0]
+        for index in 0..<4 {
+            starts.append(starts[index] + gaps[index])
+        }
+        return starts
+    }()
+
+    /// Unwrapped starts in the finished icon, anchored at the long arc's
+    /// `270°`. The first element is the long arc; the fifth is the dot.
+    static let finalStartsUnwrapped: [Double] = {
+        var starts = [270.0]
+        for index in 0..<4 {
+            starts.append(starts[index] + finalLengths[index] + gaps[index])
+        }
+        return starts
+    }()
+
+    /// Where each arc's shrinking start ends up: the arc's final end.
+    static let finalEnds: [Double] = (0..<count).map { index in
+        finalStartsUnwrapped[index] + finalLengths[index]
+    }
+
+    /// The renderer's offset from each piece's finished start to its place in
+    /// the initial queue.
+    static let initialOffsets: [Double] = (0..<count).map {
+        initialStarts[$0] - finalStarts[$0]
+    }
+
+    /// Position A: the rear-most dot in the initial queue.
+    static var positionA: Double { initialStarts[dotIndex] }
+
+    static func normalized(_ angle: Double) -> Double {
+        let value = angle.truncatingRemainder(dividingBy: 360)
+        return value < 0 ? value + 360 : value
+    }
+
+    /// A positive clockwise delta, in `0..<360`.
+    static func clockwiseDelta(from start: Double, to end: Double) -> Double {
+        normalized(end - start)
+    }
+}
+
 // MARK: - Palette
 
 /// What the ring is painted in.
@@ -210,38 +292,73 @@ struct MizarRingPalette: Sendable {
 
 // MARK: - The timeline
 
-/// The numbers the two motions are made of.
+/// The numbers the loop is made of.
 ///
-/// All durations are seconds. The reveal and retract windows overlap their
-/// neighbours: an element starts before the previous one finishes, which is
-/// what makes the sequence read as a cascade instead of five separate pops.
+/// The loop is one unified clock, not five timers:
+///
+/// `five-dot queue → chain growth → hold the icon → chain contraction back to
+/// the same five-dot queue`
+///
+/// There is no appearance or disappearance: the first and last frame are the
+/// same fully visible queue. Growth and contraction share one queue constraint,
+/// so the rear elements move with the front arc's current length on every
+/// frame. The growth curve has one small damped overshoot; contraction is an
+/// ease-in-out sine, not a reverse playback.
 enum RingMetrics {
-    // Running: full cycle, a calm two and a bit seconds.
-    static let runRevealStagger: Double = 0.16
-    static let runRevealDuration: Double = 0.26
-    static let runHoldFull: Double = 0.34
-    static let runRetractStagger: Double = 0.14
-    static let runRetractDuration: Double = 0.20
-    static let runHoldEmpty: Double = 0.20
+    // The initial five-dot queue is already on screen. It holds briefly so the
+    // eye can register the queue, then grows immediately from it.
+    static let holdQueue: Double = 0.18
 
-    /// How long the five pieces take to load, first start to last finish.
-    static var runRevealSpan: Double {
-        Double(RingGeometry.segments.count - 1) * runRevealStagger + runRevealDuration
+    // Stage B — the chain grows. The front arc extends first and pushes the
+    // four elements behind it; each subsequent element then grows in turn.
+    static let morphStagger: Double = 0.055
+    static let morphDuration: Double = 0.38
+
+    // Stage C — the finished icon holds.
+    static let holdFull: Double = 0.15
+
+    // Stage D — the chain contracts. Every element's current length shrinks;
+    // the starts are recomputed from the same queue constraint every frame,
+    // so the five dots are already back in the initial queue when the last
+    // length reaches zero.
+    static let shrinkStagger: Double = 0.055
+    static let shrinkDuration: Double = 0.36
+
+    // MARK: Phase windows
+
+    static var morphStartWindow: Double {
+        Double(RingGeometry.segments.count - 1) * morphStagger
     }
 
-    /// How long they take to erase.
-    static var runRetractSpan: Double {
-        Double(RingGeometry.segments.count - 1) * runRetractStagger + runRetractDuration
+    static var shrinkStartWindow: Double {
+        Double(RingGeometry.segments.count - 1) * shrinkStagger
     }
 
-    /// One loop: empty, load, hold, erase, hold empty.
-    static var runningLoop: Double {
-        runRevealSpan + runHoldFull + runRetractSpan + runHoldEmpty
-    }
+    static var morphSpan: Double { morphStartWindow + morphDuration }
+    static var shrinkSpan: Double { shrinkStartWindow + shrinkDuration }
 
-    // One pass: full, erase, hold empty, load, full. Faster than the loop:
-    // this one is a transition the operator is waiting for, not an ambient
-    // indicator.
+    /// The initial queue is on screen at t=0; growth follows it.
+    static var morphPhaseStart: Double { holdQueue }
+    /// The full-icon hold begins after the last arc has grown.
+    static var holdStart: Double { morphPhaseStart + morphSpan }
+    /// The chain contraction begins after the hold.
+    static var shrinkPhaseStart: Double { holdStart + holdFull }
+
+    /// One full loop. There is no empty hold and no separate reposition: the
+    /// loop seam is the initial five-dot queue.
+    static var runningLoop: Double { shrinkPhaseStart + shrinkSpan }
+
+    /// The settings header's one-shot: five-dot queue → chain growth → icon.
+    /// It stops on the finished icon; nothing shrinks or loops.
+    static var assemblySpan: Double { morphPhaseStart + morphSpan }
+
+    /// Let the settings sheet finish rising before the one-shot starts, so the
+    /// first frames are actually seen instead of playing behind the sheet.
+    static let assemblyDelay: Double = 0.45
+
+    // One short pass for arriving screens: full, erase, hold empty, load,
+    // full. Not the loading loop; kept separate so its start/end are the
+    // static icon and it can overlay a screen without a jump.
     static let onceHoldFull: Double = 0.14
     static let onceRevealStagger: Double = 0.11
     static let onceRevealDuration: Double = 0.18
@@ -249,12 +366,20 @@ enum RingMetrics {
     static let onceRetractStagger: Double = 0.10
     static let onceRetractDuration: Double = 0.16
 
+    static var onceRevealStartWindow: Double {
+        Double(RingGeometry.segments.count - 1) * onceRevealStagger
+    }
+
+    static var onceRetractStartWindow: Double {
+        Double(RingGeometry.segments.count - 1) * onceRetractStagger
+    }
+
     static var onceRevealSpan: Double {
-        Double(RingGeometry.segments.count - 1) * onceRevealStagger + onceRevealDuration
+        onceRevealStartWindow + onceRevealDuration
     }
 
     static var onceRetractSpan: Double {
-        Double(RingGeometry.segments.count - 1) * onceRetractStagger + onceRetractDuration
+        onceRetractStartWindow + onceRetractDuration
     }
 
     /// One short pass, from the static icon back to the static icon.
@@ -262,16 +387,74 @@ enum RingMetrics {
         onceHoldFull + onceRetractSpan + onceHoldEmpty + onceRevealSpan + onceHoldFull
     }
 
-    /// Ease-out: the leading edge moves quickly and settles, like a paint head.
+    // MARK: Curves
+
+    /// A gentle decelerating curve, used where an element is already leaving.
     static func easeOutCubic(_ progress: Double) -> Double {
         let p = clamp(progress)
         return 1 - pow(1 - p, 3)
     }
 
-    /// Ease-in-out: the erasing head starts and stops without a snap.
+    /// The main movement curve: starts at rest, accelerates, settles at rest.
     static func easeInOutCubic(_ progress: Double) -> Double {
         let p = clamp(progress)
         return p < 0.5 ? 4 * p * p * p : 1 - pow(-2 * p + 2, 3) / 2
+    }
+
+    /// The shrink curve: a sine, not the morph curve and not its reverse. It
+    /// leaves the full arc without the long dead beat a quintic has at the
+    /// start, eases through the middle, and lands without a bounce.
+    static func easeInOutSine(_ progress: Double) -> Double {
+        let p = clamp(progress)
+        return (1 - cos(.pi * p)) / 2
+    }
+
+    /// Kept for the easing test; the shrink itself uses ``easeInOutSine``.
+    static func easeInOutQuint(_ progress: Double) -> Double {
+        let p = clamp(progress)
+        return p < 0.5 ? 16 * p * p * p * p * p : 1 - pow(-2 * p + 2, 5) / 2
+    }
+
+    /// Smooth 0→1 with zero slope at both ends.
+    static func smoothstep(_ edge0: Double, _ edge1: Double, _ value: Double) -> Double {
+        guard edge0 != edge1 else { return value < edge0 ? 0 : 1 }
+        let t = clamp((value - edge0) / (edge1 - edge0))
+        return t * t * (3 - 2 * t)
+    }
+
+    /// One small, damped overshoot near the end of the morph.
+    ///
+    /// Zero at both ends and shaped like `sin²`, so it has no slope of its own
+    /// at the boundaries; it peaks around 84% through the morph and is gone by
+    /// 100%. There is no second oscillation, and no bounce on the whole ring.
+    static func overshootBump(_ progress: Double) -> Double {
+        let q = clamp((clamp(progress) - 0.68) / 0.32)
+        guard q > 0, q < 1 else { return 0 }
+        let wave = sin(.pi * q)
+        return wave * wave
+    }
+
+    /// The arc length during the morph.
+    ///
+    /// The base curve supplies acceleration and deceleration; the bump adds a
+    /// ~1–2% overshoot just before the arc lands, then it settles back to
+    /// exactly 1. The width and radius get a smaller share of the same bump, so
+    /// the elasticity is local to the end of each arc.
+    static func morph(_ progress: Double) -> Double {
+        easeInOutCubic(progress) + 0.018 * overshootBump(progress)
+    }
+
+    /// The dot fade-out order: when one piece starts, in an eased window.
+    ///
+    /// Even spacing reads as a metronome. `easeInOutCubic` makes the cascade
+    /// open slowly, run through the middle faster, and land gently. The order
+    /// stays clockwise; only the spacing changes.
+    static func staggeredStart(index: Int, window: Double) -> Double {
+        let count = RingGeometry.segments.count
+        guard count > 1 else { return 0 }
+        let clamped = min(max(index, 0), count - 1)
+        let position = Double(clamped) / Double(count - 1)
+        return window * easeInOutCubic(position)
     }
 
     static func clamp(_ value: Double) -> Double {
@@ -280,40 +463,79 @@ enum RingMetrics {
 }
 
 /// One piece's pose at one instant.
+///
+/// The dot and the arc are the same state, not two views: an arc's round start
+/// cap is the dot, and `trimEnd` is how far the head has travelled from it.
+/// `dotOpacity` is the extra full circle drawn while `trimEnd` is still near
+/// zero; it fades as the head leaves the dot.
 struct SegmentState: Sendable, Equatable {
     /// Where the visible arc starts, as a fraction of its sweep.
-    var trimStart: Double
-    /// Where it ends, as a fraction of its sweep.
-    var trimEnd: Double
+    var trimStart: Double = 0
+    /// Where it ends. May exceed 1 by a hair during the morph's overshoot.
+    var trimEnd: Double = 0
     /// How opaque the piece is.
-    var opacity: Double
-    /// The dot's scale; arcs ignore it.
-    var dotScale: Double
+    var opacity: Double = 0
+    /// The dot's scale; arcs use it for the round start marker.
+    var dotScale: Double = 0
+    /// Opacity of the full dot at the start of an arc (or of the standalone dot).
+    var dotOpacity: Double = 0
+    /// Local stroke swelling for the elastic landing.
+    var strokeScale: Double = 1
+    /// Local outward/ inward radial offset, as a fraction of the radius.
+    var radialOffset: Double = 0
+    /// Current start angle, in degrees, relative to the piece's final start.
+    /// The queue uses this to push and release the elements.
+    var positionOffset: Double = 0
+    /// Current arc length as a fraction of the piece's final sweep. A dot is 0.
+    var sweepScale: Double = 1
 
-    static let full = SegmentState(trimStart: 0, trimEnd: 1, opacity: 1, dotScale: 1)
-    static let empty = SegmentState(trimStart: 0, trimEnd: 0, opacity: 0, dotScale: 0.55)
+    static let full = SegmentState(
+        trimStart: 0,
+        trimEnd: 1,
+        opacity: 1,
+        dotScale: 1,
+        dotOpacity: 0,
+    )
 
-    var isVisible: Bool {
-        opacity > 0.001 && trimEnd - trimStart > 0.0005
+    static let empty = SegmentState()
+
+    /// A dot pose. `dotOpacity` is always 1 here; the renderer draws it as a
+    /// circle for the standalone piece and as the start marker for an arc.
+    static func dot(
+        opacity: Double,
+        scale: Double,
+        offset: Double = 0,
+    ) -> SegmentState {
+        SegmentState(
+            trimStart: 0,
+            trimEnd: 0,
+            opacity: opacity,
+            dotScale: scale,
+            dotOpacity: 1,
+            positionOffset: offset,
+            sweepScale: 0,
+        )
     }
 
-    /// A piece that is being drawn in.
+    var isVisible: Bool {
+        opacity > 0.001 && (dotOpacity > 0.001 || trimEnd - trimStart > 0.0005)
+    }
+
+    /// A piece that is being drawn in, for the separate arrival pass.
     ///
     /// - Parameter progress: 0 at first ink, 1 when the piece is whole.
     static func revealing(_ progress: Double) -> SegmentState {
         let p = RingMetrics.clamp(progress)
-        let eased = RingMetrics.easeOutCubic(p)
+        let eased = RingMetrics.easeInOutCubic(p)
         return SegmentState(
             trimStart: 0,
             trimEnd: eased,
-            // Fade the first quarter only: the arc's own growth does most of
-            // the work, and a full-length fade would read as a blink.
             opacity: min(1, p * 4),
             dotScale: 0.55 + 0.45 * eased,
         )
     }
 
-    /// A piece that is being erased from its start.
+    /// A piece that is being erased from its start, for the arrival pass.
     ///
     /// - Parameter progress: 0 at whole, 1 when the last of it has gone.
     static func retracting(_ progress: Double) -> SegmentState {
@@ -332,12 +554,17 @@ struct SegmentState: Sendable, Equatable {
 enum RingPresentation: Equatable, Sendable {
     /// The icon's pose: every piece whole.
     case still
-    /// A normalized time through one loop, `0..<1`.
+    /// A normalized time through the loading loop, `0..<1`.
     case running(Double)
-    /// A normalized time through one short pass, `0...1`.
+    /// A normalized time through the separate arrival pass, `0...1`.
     case once(Double)
+    /// The settings header's one-shot: five dots to the icon, `0...1`.
+    case assembling(Double)
     /// A progress reading, `0...1`, filled clockwise from the gap.
     case opening(Double)
+
+    /// The mark's pieces: four arcs and the dot at ten o'clock.
+    private static let dotIndex = RingGeometry.segments.count - 1
 
     /// Whether to draw the unfilled track behind the reading.
     var drawsTrack: Bool {
@@ -347,7 +574,7 @@ enum RingPresentation: Equatable, Sendable {
     /// The pose of one piece.
     ///
     /// - Parameter index: an index into ``RingGeometry/segments``.
-    /// - Returns: the piece's trim, opacity and dot scale.
+    /// - Returns: the piece's trim, opacity, dot and elastic parameters.
     func state(for index: Int) -> SegmentState {
         switch self {
         case .still:
@@ -356,54 +583,203 @@ enum RingPresentation: Equatable, Sendable {
             return Self.runningState(index: index, time: time)
         case .once(let time):
             return Self.onceState(index: index, time: time)
+        case .assembling(let time):
+            return Self.assemblingState(index: index, time: time)
         case .opening(let fraction):
             return Self.openingState(index: index, fraction: fraction)
         }
     }
 
-    // MARK: Running
+    // MARK: The loading loop
 
-    /// One piece in the loop.
-    ///
-    /// The loop's phases, in order: reveal (staggered), hold with the ring
-    /// whole, retract (staggered), hold empty. `time` is normalized over the
-    /// whole loop, so the seam at `0`/`1` is the empty hold and the loop wraps
-    /// without a jump.
     private static func runningState(index: Int, time: Double) -> SegmentState {
         let t = RingMetrics.clamp(time) * RingMetrics.runningLoop
-        let revealStart = Double(index) * RingMetrics.runRevealStagger
-        let revealEnd = revealStart + RingMetrics.runRevealDuration
-        let retractStart = RingMetrics.runRevealSpan
-            + RingMetrics.runHoldFull
-            + Double(index) * RingMetrics.runRetractStagger
-        let retractEnd = retractStart + RingMetrics.runRetractDuration
-
-        if t <= revealStart { return .empty }
-        if t < revealEnd {
-            return .revealing((t - revealStart) / RingMetrics.runRevealDuration)
+        if t < RingMetrics.morphPhaseStart {
+            return initialQueueState(index: index)
         }
-        if t < retractStart { return .full }
-        if t < retractEnd {
-            return .retracting((t - retractStart) / RingMetrics.runRetractDuration)
+        if t < RingMetrics.holdStart {
+            return growthState(index: index, t: t - RingMetrics.morphPhaseStart)
         }
-        return .empty
+        if t < RingMetrics.shrinkPhaseStart {
+            return fullState(index: index)
+        }
+        return shrinkState(index: index, t: t - RingMetrics.shrinkPhaseStart)
     }
 
-    // MARK: One pass
+    /// The loop's first and last frame: the five-dot queue, already full.
+    private static func initialQueueState(index: Int) -> SegmentState {
+        .dot(
+            opacity: 1,
+            scale: 1,
+            offset: RingQueue.initialOffsets[index],
+        )
+    }
 
-    /// One piece in the short pass.
-    ///
-    /// Starts on the whole ring, erases in the same clockwise order, holds
-    /// empty, loads in the same order, and ends on the whole ring again.
+    /// The finished icon's pose for one piece. The standalone dot needs its
+    /// final offset (its unwrapped start is one turn ahead), not the bare
+    /// `.full` arc pose.
+    private static func fullState(index: Int) -> SegmentState {
+        if index == RingQueue.dotIndex {
+            let base = RingGeometry.segments[index].start
+            return .dot(
+                opacity: 1,
+                scale: 1,
+                offset: RingQueue.finalStartsUnwrapped[index] - base,
+            )
+        }
+        return .full
+    }
+
+    /// The five queue starts, in unwrapped degrees, after the given lengths.
+    /// `s(i+1) = s(i) + L(i) + G(i)`.
+    private static func queueStarts(front: Double = 270, lengths: [Double]) -> [Double] {
+        var starts = [front]
+        for index in 1..<RingQueue.count {
+            starts.append(starts[index - 1] + lengths[index - 1] + RingQueue.gaps[index - 1])
+        }
+        return starts
+    }
+
+    /// Stage B: the front arc grows and pushes the four elements behind it.
+    private static func growthState(index: Int, t: Double) -> SegmentState {
+        let lengths = (0..<4).map { piece -> Double in
+            let start = RingMetrics.staggeredStart(
+                index: piece,
+                window: RingMetrics.morphStartWindow,
+            )
+            guard t > start else { return 0 }
+            let p = (t - start) / RingMetrics.morphDuration
+            guard p > 0 else { return 0 }
+            if p >= 1 { return RingQueue.finalLengths[piece] }
+            return RingQueue.finalLengths[piece] * RingMetrics.morph(p)
+        }
+        let starts = queueStarts(lengths: lengths)
+        let base = RingGeometry.segments[index].start
+        let offset = starts[index] - base
+
+        if index == RingQueue.dotIndex {
+            return .dot(opacity: 1, scale: 1, offset: offset)
+        }
+
+        let finalLength = RingQueue.finalLengths[index]
+        let length = lengths[index]
+        guard length > 0.0001 else {
+            return .dot(opacity: 1, scale: 1, offset: offset)
+        }
+        let scale = length / finalLength
+        let p = RingMetrics.clamp(
+            (t - RingMetrics.staggeredStart(index: index, window: RingMetrics.morphStartWindow))
+                / RingMetrics.morphDuration,
+        )
+        let bump = RingMetrics.overshootBump(p)
+        return SegmentState(
+            trimStart: 0,
+            trimEnd: 1,
+            opacity: 1,
+            dotScale: 1,
+            dotOpacity: 1 - RingMetrics.smoothstep(0.02, 0.16, min(scale, 1)),
+            strokeScale: 1 + 0.02 * bump,
+            radialOffset: 0.003 * bump,
+            positionOffset: offset,
+            sweepScale: scale,
+        )
+    }
+
+    /// Stage D: every arc is eaten by a shrink front that moves **clockwise**
+    /// from the arc's start toward its end and beyond, back to the initial
+    /// queue. The queue is anchored at the first front; every rear front and
+    /// tail is recomputed from the current lengths. This is not a reverse
+    /// morph: the front moves forward while the remaining arc shrinks.
+    private static func shrinkState(index: Int, t: Double) -> SegmentState {
+        let q = RingMetrics.clamp(t / RingMetrics.shrinkSpan)
+        let eased = RingMetrics.easeInOutSine(q)
+        if eased >= 1 { return initialQueueState(index: index) }
+
+        let lengths = (0..<4).map { piece in
+            RingQueue.finalLengths[piece] * (1 - eased)
+        }
+        // The first front makes one clockwise lap so that the queue ends at
+        // the initial five-dot positions rather than at the old arc ends.
+        let starts = queueStarts(front: 270 + 360 * eased, lengths: lengths)
+        let base = RingGeometry.segments[index].start
+        let offset = starts[index] - base
+
+        if index == RingQueue.dotIndex {
+            return .dot(opacity: 1, scale: 1, offset: offset)
+        }
+
+        let finalLength = RingQueue.finalLengths[index]
+        let length = lengths[index]
+        guard length > 0.0001 else {
+            return .dot(opacity: 1, scale: 1, offset: offset)
+        }
+        let scale = length / finalLength
+        return SegmentState(
+            trimStart: 0,
+            trimEnd: 1,
+            opacity: 1,
+            dotScale: 1,
+            dotOpacity: 1 - RingMetrics.smoothstep(0.02, 0.16, min(scale, 1)),
+            strokeScale: 1,
+            radialOffset: 0,
+            positionOffset: offset,
+            sweepScale: scale,
+        )
+    }
+
+    /// The four (plus the dot) clockwise shrink-front angles at a given
+    /// presentation time, for the debug preview and tests. `nil` outside the
+    /// contraction phase.
+    func shrinkFrontAngles() -> [Double]? {
+        shrinkFrontsUnwrapped()?.map(RingQueue.normalized)
+    }
+
+    /// Unwrapped shrink fronts, for tests that need to prove the direction
+    /// across the twelve o'clock wrap. Internal.
+    func shrinkFrontsUnwrapped() -> [Double]? {
+        guard case .running(let time) = self else { return nil }
+        let t = RingMetrics.clamp(time) * RingMetrics.runningLoop
+        guard t >= RingMetrics.shrinkPhaseStart else { return nil }
+        let eased = RingMetrics.easeInOutSine(
+            RingMetrics.clamp((t - RingMetrics.shrinkPhaseStart) / RingMetrics.shrinkSpan),
+        )
+        if eased >= 1 {
+            return RingQueue.initialStarts.map { $0 + 360 }
+        }
+        let lengths = (0..<4).map { piece in
+            RingQueue.finalLengths[piece] * (1 - eased)
+        }
+        return Self.queueStarts(front: 270 + 360 * eased, lengths: lengths)
+    }
+
+    // MARK: The settings one-shot
+
+    /// The settings header: hold the five-dot queue, grow the chain once, stop
+    /// on the finished icon. It never shrinks or repeats.
+    private static func assemblingState(index: Int, time: Double) -> SegmentState {
+        let t = RingMetrics.clamp(time) * RingMetrics.assemblySpan
+        if t < RingMetrics.morphPhaseStart {
+            return initialQueueState(index: index)
+        }
+        if t >= RingMetrics.assemblySpan {
+            return fullState(index: index)
+        }
+        return growthState(index: index, t: t - RingMetrics.morphPhaseStart)
+    }
+
+    // MARK: The arrival pass
+
+    /// One piece in the short arrival pass. Kept separate from the loading
+    /// loop: this one starts and ends on the icon, not on a dot.
     private static func onceState(index: Int, time: Double) -> SegmentState {
         let t = RingMetrics.clamp(time) * RingMetrics.onceDuration
         let retractStart = RingMetrics.onceHoldFull
-            + Double(index) * RingMetrics.onceRetractStagger
+            + RingMetrics.staggeredStart(index: index, window: RingMetrics.onceRetractStartWindow)
         let retractEnd = retractStart + RingMetrics.onceRetractDuration
         let revealStart = RingMetrics.onceHoldFull
             + RingMetrics.onceRetractSpan
             + RingMetrics.onceHoldEmpty
-            + Double(index) * RingMetrics.onceRevealStagger
+            + RingMetrics.staggeredStart(index: index, window: RingMetrics.onceRevealStartWindow)
         let revealEnd = revealStart + RingMetrics.onceRevealDuration
 
         if t < retractStart { return .full }
@@ -419,29 +795,32 @@ enum RingPresentation: Equatable, Sendable {
 
     // MARK: Progress
 
-    /// One piece of the progress reading.
-    ///
-    /// The filled angle sweeps clockwise from the gap. An arc is trimmed to
-    /// whatever part of it the head has passed; the dot, having no length,
-    /// fades and grows over the twelve degrees its cap covers.
+    /// One piece of the progress reading, from the gap.
     private static func openingState(index: Int, fraction: Double) -> SegmentState {
-        guard RingGeometry.segments.indices.contains(index) else { return .empty }
         let segment = RingGeometry.segments[index]
-        let filled = RingMetrics.clamp(fraction) * 360
-        let position = RingGeometry.position(of: segment)
+        let f = RingMetrics.clamp(fraction)
+        if f >= 1 { return .full }
+
         if segment.isDot {
-            let local = RingMetrics.clamp((filled - position) / 12)
+            let dotStart = RingGeometry.position(of: segment) / 360
+            let local = (f - dotStart) / 0.08
             guard local > 0 else { return .empty }
+            let eased = RingMetrics.clamp(local)
             return SegmentState(
                 trimStart: 0,
                 trimEnd: 1,
-                opacity: local,
-                dotScale: 0.55 + 0.45 * local,
+                opacity: eased,
+                dotScale: 0.55 + 0.45 * eased,
+                dotOpacity: 1,
             )
         }
-        let local = RingMetrics.clamp((filled - position) / segment.sweep)
+
+        let position = RingGeometry.position(of: segment) / 360
+        let width = segment.sweep / 360
+        guard width > 0, f > position else { return .empty }
+        let local = min((f - position) / width, 1)
         guard local > 0 else { return .empty }
-        return SegmentState(trimStart: 0, trimEnd: local, opacity: 1, dotScale: 1)
+        return SegmentState(trimStart: 0, trimEnd: local, opacity: 1, dotScale: 1, dotOpacity: 0)
     }
 }
 
@@ -457,6 +836,8 @@ struct MizarRing: View {
         case running
         /// One pass: the icon, erased clockwise, loaded back, the icon again.
         case once
+        /// The settings header: five dots grow once into the icon and stop.
+        case assembling
         /// A reading: `0` is an empty track, `1` the icon.
         case opening(Double)
     }
@@ -468,12 +849,21 @@ struct MizarRing: View {
     var size: CGFloat = 64
     /// What the ring is painted in, or `nil` for the appearance's own ink.
     var palette: MizarRingPalette?
+    /// Debug preview: mark each arc's clockwise shrink front with a red/white
+    /// pip. Off everywhere except the visual harness/tests.
+    var debugShrinkFronts: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.drawersStill) private var drawersStill
+    /// Start of the shared loading clock; every piece is derived from it.
+    @State private var runningStart = Date()
     /// Linear time through the short pass, animated by SwiftUI.
     @State private var onceProgress: Double = 0
+    /// Linear time through the settings one-shot.
+    @State private var assemblyProgress: Double = 0
+    /// Keeps one appearance from replaying the one-shot.
+    @State private var assemblyStarted = false
 
     var body: some View {
         Group {
@@ -484,6 +874,8 @@ struct MizarRing: View {
                 running
             case .once:
                 once
+            case .assembling:
+                assembling
             case .opening(let fraction):
                 opening(fraction)
             }
@@ -498,27 +890,35 @@ struct MizarRing: View {
     }
 
     private func canvas(_ presentation: RingPresentation) -> some View {
-        RingCanvas(presentation: presentation, palette: ink)
+        RingCanvas(
+            presentation: presentation,
+            palette: ink,
+            debugShrinkFronts: debugShrinkFronts,
+        )
     }
 
     // MARK: Running
 
     /// The loop, or the icon's pose when motion is not allowed.
     ///
-    /// A linear clock drives the whole timeline; the phases are computed from
-    /// it. A repeating eased animation would stutter once a cycle, which is
-    /// exactly the seam the empty hold is meant to hide.
+    /// One `TimelineView` clock drives all five pieces: no per-element timers,
+    /// so the clockwise phase offsets cannot drift. The timeline is pure
+    /// (`RingPresentation.running`), which is what lets the tests step it.
     @ViewBuilder private var running: some View {
         if reduceMotion || !drawersStill {
             canvas(.still)
         } else {
-            let palette = ink
-            RingCanvas(presentation: .running(0), palette: palette)
-                .keyframeAnimator(initialValue: 0.0, repeating: true) { _, time in
-                    RingCanvas(presentation: .running(time), palette: palette)
-                } keyframes: { _ in
-                    LinearKeyframe(1.0, duration: RingMetrics.runningLoop)
-                }
+            TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
+                let elapsed = timeline.date.timeIntervalSince(runningStart)
+                let phase = elapsed.truncatingRemainder(dividingBy: RingMetrics.runningLoop)
+                    / RingMetrics.runningLoop
+                RingCanvas(
+                    presentation: .running(phase),
+                    palette: ink,
+                    debugShrinkFronts: debugShrinkFronts,
+                )
+            }
+            .onAppear { runningStart = Date() }
         }
     }
 
@@ -535,6 +935,31 @@ struct MizarRing: View {
             guard !reduceMotion else { return }
             onceProgress = 0
             withAnimation(.linear(duration: RingMetrics.onceDuration)) { onceProgress = 1 }
+        }
+    }
+
+    // MARK: Settings one-shot
+
+    /// Five dots grow once into the icon, then stop. The settings sheet gives
+    /// the header a fresh `id` each time, so every open starts at the dots.
+    @ViewBuilder private var assembling: some View {
+        if reduceMotion || !drawersStill {
+            canvas(.still)
+        } else {
+            AssemblingRing(
+                progress: assemblyProgress,
+                palette: ink,
+                size: size,
+            )
+            .onAppear {
+                guard !assemblyStarted else { return }
+                assemblyStarted = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + RingMetrics.assemblyDelay) {
+                    withAnimation(.linear(duration: RingMetrics.assemblySpan)) {
+                        assemblyProgress = 1
+                    }
+                }
+            }
         }
     }
 
@@ -584,6 +1009,7 @@ extension MizarRing {
 private struct RingCanvas: View {
     let presentation: RingPresentation
     let palette: MizarRingPalette
+    var debugShrinkFronts: Bool = false
 
     var body: some View {
         Canvas { context, size in
@@ -604,33 +1030,77 @@ private struct RingCanvas: View {
 
             for (index, segment) in RingGeometry.segments.enumerated() {
                 let state = presentation.state(for: index)
-                guard state.isVisible else { continue }
-                context.opacity = state.opacity
+                guard state.opacity > 0.001 else { continue }
+
+                let pieceRadius = radius * (1 + state.radialOffset)
+                let pieceWidth = width * state.strokeScale
+                let pieceStart = segment.start + state.positionOffset
+                let pieceStyle = StrokeStyle(
+                    lineWidth: pieceWidth,
+                    lineCap: .round,
+                    lineJoin: .round,
+                )
+
                 if segment.isDot {
-                    let angle = segment.start * .pi / 180
-                    let point = CGPoint(
-                        x: center.x + radius * CGFloat(cos(angle)),
-                        y: center.y + radius * CGFloat(sin(angle)),
-                    )
-                    let dot = width * state.dotScale
-                    let rect = CGRect(
-                        x: point.x - dot / 2,
-                        y: point.y - dot / 2,
-                        width: dot,
-                        height: dot,
-                    )
-                    context.fill(Path(ellipseIn: rect), with: shading)
-                } else {
-                    let start = segment.start + segment.sweep * state.trimStart
-                    let end = segment.start + segment.sweep * state.trimEnd
-                    guard end - start > 0.01 else { continue }
-                    let path = RingGeometry.arcPath(
+                    drawDot(
+                        angle: pieceStart,
                         center: center,
-                        radius: radius,
-                        start: start,
-                        end: end,
+                        radius: pieceRadius,
+                        diameter: pieceWidth * state.dotScale,
+                        opacity: state.opacity,
+                        shading: shading,
+                        in: &context,
                     )
-                    context.stroke(path, with: shading, style: style)
+                    continue
+                }
+
+                // The dot at the start of an arc is the same round cap that
+                // the arc will keep; it fades only after the head has left.
+                if state.dotOpacity > 0.001 {
+                    drawDot(
+                        angle: pieceStart,
+                        center: center,
+                        radius: pieceRadius,
+                        diameter: pieceWidth * state.dotScale,
+                        opacity: state.opacity * state.dotOpacity,
+                        shading: shading,
+                        in: &context,
+                    )
+                }
+
+                let start = pieceStart + segment.sweep * state.trimStart
+                let end = pieceStart + segment.sweep * (state.trimStart + (state.trimEnd - state.trimStart) * state.sweepScale)
+                guard end - start > 0.01 else { continue }
+                let path = RingGeometry.arcPath(
+                    center: center,
+                    radius: pieceRadius,
+                    start: start,
+                    end: end,
+                )
+                context.opacity = state.opacity
+                context.stroke(path, with: shading, style: pieceStyle)
+            }
+
+            if debugShrinkFronts, let fronts = presentation.shrinkFrontAngles() {
+                let marker = width * 0.8
+                for angle in fronts {
+                    let radians = angle * .pi / 180
+                    let point = CGPoint(
+                        x: center.x + radius * CGFloat(cos(radians)),
+                        y: center.y + radius * CGFloat(sin(radians)),
+                    )
+                    let rect = CGRect(
+                        x: point.x - marker / 2,
+                        y: point.y - marker / 2,
+                        width: marker,
+                        height: marker,
+                    )
+                    context.fill(Path(ellipseIn: rect), with: .color(.white))
+                    context.stroke(
+                        Path(ellipseIn: rect),
+                        with: .color(.red),
+                        lineWidth: max(1, width * 0.12),
+                    )
                 }
             }
         }
@@ -668,6 +1138,33 @@ private struct RingCanvas: View {
         let path = RingGeometry.arcPath(center: center, radius: radius, start: start, end: end)
         context.stroke(path, with: shading, style: style)
     }
+
+    /// A round piece: the standalone dot, or the full dot that becomes an
+    /// arc's start cap.
+    private func drawDot(
+        angle: Double,
+        center: CGPoint,
+        radius: CGFloat,
+        diameter: CGFloat,
+        opacity: Double,
+        shading: GraphicsContext.Shading,
+        in context: inout GraphicsContext,
+    ) {
+        guard diameter > 0.01 else { return }
+        let radians = angle * .pi / 180
+        let point = CGPoint(
+            x: center.x + radius * CGFloat(cos(radians)),
+            y: center.y + radius * CGFloat(sin(radians)),
+        )
+        let rect = CGRect(
+            x: point.x - diameter / 2,
+            y: point.y - diameter / 2,
+            width: diameter,
+            height: diameter,
+        )
+        context.opacity = opacity
+        context.fill(Path(ellipseIn: rect), with: shading)
+    }
 }
 
 /// The short pass, as an animatable progress.
@@ -686,6 +1183,23 @@ private struct OnceRing: View, Animatable {
 
     var body: some View {
         RingCanvas(presentation: .once(progress), palette: palette)
+            .frame(width: size, height: size)
+    }
+}
+
+/// The settings header's one-shot, as an animatable fraction.
+private struct AssemblingRing: View, Animatable {
+    var progress: Double
+    let palette: MizarRingPalette
+    let size: CGFloat
+
+    nonisolated var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    var body: some View {
+        RingCanvas(presentation: .assembling(progress), palette: palette)
             .frame(width: size, height: size)
     }
 }
@@ -723,6 +1237,9 @@ struct MizarIconTile: View {
     var size: CGFloat = 64
     /// What the ring inside is doing. The tile itself never moves.
     var motion: MizarRing.Motion = .still
+    /// Recreates the ring when a sheet presents again, so the loop starts
+    /// fresh at the five-dot queue instead of inheriting an old phase.
+    var animationToken: Int = 0
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -739,6 +1256,7 @@ struct MizarIconTile: View {
                 // `MizarRing`'s box is the tile, and its ink is 85.6% of that
                 // box -- the same share the icon's glyph occupies.
                 MizarRing(motion: motion, size: size)
+                    .id(animationToken)
                     .shadow(
                         color: isDark ? Color.white.opacity(0.12) : Color.accentColor.opacity(0.16),
                         radius: size * 0.045,

@@ -217,7 +217,7 @@ final class LanPriorityUITests: XCTestCase {
         let arguments = [
             "-mizarPairURI", Self.mockPairingURI,
             "-mizarFreshStart",
-            "-mizarSkipPermissionPrompts", "-mizarSkipLoginGate", "-mizarCreditsFixture",
+            "-mizarSkipPermissionPrompts", "-mizarSkipLoginGate", "-mizarSkipOnboarding", "-mizarCreditsFixture",
             // The fixture answers on a direct address; the transport switches
             // default to off, and without this the app lands on "The transport
             // switches are off" instead of a conversation.

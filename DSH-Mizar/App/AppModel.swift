@@ -6549,16 +6549,23 @@ final class AppModel {
         guard !Self.launchSkipsPermissions else { return }
         guard !UserDefaults.standard.bool(forKey: Self.permissionsAskedKey) else { return }
         UserDefaults.standard.set(true, forKey: Self.permissionsAskedKey)
-        log.add(.app, "first launch: asking for notification and local-network permission")
-        await Permissions.requestNotifications()
-        // Only if the answer was yes. Registering regardless gave a phone that
-        // tapped "Don't Allow" a token anyway, which it then handed to the computer --
-        // so the host logged a healthy registration for a phone that could never
-        // show the notification it was being sent.
-        await ensurePushRegistration()
-        // Sequenced rather than concurrent: two alerts at once is one alert
-        // dismissed by reflex, and this one has to be read to be answered.
-        await Permissions.requestLocalNetwork()
+        log.add(.app, "first launch: asking for the permissions the chosen features need")
+        // The onboarding page is the place these are decided; only ask for what
+        // the operator left switched on. A notification prompt for notifications
+        // they just switched off is a prompt that trains them to dismiss prompts.
+        if settings.values.notifications.suppressed.isEmpty {
+            await Permissions.requestNotifications()
+            // Only if the answer was yes. Registering regardless gave a phone that
+            // tapped "Don't Allow" a token anyway, which it then handed to the computer --
+            // so the host logged a healthy registration for a phone that could never
+            // show the notification it was being sent.
+            await ensurePushRegistration()
+        }
+        // The LAN switch is asked where it is used. Off means no prompt at launch;
+        // turning it on in the guide or Settings asks once, then.
+        if settings.values.localNetworkFirst {
+            await Permissions.requestLocalNetwork()
+        }
     }
 
     /// Whether this launch should skip the system prompts.

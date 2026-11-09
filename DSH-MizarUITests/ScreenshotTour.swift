@@ -80,7 +80,7 @@ final class ScreenshotTour: XCTestCase {
     private func launch(session: String?, language: String, pending: Bool, paid: Bool = false) -> XCUIApplication {
         reset(pending: pending)
         let app = XCUIApplication()
-        var arguments = ["-mizarPairURI", Self.pairing, "-mizarFreshStart", "-mizarSkipPermissionPrompts", "-mizarSkipLoginGate", "-mizarCreditsFixture",
+        var arguments = ["-mizarPairURI", Self.pairing, "-mizarFreshStart", "-mizarSkipPermissionPrompts", "-mizarSkipLoginGate", "-mizarSkipOnboarding", "-mizarCreditsFixture",
                          "-AppleLanguages", "(\(language))"]
         if let session { arguments += ["-mizarSelectSession", session] }
         if paid { arguments.append("-mizarMockPaid") }
@@ -439,5 +439,7 @@ final class ScreenshotTour: XCTestCase {
         shoot("p03-connection", settle: 5)
         app.terminate()
     }
+
+
 
 }

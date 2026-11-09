@@ -618,6 +618,9 @@ enum SessionTitle {
 private struct SidebarFooter: View {
     @Binding var showingConnection: Bool
     @Binding var showingSettings: Bool
+    /// Bumped on every open so the header's icon starts a fresh load rather
+    /// than finishing behind the sheet presentation.
+    @State private var settingsAnimationToken = 0
     @State private var showingBalance = false
     @Environment(AppModel.self) private var model
 
@@ -699,6 +702,7 @@ private struct SidebarFooter: View {
             }
 
             Button {
+                settingsAnimationToken += 1
                 showingSettings = true
             } label: {
                 // Signed in, the button is the account's avatar: who is signed
@@ -723,7 +727,10 @@ private struct SidebarFooter: View {
             // of this kind pull up as a card that leaves the screen behind it
             // visible along the top.
             .sheet(isPresented: $showingSettings) {
-                SettingsView(onDone: { showingSettings = false })
+                SettingsView(
+                    onDone: { showingSettings = false },
+                    animationToken: settingsAnimationToken,
+                )
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }

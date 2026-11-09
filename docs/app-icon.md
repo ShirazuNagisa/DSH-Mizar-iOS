@@ -51,36 +51,80 @@ python3 scripts/make-app-icon.py --check  # 只检查提交的 PNG 是否过期
 `DSH-Mizar/Design/MizarRing.swift` 和 `icon-design/masters/mizar-icon/ring_geometry.py` 里各有一份；
 `MizarRingTests` 钉住它们，改一处必须改另一处。
 
-## 3. 两种动画
+## 3. 四种动作
 
-两种都只由时间轴和五个元素的 trim 决定，没有整体旋转：每一帧都是图标在“被画出来”的某个状态，
+四种都只由时间轴和五个元素的 trim 决定，没有整体旋转：每一帧都是图标在“被画出来”的某个状态，
 而不是一只转动的通用 spinner。
 
-### running —— 长时间等待（2.20 秒一圈）
+### running —— 链式队列循环（1.51 秒一圈）
 
-顺时针逐个画出：长弧 → 下弧 → 左下弧 → 左弧 → 圆点。五段画完后停 0.34 秒，环完整；然后按同一
-顺序顺时针收起：长弧先退，圆点最后退。收完停 0.20 秒，下一圈从空环开始。
+第一帧就是**已经完整存在的五个圆点队列**，没有淡入/缩放/移动出场；最后一帧也是同一个队列，
+没有淡出/离场。整个循环是：
 
-| 阶段 | 时长 |
-|---|---|
-| 逐段画出（5 段，错峰 0.16s，每段 0.26s） | 0.90s |
-| 完整环停留 | 0.34s |
-| 逐段收起（错峰 0.14s，每段 0.20s） | 0.76s |
-| 空环停留 | 0.20s |
-| **一圈** | **2.20s** |
+`五点队列 → 链式延展 → 完整图标 → 链式收缩（同时聚拢） → 同一个五点队列`
 
-- 时间轴在 `RingMetrics` 里；`RingPresentation.running(t)` 是纯函数，测试可以逐点检查。
-- 画和收都用缓动：画出是 ease-out（笔头快、收得住），收起是 ease-in-out（两端不顿）。
-- 循环用线性 keyframe；首尾都是空环，所以接缝不可见。用缓动循环会在每圈末“顿”一下。
-- `drawersStill == false`（抽屉被拖 / 还在落位）时停在图标姿势，和旧标记的规则一致。
+**初始队列**（gap 来自最终图标，不是均分）：
+
+```text
+G = [23, 22, 23, 24]            // 长弧→下弧→左下→左→点
+s = [270, 293, 315, 338, 362]   // 12 点附近排到约 3 点
+A = 362°                        // 最后方的点
+```
+
+| 阶段 | 内容 | 时长 |
+|---|---|---|
+| A | 五点队列（首帧即完整，短暂停留） | 0.18s |
+| B | 链式生长：`s(i+1)=s(i)+L(i)+G(i)`（错峰 0.055 / 0.38） | 0.60s |
+| C | 完整图标 | 0.15s |
+| D | 链式收缩：长度减小，位置由同一约束实时重算，队列同步聚拢 | 0.58s |
+| **一圈** | | **1.51s** |
+
+- **没有出场/离场**：不执行 Scale、Opacity、Position 的首尾动画；第一帧和最后一帧是同一个
+  五点队列（数量、顺序、尺寸、透明度、间距、整体位置全部相同）。
+- **生长**：长弧先长，`s(i+1)` 用当前长度实时重算，后面的点被顺时针挤走；最终
+  `L=[137,39,32,20,0]` 时 `s=[270,430,491,546,590]` 归一化为原图标的
+  `[270,70,131,186,230]`。
+- **收缩前沿顺时针**：每条弧有一个可见的收缩前沿 `F(i)`，剩余圆弧是 `F(i)..T(i)`：
+  - 第一条弧的前沿从 270° 顺时针走一整圈，`F(0) = 270 + 360e`；
+  - 每条弧的尾端 `T(i) = F(i) + L(i)`；
+  - 后一条弧的前沿 `F(i+1) = T(i) + G(i)`，间距在每一帧成立；
+  - `L(i)` 连续减小，`F(i)` 和 `T(i)` 都只向顺时针方向移动；前沿追上尾端时圆弧变成圆点。
+  这不是 `trimEnd` 从 1 反向降到 0，也不是整段同步缩短；剩余圆弧始终在前沿的顺时针一侧。
+- **收缩是一个过程**：每段长度按自己的曲线缩短，**同一帧**用同一个链式约束重算所有起始位置；
+  队列在收缩中连续聚拢，没有“先变成分散五点、再执行归位”的第二段。
+- **调试预览**：`MizarRing(..., debugShrinkFronts: true)` 在每个前沿画白底红圈的小点，用来确认
+  前沿只向顺时针移动。正式 UI 默认关闭。
+- **独立圆点**：不单独做归位动画；它的位置由链式约束在收缩过程中连续算出，最后落在 A。
+- 所有元素共用一个 `TimelineView(.animation(minimumInterval: 1/120))` 时钟；状态由
+  `positionOffset`（相对最终 start 的当前起始角）和 `sweepScale`（当前长度/最终长度）描述。
+- 曲线：生长 ease-in-out + 一次局部超调（弧长 ~1–2%、描边 2%、径向 0.3%）；收缩 ease-in-out
+  sine；不是所有属性共用一个 easing。
+- 应用内的运行指示 / 加载仍用这个完整循环；设置页头部改用下面的一次性 `assembling`。
+- 首尾都是完整五点队列，循环边界没有空白帧、淡入淡出或位置跳变。
+
+### assembling —— 设置页一次性加载（0.78 秒）
+
+只从五个点长到图标，不循环：
+
+- 前 0.18s 保持完整五点队列；
+- 之后 0.60s 按同一链式约束生长到完整图标；
+- 结束就停在图标，没有收缩、没有淡出、也不重复。
+
+设置页每次打开由 Sidebar 递增 `animationToken`、`MizarIconTile` 用 `.id(token)` 重建；视图出现
+后等 0.45s（让 sheet 升起来）再播一次，所以用户能看到五个点开始。动画本身是
+`RingPresentation.assembling(0...1)`，`0` 是五点队列，`1` 是完整图标。
+
+用在：设置页头部（64pt）。
 
 ### once —— 短加载与过渡（1.58 秒一次）
+
+
 
 从静态图标开始：先停 0.14 秒，然后按 running 的顺序收起五段（0.56s），空环停 0.12s，再按同一
 顺序画回来（0.62s），最后停在完整图标 0.14 秒。它开头和结尾都是图标姿势，所以可以直接盖在任何
 显示图标的屏幕上而不会跳帧。
 
-用在：设置页图标砖（`MizarIconTile(size: 64, motion: .once)`）、登录墙顶部（92pt）。
+用在：登录墙顶部（92pt）。
 
 ### opening —— 进度读数
 
@@ -114,7 +158,7 @@ python3 scripts/make-app-icon.py --check  # 只检查提交的 PNG 是否过期
 | 位置 | 代码 | 形态 |
 |---|---|---|
 | OS 图标 | `Assets.xcassets/AppIcon.appiconset` | 两个 1024 PNG（浅色 / 深色） |
-| 设置页头部 | `MizarIconTile(size: 64, motion: .once)` | 图标砖 + 一次短过渡 |
+| 设置页头部 | `MizarIconTile(size: 64, motion: .assembling, animationToken:)` | 图标砖 + 一次性五点→图标（停住） |
 | 登录墙 | `MizarRing(motion: .once, size: 92, palette: .ink(.white))` | 白墨 |
 | 连接中 | `LaunchingView` 的 `MizarRing(motion: .running, size: 64)` | running |
 | 配对搜索 | `MizarRing(motion: .running, size: 56)` | running |
@@ -132,14 +176,21 @@ python3 scripts/make-app-icon.py --check  # 只检查提交的 PNG 是否过期
 
 ## 6. 测试
 
-- `DSH-MizarTests/MizarRingTests.swift`：20 个用例——五段顺序与不重叠、R/W/墨迹比例、圆弧路径
-  包围盒、两种缓动、loop 首尾同姿势、满环 / 空环、画出与收起的先后、短过渡首尾为图标、进度读数
-  顺时针且单调、圆点最后亮、只有 opening 画轨道。
+- `DSH-MizarTests/MizarRingTests.swift`：25 个用例——五段顺序与不重叠、R/W/墨迹比例、圆弧路径
+  包围盒、多种缓动、起始时刻慢-快-慢、morph 单次超调、链式挤压、首尾五点队列、连续收缩同步聚拢、短过渡首尾为图标、settings 一次加载、进度读数顺时针且单调、圆点最后亮、
+  只有 opening 画轨道。
 - `DSH-MizarTests/SnapshotTests/MizarRingSnapshotTests.swift`：图标 / 空轨道 / 半满 / 白墨 / 深色
   五种环姿势，加图标砖浅色与深色两张；参考图在 `Snapshots/__Snapshots__/`。
 - `UnpairedLaunchSnapshotTests`：未配对整屏，注入静止的白墨环。
-- 动画本身无法断言（重复 keyframe 没有可步进的时钟），所以测的是“决定”而不是“效果”；实际运动
-  已用模拟器录屏逐帧看过（见 [`../../docs/evidence/ios-ring-motion-2026-11-07.png`](../../docs/evidence/ios-ring-motion-2026-11-07.png)）。
+- 动画本身无法断言（`TimelineView` 没有可步进的测试时钟），所以测的是“决定”而不是“效果”；
+  2026-11-07 版逐帧证据在 [`../../docs/evidence/ios-ring-motion-2026-11-07.png`](../../docs/evidence/ios-ring-motion-2026-11-07.png)。
+  2026-11-08 的链式队列连续循环预览见
+  [`../../docs/evidence/ios-ring-loop-2026-11-08.gif`](../../docs/evidence/ios-ring-loop-2026-11-08.gif)，
+  收缩前沿调试预览见
+  [`../../docs/evidence/ios-ring-shrink-fronts-2026-11-08.gif`](../../docs/evidence/ios-ring-shrink-fronts-2026-11-08.gif)
+  与
+  [`../../docs/evidence/ios-ring-shrink-fronts-2026-11-08.png`](../../docs/evidence/ios-ring-shrink-fronts-2026-11-08.png)。
+  红白小点就是每条弧的收缩前沿；录屏用临时 160pt debug ring，生产用同一个 `MizarRing`。
 
 ## 7. 重建与验证
 

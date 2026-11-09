@@ -15,7 +15,7 @@ import XCTest
 final class SplashCaptureTests: XCTestCase {
     func testCaptureTheLaunch() {
         let app = XCUIApplication()
-        app.launchArguments = ["-mizarSkipLoginGate", "-mizarSkipPermissionPrompts"]
+        app.launchArguments = ["-mizarSkipLoginGate", "-mizarSkipOnboarding", "-mizarSkipPermissionPrompts"]
         app.launch()
         // A first launch asks for notifications; the dialog is springboard's and
         // covers everything until it is answered.

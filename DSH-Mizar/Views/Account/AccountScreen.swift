@@ -688,8 +688,9 @@ struct AccountScreen: View {
     // MARK: - Devices
 
     private var devicesSection: some View {
-        Section {
-            if let devices = model.account.user?.devices, !devices.isEmpty {
+        let devices = (model.account.user?.devices ?? []).filter(\.isMobile)
+        return Section {
+            if !devices.isEmpty {
                 ForEach(devices) { device in
                     HStack(spacing: 12) {
                         Image(systemName: device.platform == "ios" ? "iphone" : "desktopcomputer")
@@ -711,7 +712,7 @@ struct AccountScreen: View {
                     .accessibilityIdentifier("account.device.\(device.id)")
                 }
             } else {
-                Text("No devices are signed in.")
+                Text("No phones or iPads are signed in.")
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("account.devices.empty")
             }

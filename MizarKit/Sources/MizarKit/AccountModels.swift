@@ -159,6 +159,15 @@ public struct AccountDevice: Codable, Sendable, Equatable, Identifiable {
     /// Whether this is the device reading the profile.
     public let current: Bool
 
+    /// Whether this is a phone or tablet, as opposed to a desktop install.
+    ///
+    /// The account's device list is the sign-in ledger, not the computer list:
+    /// desktops have their own rows and their own `AccountDesktop` model. The
+    /// device section filters on this so a Mac never appears twice.
+    public var isMobile: Bool {
+        platform.caseInsensitiveCompare("ios") == .orderedSame
+    }
+
     public init(
         id: String,
         name: String,

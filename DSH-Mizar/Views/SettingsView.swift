@@ -47,8 +47,14 @@ struct SettingsView: View {
     @State private var qqNumberCopied = false
     /// Closes the sheet this screen is presented in.
     var onDone: (() -> Void)?
+    /// Changes on every sheet presentation; the header's icon uses it as its
+    /// identity so one load starts when the sheet opens, not when its view was
+    /// first built.
+    var animationToken: Int = 0
     /// The one switch every haptic in the app answers to.
     @AppStorage(Haptics.storageKey) private var hapticsEnabled = true
+    @AppStorage(OnboardingKeys.done) private var onboardingDone = false
+    @AppStorage(OnboardingKeys.started) private var onboardingStarted = false
     /// The paid-plan explanation, from either this screen or the account screen.
     @State private var showingPlanDetail = false
     /// The pairing sheet, kept here as a developer tool while accounts replace it.
@@ -85,13 +91,19 @@ struct SettingsView: View {
                     developerSection
                 }
             }
-            .navigationTitle(Text("Settings"))
+            .navigationTitle("")
             // A small window keeps its title small.
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Settings")
+                        .font(.headline)
+                        .foregroundStyle(Theme.accentText)
+                }
                 if let onDone {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done", action: onDone)
+                            .tint(Theme.accentText)
                             .accessibilityIdentifier("settings.done")
                     }
                 }
@@ -135,14 +147,15 @@ struct SettingsView: View {
     private var header: some View {
         Section {
             HStack(spacing: 16) {
-                // The app's own icon, drawn rather than pasted: the ring loads
-                // itself once as the screen opens, which is the only place in
-                // this sheet where the brand is allowed to introduce itself.
-                MizarIconTile(size: 64, motion: .once)
+                // The app's own icon, drawn rather than pasted. It runs one
+                // chain load (five dots → arcs → icon) and stops on the icon;
+                // the looping motion is for status rows, not this header.
+                MizarIconTile(size: 64, motion: .assembling, animationToken: animationToken)
                     .shadow(color: Theme.navy.opacity(0.22), radius: 8, y: 3)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(verbatim: "DSH-Mizar")
                         .font(.title2.weight(.bold))
+                        .foregroundStyle(Theme.accentText)
                     Text(headerSubtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -173,7 +186,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(model.account.isLoggedIn ? model.account.displayName : String(localized: "Not signed in"))
                             .font(.body.weight(.medium))
-                            .foregroundStyle(model.account.isLoggedIn ? Color.primary : Color.secondary)
+                            .foregroundStyle(Theme.accentText)
                             .accessibilityIdentifier("settings.account.name")
                         Text(model.account.isPaid ? String(localized: "Paid account") : String(localized: "Free account"))
                             .font(.caption)
@@ -185,7 +198,7 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settings.account")
         } header: {
-            Text("Account")
+            accentHeader("Account")
         } footer: {
             if !model.account.isLoggedIn {
                 Text("A Mizar account is required to use the app. It keeps every relay session attributable to one person.")
@@ -209,11 +222,11 @@ struct SettingsView: View {
                     .tint(Theme.accentText)
                     .accessibilityIdentifier("settings.plan.detail")
             } label: {
-                Label("Mizar Paid", systemImage: "star.circle")
+                accentLabel("Mizar Paid", systemImage: "star.circle")
             }
             .accessibilityIdentifier("settings.plan")
         } header: {
-            Text("Plan")
+            accentHeader("Plan")
         } footer: {
             Text("A high-bandwidth relay, paid for by the people who need it. The free server stays free.")
         }
@@ -234,11 +247,11 @@ struct SettingsView: View {
                 get: { model.settings.values.guidedSendByDefault },
                 set: { model.settings.values.guidedSendByDefault = $0 },
             )) {
-                Label("Default to guided send", systemImage: "paperplane")
+                accentLabel("Default to guided send", systemImage: "paperplane")
             }
             .accessibilityIdentifier("settings.send.guidedSend")
         } header: {
-            Text("Sending")
+            accentHeader("Sending")
         } footer: {
             Text(
                 String(
@@ -253,11 +266,11 @@ struct SettingsView: View {
     private var feelSection: some View {
         Section {
             Toggle(isOn: $hapticsEnabled) {
-                Label("Haptics", systemImage: "hand.tap")
+                accentLabel("Haptics", systemImage: "hand.tap")
             }
             .accessibilityIdentifier("settings.haptics")
         } header: {
-            Text("Feel")
+            accentHeader("Feel")
         } footer: {
             Text(String(localized: "A light tap when a turn you are watching finishes, when a request is answered, and when a message is sent."))
         }
@@ -271,6 +284,7 @@ struct SettingsView: View {
                 Toggle(isOn: binding(for: kind)) {
                     Label {
                         Text(title(for: kind))
+                            .foregroundStyle(Theme.accentText)
                     } icon: {
                         Image(systemName: symbol(for: kind))
                             .foregroundStyle(Theme.accentText)
@@ -280,12 +294,13 @@ struct SettingsView: View {
             }
             LabeledContent {
                 Text(permission?.description ?? String(localized: "Checking…"))
+                    .foregroundStyle(Theme.accentText)
             } label: {
-                Label("iOS notifications", systemImage: "bell.badge")
+                accentLabel("iOS notifications", systemImage: "bell.badge")
             }
             .accessibilityIdentifier("settings.notify.authorization")
         } header: {
-            Text("Notifications")
+            accentHeader("Notifications")
         } footer: {
             // `String(localized:)` rather than a literal, and the whole sentence
             // in one piece: `Text` given a concatenation of literals resolves to
@@ -312,7 +327,15 @@ struct SettingsView: View {
     private func binding(for kind: NotificationKind) -> Binding<Bool> {
         Binding(
             get: { model.settings.values.notifications.isEnabled(kind) },
-            set: { model.settings.values.notifications.set($0, for: kind) },
+            set: { enabled in
+                model.settings.values.notifications.set(enabled, for: kind)
+                if enabled {
+                    Task {
+                        await Permissions.requestNotifications()
+                        await model.ensurePushRegistration()
+                    }
+                }
+            },
         )
     }
 
@@ -362,11 +385,11 @@ struct SettingsView: View {
                 get: { model.settings.values.liveActivitiesEnabled },
                 set: { model.settings.values.liveActivitiesEnabled = $0 },
             )) {
-                Label("Live Activity", systemImage: "bolt.horizontal.circle")
+                accentLabel("Live Activity", systemImage: "bolt.horizontal.circle")
             }
             .accessibilityIdentifier("settings.liveActivity")
         } header: {
-            Text("Live Activity")
+            accentHeader("Live Activity")
         } footer: {
             Text(
                 String(
@@ -400,7 +423,7 @@ struct SettingsView: View {
                     Task { await model.reloadCatalogs() }
                 }
             } label: {
-                Label("Model configuration", systemImage: "cpu")
+                accentLabel("Model configuration", systemImage: "cpu")
             }
             .accessibilityIdentifier("settings.localAgent.models")
 
@@ -419,7 +442,7 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settings.localAgent.clear")
         } header: {
-            Text("On-Device Agent (Experimental)")
+            accentHeader("On-Device Agent (Experimental)")
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Text("The on-device agent works only while this app is in the foreground. Leaving the app or locking the screen stops a running turn. It does not use the relay and does not consume account credits.")
@@ -460,9 +483,12 @@ struct SettingsView: View {
         Section {
             Toggle(isOn: Binding(
                 get: { model.settings.values.localNetworkFirst },
-                set: { model.settings.values.localNetworkFirst = $0 },
+                set: { enabled in
+                    model.settings.values.localNetworkFirst = enabled
+                    if enabled { Task { await Permissions.requestLocalNetwork() } }
+                },
             )) {
-                Label("Local network first", systemImage: "wifi")
+                accentLabel("Local network first", systemImage: "wifi")
             }
             .accessibilityIdentifier("settings.transfer.lanPriority")
 
@@ -473,11 +499,11 @@ struct SettingsView: View {
                 get: { model.settings.values.directConnection },
                 set: { model.settings.values.directConnection = $0 },
             )) {
-                Label("P2P direct connection (Experimental)", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                accentLabel("P2P direct connection (Experimental)", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
             }
             .accessibilityIdentifier("settings.transfer.directConnection")
         } header: {
-            Text("Transfer")
+            accentHeader("Transfer")
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Text(
@@ -510,7 +536,7 @@ struct SettingsView: View {
                     .monospacedDigit()
                     .accessibilityIdentifier("settings.files.size")
             } label: {
-                Label("Previewed files", systemImage: "doc.text.magnifyingglass")
+                accentLabel("Previewed files", systemImage: "doc.text.magnifyingglass")
             }
 
             Button(role: .destructive) {
@@ -525,7 +551,7 @@ struct SettingsView: View {
             .accessibilityIdentifier("settings.files.clear")
             .mizarFeedback(.success, trigger: mizarSuccess)
         } header: {
-            Text("Files")
+            accentHeader("Files")
         } footer: {
             Text(
                 String(
@@ -562,7 +588,7 @@ struct SettingsView: View {
             Button {
                 Task { await export() }
             } label: {
-                Label("Export logs", systemImage: "square.and.arrow.up")
+                accentLabel("Export logs", systemImage: "square.and.arrow.up")
             }
             .disabled(exporting)
             .accessibilityIdentifier("settings.logs.export")
@@ -598,12 +624,12 @@ struct SettingsView: View {
                     Text("\(model.log.count)")
                         .monospacedDigit()
                 } label: {
-                    Label("Entries recorded", systemImage: "text.alignleft")
+                    accentLabel("Entries recorded", systemImage: "text.alignleft")
                 }
                 .accessibilityIdentifier("settings.logs.count")
             }
         } header: {
-            Text("Logs")
+            accentHeader("Logs")
         } footer: {
             Text(
                 String(
@@ -637,13 +663,26 @@ struct SettingsView: View {
             .tint(Theme.accentText)
             .accessibilityIdentifier("settings.pair")
         } header: {
-            Text("Developer")
+            accentHeader("Developer")
         } footer: {
             Text("Pairing with a code is kept for development; sign in above to find your computers by account.")
         }
         .sheet(isPresented: $showingPairing) {
             PairingSheet()
         }
+    }
+
+    /// A section header on the light settings page. `accentText` is the
+    /// readable cut of the icon's cyan; the raw accent is a fill, not type.
+    private func accentHeader(_ title: LocalizedStringKey) -> some View {
+        Text(title).foregroundStyle(Theme.accentText)
+    }
+
+    /// A settings label in the same readable accent as its icon. Destructive
+    /// rows deliberately do not use this: their red is the signal.
+    private func accentLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .foregroundStyle(Theme.accentText)
     }
 
     private var aboutSection: some View {
@@ -656,10 +695,19 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } label: {
-                    Label("Source code", systemImage: "chevron.left.forwardslash.chevron.right")
+                    accentLabel("Source code", systemImage: "chevron.left.forwardslash.chevron.right")
                 }
             }
             .accessibilityIdentifier("settings.about.source")
+
+            Button {
+                onboardingStarted = true
+                onboardingDone = false
+                onDone?()
+            } label: {
+                accentLabel("Replay welcome", systemImage: "sparkles")
+            }
+            .accessibilityIdentifier("settings.about.replayOnboarding")
 
             // 兑换邀请码 lives on the account screen, next to the plan it pays
             // for: an invite is an account thing, and About is about the build.
@@ -667,11 +715,11 @@ struct SettingsView: View {
                 Text(AppModel.versionLine)
                     .monospacedDigit()
             } label: {
-                Label("Version", systemImage: "number")
+                accentLabel("Version", systemImage: "number")
             }
             .accessibilityIdentifier("settings.about.version")
         } header: {
-            Text("About")
+            accentHeader("About")
         }
     }
 
@@ -697,7 +745,7 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } label: {
-                    Label("Website", systemImage: "globe")
+                    accentLabel("Website", systemImage: "globe")
                 }
             }
             .accessibilityIdentifier("settings.community.website")
@@ -710,7 +758,7 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } label: {
-                    Label("QQ group", systemImage: "bubble.left.and.bubble.right")
+                    accentLabel("QQ group", systemImage: "bubble.left.and.bubble.right")
                 }
             }
             .accessibilityIdentifier("settings.community.qq")
@@ -726,7 +774,7 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings.community.qq.copied")
             }
         } header: {
-            Text("Community")
+            accentHeader("Community")
         }
     }
 
@@ -783,7 +831,7 @@ struct SettingsView: View {
                 }
             }
         } header: {
-            Text("Credits")
+            accentHeader("Credits")
         }
     }
 
