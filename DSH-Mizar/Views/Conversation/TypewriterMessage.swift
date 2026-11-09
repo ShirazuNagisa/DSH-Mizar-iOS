@@ -40,6 +40,15 @@ struct TypewriterMessage: View {
     /// answer that arrived while the screen was watching. A message that was
     /// already part of the conversation is never typed again.
     let typing: Bool
+    /// The gate that holds the reveal while a drawer moves.
+    ///
+    /// An object on purpose. The shell also publishes the same fact as
+    /// `drawersStill`, a value in the environment -- and reading a value in a
+    /// body registers a dependency, so every answer row was re-rendered, and
+    /// re-laid out, when a drawer started and again when it stopped. The first
+    /// of those is the frame the card does not move on. The gate is read
+    /// between the reveal's ticks instead, so the row is not touched.
+    var gate: DrawerMotionGate?
     /// Called when the reveal begins, before the first character.
     ///
     /// The conversation screen records the answer as seen here, so a row that
@@ -60,19 +69,6 @@ struct TypewriterMessage: View {
     @State private var revealed: Int
     /// Whether the reveal is still running. Also the "draw only part" branch.
     @State private var running: Bool
-    /// Whether the shell's drawers are still, read in the body so the hold
-    /// tracks them.
-    @Environment(\.drawersStill) private var drawersStill
-    /// Whether the reveal is holding while a drawer moves.
-    ///
-    /// The count is derived from the clock, so a hold costs nothing but
-    /// time: when the drawers stop, the reveal jumps to where it now is
-    /// rather than resuming from where it was held. What the hold buys is
-    /// the frames it does not spend -- a drawer dragging the card re-renders
-    /// this row's blocks on every character, under the card's mask, shadow
-    /// and glass.
-    @State private var held = false
-
     /// A message's parse, kept across the many times a parent re-creates this
     /// view.
     ///
@@ -124,11 +120,13 @@ struct TypewriterMessage: View {
     init(
         text: String,
         typing: Bool,
+        gate: DrawerMotionGate? = nil,
         onStarted: @escaping () -> Void = {},
         onStopped: @escaping () -> Void = {},
     ) {
         self.text = text
         self.typing = typing
+        self.gate = gate
         self.onStarted = onStarted
         self.onStopped = onStopped
         let parsed = Self.parse(text)
@@ -170,9 +168,6 @@ struct TypewriterMessage: View {
             // cancelled with the view. `.task` runs once per appearance, so a
             // redraw of the parent cannot restart a reveal.
             await reveal()
-        }
-        .onChange(of: drawersStill, initial: true) { _, still in
-            held = !still
         }
     }
 
@@ -236,6 +231,16 @@ struct TypewriterMessage: View {
         var last = -1
         while !Task.isCancelled {
             guard running else { break }
+            // The gate is read here, between the ticks, not in the body: a
+            // body that read it would be re-rendered whenever a drawer moved.
+            //
+            // The count is derived from the clock, so a hold costs nothing
+            // but time: when the drawers stop, the reveal jumps to where it
+            // now is rather than resuming from where it was held. What the
+            // hold buys is the frames it does not spend -- a drawer dragging
+            // the card re-renders this row's blocks on every character, under
+            // the card's mask, shadow and glass.
+            let held = !(gate?.still ?? true)
             if !held {
                 let elapsed = clock.now - start
                 let count = plan.revealedCount(after: elapsed)
@@ -248,7 +253,9 @@ struct TypewriterMessage: View {
             // Fourteen milliseconds: sixty-ish frames a second, and no more
             // precision than a phone display can show. The count is derived
             // from elapsed time, so a missed tick costs nothing but a redraw.
-            try? await Task.sleep(for: .milliseconds(14))
+            // While the reveal is held it costs nothing at all, so it wakes
+            // less often: those frames belong to the card.
+            try? await Task.sleep(for: .milliseconds(held ? 60 : 14))
         }
         guard !Task.isCancelled else { return }
         revealed = plan.totalCharacters
