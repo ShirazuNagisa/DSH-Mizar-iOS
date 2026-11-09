@@ -2600,21 +2600,26 @@ final class AppModel {
         linkWatchdog = Task { [weak self] in
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: .seconds(8))
+                    try await Task.sleep(for: .seconds(5))
                 } catch {
                     return
                 }
                 guard let self, self.appIsActive, !self.reconnecting,
                       let watched = self.connection else { return }
-                let answered = await self.pingAnswered(watched, within: .seconds(4))
+                let answered = await self.pingAnswered(watched, within: .seconds(3))
                 guard !Task.isCancelled, self.connection === watched else { return }
                 if answered {
                     self.linkWatchdogMisses = 0
                     continue
                 }
                 self.linkWatchdogMisses += 1
-                if self.linkWatchdogMisses < 2 { continue }
-                self.log.add(.connection, "link watchdog: no ping answer twice; dropping the socket")
+                // A local address is one hop away; one miss is already a lost
+                // network, and waiting for a second adds ten seconds to the
+                // operator's "connecting" screen. The relay is a longer path,
+                // so it gets two misses before the socket is declared dead.
+                let missesNeeded = self.activeEndpoint?.isLocalNetwork == true ? 1 : 2
+                if self.linkWatchdogMisses < missesNeeded { continue }
+                self.log.add(.connection, "link watchdog: the link stopped answering; dropping the socket")
                 self.linkWatchdogMisses = 0
                 await watched.disconnect()
                 await self.noteSocketClosed(watched)
@@ -4819,28 +4824,56 @@ final class AppModel {
             return false
         }
         guard let host else { return false }
+        let previousHost = host
         let previousEndpoint = activeEndpoint
+        let previousConnection = connection
         let moved = host.moved(to: authority)
-        self.host = moved
-        if let index = hosts.firstIndex(where: { $0.hostId == moved.hostId }) { hosts[index] = moved }
-        try? await credentials.save(moved)
-        activeEndpoint = .direct(authority: authority)
-        log.add(.connection, "LAN scan: dialling \(authority)")
-        // Exactly this address: a fallback that landed on the relay would be
-        // reported as "switched to the local network" while the phone was on
-        // the relay, and the stored credential would have been rewritten to an
-        // address that does not actually work.
-        if await reconnect(over: .direct(authority: authority)) {
-            log.add(.connection, "LAN scan: switched to the local network at \(authority)")
-            return true
+        // Open the direct candidate while the relay is still carrying traffic.
+        // The old implementation closed the working socket first and then
+        // dialled the LAN; a lost LAN at that moment meant a minute of
+        // "connecting" instead of a stable connection. A candidate that fails
+        // costs one probe and changes nothing.
+        let candidate = makeConnection(host: moved, endpoint: .direct(authority: authority))
+        log.add(.connection, "LAN scan: dialling \(authority) as a second socket")
+        let candidateWelcome: WelcomeFrame
+        do {
+            candidateWelcome = try await candidate.connect()
+            // A handshake proves the listener, not a usable path. Ask the
+            // cheapest question on this socket before taking the relay down.
+            _ = try await candidate.call("ping", as: PingResult.self)
+        } catch {
+            await candidate.disconnect()
+            log.add(.connection, "LAN scan: \(authority) did not answer after the handshake; keeping the previous route")
+            self.host = previousHost
+            activeEndpoint = previousEndpoint
+            return false
         }
-        log.add(.connection, "LAN scan: \(authority) answered the probe but not the socket; keeping the previous route")
-        self.host = host
-        if let index = hosts.firstIndex(where: { $0.hostId == host.hostId }) { hosts[index] = host }
-        try? await credentials.save(host)
-        activeEndpoint = previousEndpoint
-        if let previousEndpoint { _ = await reconnect(over: previousEndpoint) }
-        return false
+
+        // It answered. Adopt it before closing the relay, so there is no
+        // instant with neither socket: the same order every reconnect uses,
+        // only without the teardown in front.
+        nextConnectionEpoch += 1
+        connectionEpoch = nextConnectionEpoch
+        connection = candidate
+        welcome = candidateWelcome
+        activeEndpoint = .direct(authority: authority)
+        self.host = moved
+        if let index = hosts.firstIndex(where: { $0.hostId == moved.hostId }) {
+            hosts[index] = moved
+        }
+        try? await credentials.save(moved)
+        eventListener?.cancel()
+        interactionPoll?.cancel()
+        startInteractionPoll()
+        phase = .ready
+        connectionError = nil
+        linkFailure = nil
+        lastError = nil
+        log.add(.connection, "LAN scan: switched to the local network at \(authority)")
+        await previousConnection?.disconnect()
+        await refreshSessions(reconnectingIfNeeded: false)
+        await refreshInteractions()
+        return true
     }
 
     /// How often the app asks whether its computer is on the local network.
