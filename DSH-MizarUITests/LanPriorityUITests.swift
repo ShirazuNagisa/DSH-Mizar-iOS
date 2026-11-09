@@ -335,10 +335,22 @@ final class LanPriorityUITests: XCTestCase {
         let row = app.buttons["settings.topic.transfer"]
         XCTAssertTrue(revealInSettings(row, in: app), "the settings directory has no 传输 shelf")
         row.tap()
+        let toggle = app.descendants(matching: .any).matching(identifier: Self.toggleIdentifier).firstMatch
         XCTAssertTrue(
-            app.descendants(matching: .any).matching(identifier: Self.toggleIdentifier).firstMatch
-                .waitForExistence(timeout: Self.patience),
+            toggle.waitForExistence(timeout: Self.patience),
             "the 传输 shelf opened without its local-network switch",
+        )
+        // The page slides in: a control that exists is not one that has stopped
+        // moving, and a switch read mid-transition reports no value at all --
+        // which the assertions below would then read as "the switch is gone".
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            object: toggle,
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [settled], timeout: Self.patience),
+            .completed,
+            "the 传输 shelf never finished opening",
         )
     }
 
