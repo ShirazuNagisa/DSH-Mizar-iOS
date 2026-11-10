@@ -35,6 +35,13 @@ struct HostListView: View {
     /// One row of the account's computers.
     @ViewBuilder
     private func accountRow(_ desktop: AccountDesktop) -> some View {
+        // The account list answers "online" from the relay instance that
+        // answered it, and the phone may be connected through another one --
+        // the open socket is the better truth. A computer this phone is
+        // talking to right now is never drawn offline, or the row contradicts
+        // the pill at the bottom of the same screen.
+        let connected = model.host?.hostId == desktop.deviceId && model.isConnected
+        let online = desktop.online || connected
         Button {
             Task { await connect(desktop, target: model.preferredAgent(for: desktop.deviceId)) }
         } label: {
@@ -42,10 +49,12 @@ struct HostListView: View {
                 desktop: desktop,
                 label: model.accountLabel(for: desktop.deviceId)
                     ?? model.hosts.first { $0.hostId == desktop.deviceId }?.label,
+                online: online,
+                connected: connected,
             )
         }
         .buttonStyle(.pressable(scale: 0.98))
-        .disabled(!desktop.online)
+        .disabled(!online)
         .accessibilityIdentifier("host.account.\(desktop.deviceId)")
         .contextMenu {
             Button {
@@ -195,6 +204,13 @@ struct HostListView: View {
                 // an answer about stored keys, and saving one in Settings is a
                 // trip away from this list.
                 model.localAgent.refreshKeyPresence()
+                // Presence moves while the sheet is closed: a computer that
+                // went to sleep, or one that came online after the last read,
+                // must not be presented with the old answer. The refresh is
+                // cheap and the list is the only place the answer is shown.
+                if model.account.session?.isUsable == true {
+                    await model.account.loadDesktops()
+                }
             }
             .navigationDestination(for: HostRoute.self) { route in
                 switch route {
@@ -781,6 +797,13 @@ extension UnpairedView where Mark == MizarRing {
 struct AccountDesktopRow: View {
     let desktop: AccountDesktop
     var label: String? = nil
+    /// The row's online answer, when the caller knows better than the account
+    /// list -- the computer this phone currently has a socket to.
+    var online: Bool? = nil
+    /// Whether that socket is the current one, for the subtitle.
+    var connected = false
+
+    private var isOnline: Bool { online ?? desktop.online }
 
     private var displayName: String {
         guard let label, !label.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -793,26 +816,28 @@ struct AccountDesktopRow: View {
         HStack(spacing: 12) {
             Image(systemName: "desktopcomputer")
                 .font(.body.weight(.medium))
-                .foregroundStyle(desktop.online ? Theme.accentText : Color.secondary)
+                .foregroundStyle(isOnline ? Theme.accentText : Color.secondary)
                 .frame(width: 34, height: 34)
                 .background(
-                    (desktop.online ? AnyShapeStyle(Color.accentColor.opacity(0.12)) : AnyShapeStyle(.fill.tertiary)),
+                    (isOnline ? AnyShapeStyle(Color.accentColor.opacity(0.12)) : AnyShapeStyle(.fill.tertiary)),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous),
                 )
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName)
                     .font(.body.weight(.medium))
-                    .foregroundStyle(desktop.online ? .primary : .secondary)
+                    .foregroundStyle(isOnline ? .primary : .secondary)
                     .lineLimit(1)
-                Text(desktop.online ? String(localized: "Online") : String(localized: "Offline"))
+                Text(connected
+                    ? String(localized: "Connected")
+                    : (isOnline ? String(localized: "Online") : String(localized: "Offline")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 0)
 
-            if desktop.online {
+            if isOnline {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
