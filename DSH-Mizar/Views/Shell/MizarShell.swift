@@ -94,6 +94,8 @@ struct MizarShell: View {
                 DrawerContainer(
                     shell: shell,
                     compact: compact,
+                    spread: fold.isSpread,
+                    spreadInsets: insets,
                     leadingWidth: leading,
                     trailingWidth: trailing,
                     pinnedVisible: shell.pinnedVisible,
@@ -141,10 +143,15 @@ struct MizarShell: View {
                 // and the one the injected geometry can photograph.
                 if fold.isSpread, !shell.indexPinnedVisible, model.selectedSessionId != nil {
                     TurnRail()
-                        .padding(.vertical, 90)
-                        // Above the composer, which floats at the pane's foot.
-                        .padding(.bottom, 170)
-                        .padding(.trailing, 6)
+                        // Centred in the pane: the rail is a compass, and a
+                        // compass that sits wherever the toolbar happens to end
+                        // reads as another toolbar button -- which is exactly
+                        // how it overlapped the permissions control.
+                        .padding(.vertical, 150)
+                        // Inside the 44-point gutter the pane keeps for it,
+                        // which puts it an equal distance from the pane's edge
+                        // and from the text.
+                        .padding(.trailing, 11)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         .transition(.opacity)
                 }
@@ -425,6 +432,18 @@ private struct ShellPane: View {
     let compact: Bool
     @Environment(AppModel.self) private var model
     @Environment(ShellLayerContext.self) private var layers
+    @Environment(ShellState.self) private var shell
+
+    /// One side gutter wide enough for the quick rail, kept clear of content.
+    ///
+    /// The rail is a scrubber on the conversation's edge; drawn over the
+    /// messages it covers the end of every paragraph that reaches the edge,
+    /// which on a 634-point pane is most of them. So the pane gives it a strip
+    /// of its own -- only on a spread, and only while the index column is away,
+    /// because with the column out the rail is gone.
+    private var railGutter: CGFloat {
+        layers.spread && !shell.indexPinnedVisible ? 44 : 0
+    }
 
     var body: some View {
         NavigationStack {
@@ -460,6 +479,9 @@ private struct ShellPane: View {
             }
         }
         .background(Theme.paneBackground)
+        // Inside the card, not outside it: the container places the columns and
+        // this is the conversation's own margin.
+        .padding(.trailing, railGutter)
     }
 }
 

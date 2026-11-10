@@ -27,6 +27,16 @@ import UIKit
 struct DrawerContainer: UIViewControllerRepresentable {
     let shell: ShellState
     let compact: Bool
+    /// Whether the window is a spread, and the safe area the *shell* measured.
+    ///
+    /// A spread's columns are interior to the window, so UIKit's own insets --
+    /// worked out from the display the app is drawing into -- are not the ones
+    /// to inset them by. The debug geometry injection makes that concrete: a
+    /// 951-point container inside a 466-point window is reported as 84 points
+    /// unsafe on the trailing edge, which drew a phantom strip down the right
+    /// of the conversation. The shell already knows the truth.
+    let spread: Bool
+    let spreadInsets: EdgeInsets
     let leadingWidth: CGFloat
     let trailingWidth: CGFloat
     /// The iPad's columns.
@@ -46,6 +56,8 @@ struct DrawerContainer: UIViewControllerRepresentable {
         )
         controller.configure(
             compact: compact,
+            spread: spread,
+            spreadInsets: spreadInsets,
             leadingWidth: leadingWidth,
             trailingWidth: trailingWidth,
             pinnedVisible: pinnedVisible,
@@ -59,6 +71,8 @@ struct DrawerContainer: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: DrawerContainerController, context: Context) {
         controller.configure(
             compact: compact,
+            spread: spread,
+            spreadInsets: spreadInsets,
             leadingWidth: leadingWidth,
             trailingWidth: trailingWidth,
             pinnedVisible: pinnedVisible,
@@ -159,6 +173,8 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
     private let panCoordinator: DrawerPanCoordinator
 
     private var compact = true
+    private var spread = false
+    private var spreadInsets = EdgeInsets()
     /// The card's corner as last drawn, and the rim's direction: each of them
     /// switches at most once per gesture, so they are written only when they
     /// change and not on every frame of a drag.
@@ -268,6 +284,8 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
     /// Take the values the SwiftUI shell decides.
     func configure(
         compact: Bool,
+        spread: Bool,
+        spreadInsets: EdgeInsets,
         leadingWidth: CGFloat,
         trailingWidth: CGFloat,
         pinnedVisible: Bool,
@@ -276,9 +294,13 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
         animated: Bool,
     ) {
         let layoutChanged = compact != self.compact
+            || spread != self.spread
+            || spreadInsets != self.spreadInsets
             || leadingWidth != self.leadingWidth
             || trailingWidth != self.trailingWidth
         self.compact = compact
+        self.spread = spread
+        self.spreadInsets = spreadInsets
         self.leadingWidth = leadingWidth
         self.trailingWidth = trailingWidth
         self.reduceMotion = reduceMotion
@@ -326,13 +348,15 @@ final class DrawerContainerController: UIViewController, DrawerSurface {
     /// the SwiftUI shell handed them to its drawers. On a regular width nothing
     /// moves by transform, and the columns take UIKit's own safe area.
     private func distributeSafeArea() {
-        let regions: SafeAreaRegions = compact ? .keyboard : .all
+        // A spread's pans are interior: their insets come from the shell, the
+        // same way a phone's do, and UIKit is asked for the keyboard only.
+        let regions: SafeAreaRegions = (compact || spread) ? .keyboard : .all
         for host in [cardHost, sidebarHost, planeHost] where host.safeAreaRegions != regions {
             host.safeAreaRegions = regions
         }
         let insets = view.safeAreaInsets
         let screen = EdgeInsets(top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right)
-        let wanted: EdgeInsets? = compact ? screen : nil
+        let wanted: EdgeInsets? = compact ? screen : (spread ? spreadInsets : nil)
         if context.screenInsets != wanted { context.screenInsets = wanted }
     }
 
