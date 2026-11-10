@@ -951,3 +951,17 @@
 "Some answers were not accepted. Check the form and try again." = "有些答案没有被接受，请检查后重试。";
 "This account has already used that invite code." = "这个账户已经用过该邀请码。";
 "Dismiss" = "关闭";
+
+/* 新手教程里引导去桌面端下载页的那一页。 */
+"Install AGI Mizar on your computer" = "在电脑上安装 AGI Mizar";
+"This phone is the remote. The computer it drives needs AGI Mizar installed and running before the two can be paired." = "手机只是遥控器。它要连的那台电脑需要先装好 AGI Mizar 并保持运行，才能配对。";
+"Download" = "下载";
+"Open GitHub Releases and take the installer for your platform." = "打开 GitHub Releases，取对应平台的安装包。";
+"Install and open it" = "安装并打开";
+"Run it on the computer you want this phone to drive, and leave it running." = "在你要用这台手机遥控的电脑上运行它，并保持运行。";
+"Come back" = "回到手机";
+"The next step pairs this phone with that computer." = "下一步会把这台手机和那台电脑配对。";
+"Open download page" = "打开下载页";
+"Copy link" = "复制链接";
+"Link copied" = "链接已复制";
+"macOS DMG on Releases; Windows installers are built by the repository's packaging script." = "macOS 的 DMG 在 Releases 里；Windows 安装包由仓库里的打包脚本生成。";

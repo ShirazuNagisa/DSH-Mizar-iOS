@@ -950,3 +950,17 @@
 "Some answers were not accepted. Check the form and try again." = "Some answers were not accepted. Check the form and try again.";
 "This account has already used that invite code." = "This account has already used that invite code.";
 "Dismiss" = "Dismiss";
+
+/* The onboarding page that sends the operator to the desktop app's release page. */
+"Install AGI Mizar on your computer" = "Install AGI Mizar on your computer";
+"This phone is the remote. The computer it drives needs AGI Mizar installed and running before the two can be paired." = "This phone is the remote. The computer it drives needs AGI Mizar installed and running before the two can be paired.";
+"Download" = "Download";
+"Open GitHub Releases and take the installer for your platform." = "Open GitHub Releases and take the installer for your platform.";
+"Install and open it" = "Install and open it";
+"Run it on the computer you want this phone to drive, and leave it running." = "Run it on the computer you want this phone to drive, and leave it running.";
+"Come back" = "Come back";
+"The next step pairs this phone with that computer." = "The next step pairs this phone with that computer.";
+"Open download page" = "Open download page";
+"Copy link" = "Copy link";
+"Link copied" = "Link copied";
+"macOS DMG on Releases; Windows installers are built by the repository's packaging script." = "macOS DMG on Releases; Windows installers are built by the repository's packaging script.";

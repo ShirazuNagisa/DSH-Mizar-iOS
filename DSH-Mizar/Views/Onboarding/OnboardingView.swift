@@ -2,8 +2,8 @@
 //  OnboardingView.swift
 //  DSH-Mizar
 //
-//  The first-run guide: welcome, account, transport, on-device agent,
-//  notifications, plan, and a summary. Full window, no sidebar. Every choice
+//  The first-run guide: welcome, install the desktop app, account, transport,
+//  on-device agent, notifications, plan, refresh, and a summary. Full window, no sidebar. Every choice
 //  writes the same setting the Settings screen writes, so the guide cannot
 //  disagree with the app it hands over to.
 //
@@ -46,10 +46,13 @@ struct OnboardingView: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openURL) private var openURL
     @AppStorage(OnboardingKeys.done) private var done = false
     @AppStorage(OnboardingKeys.started) private var started = false
     @AppStorage(OnboardingKeys.version) private var guideVersion = ""
     @State private var wantsLocalAgent = false
+    /// Whether the download link is on the clipboard, for the page to say so.
+    @State private var releaseLinkCopied = false
 
     @State private var step: Step = Self.debugInitialStep
     @State private var direction = 1
@@ -58,7 +61,7 @@ struct OnboardingView: View {
     @State private var appeared = false
 
     private enum Step: Int, CaseIterable, Identifiable {
-        case welcome, account, network, agent, alerts, plan, refresh, summary
+        case welcome, desktop, account, network, agent, alerts, plan, refresh, summary
 
         var id: Int { rawValue }
 
@@ -71,7 +74,7 @@ struct OnboardingView: View {
         let mode: AccountScreen.Mode
     }
 
-    /// A preview hook: `-mizarOnboardingStep <0...6>` opens the guide on one
+    /// A preview hook: `-mizarOnboardingStep <0...8>` opens the guide on one
     /// page so each page can be looked at without tapping through. Debug only.
     private static var debugInitialStep: Step {
         #if DEBUG
@@ -222,6 +225,8 @@ struct OnboardingView: View {
         switch step {
         case .welcome:
             welcomePage
+        case .desktop:
+            desktopPage
         case .account:
             accountPage
         case .network:
@@ -311,6 +316,138 @@ struct OnboardingView: View {
                     detail: "Traffic stays attributable; conversations never pass through the account server.",
                 )
             }
+        }
+    }
+
+    // MARK: - Desktop
+
+    /// Where the desktop application lives.
+    ///
+    /// The desktop repository's release page is the one place both platforms
+    /// start from: the macOS DMG is published there, and the repository says
+    /// how the Windows installer is built. Kept as a constant so the page, its
+    /// copy button and a test cannot disagree about the address.
+    private static let desktopReleaseURL = URL(string: "https://github.com/ShirazuNagisa/AGI-Mizar/releases")!
+
+    /// The second page: the computer comes first.
+    ///
+    /// The phone is a remote; a phone that walks the rest of the guide before
+    /// installing the desktop has nothing to pair with at the end, so the
+    /// download is offered here -- before the account, before pairing -- with
+    /// the link openable in the browser and copyable for a machine that is not
+    /// this phone.
+    private var desktopPage: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xxl) {
+            pageHeader(
+                icon: "desktopcomputer",
+                title: "Install AGI Mizar on your computer",
+                subtitle: "This phone is the remote. The computer it drives needs AGI Mizar installed and running before the two can be paired.",
+            )
+
+            card {
+                VStack(alignment: .leading, spacing: Theme.Space.lg) {
+                    desktopStep(
+                        1,
+                        title: "Download",
+                        detail: "Open GitHub Releases and take the installer for your platform.",
+                    )
+                    desktopStep(
+                        2,
+                        title: "Install and open it",
+                        detail: "Run it on the computer you want this phone to drive, and leave it running.",
+                    )
+                    desktopStep(
+                        3,
+                        title: "Come back",
+                        detail: "The next step pairs this phone with that computer.",
+                    )
+                }
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Space.md) {
+                Text(verbatim: "AGI Mizar · GitHub Releases")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+                Text(verbatim: Self.desktopReleaseURL.absoluteString)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.white.opacity(0.62))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("onboarding.desktop.url")
+
+                HStack(spacing: Theme.Space.md) {
+                    Button {
+                        openURL(Self.desktopReleaseURL)
+                    } label: {
+                        Label("Open download page", systemImage: "arrow.up.right")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("onboarding.desktop.open")
+
+                    Button {
+                        copyDesktopReleaseLink()
+                    } label: {
+                        Label(
+                            releaseLinkCopied ? "Link copied" : "Copy link",
+                            systemImage: releaseLinkCopied ? "checkmark" : "doc.on.doc",
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("onboarding.desktop.copy")
+                }
+
+                Text("macOS DMG on Releases; Windows installers are built by the repository's packaging script.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.48))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// One numbered instruction on the download page.
+    private func desktopStep(
+        _ number: Int,
+        title: LocalizedStringKey,
+        detail: LocalizedStringKey,
+    ) -> some View {
+        HStack(alignment: .top, spacing: Theme.Space.lg) {
+            Text(verbatim: "\(number)")
+                .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(Theme.onAccent)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.accentColor))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Put the release page's address on the clipboard and say so.
+    ///
+    /// A copy that leaves no trace reads as a tap that did nothing, so the
+    /// button becomes "Link copied" for a couple of seconds. The address is
+    /// copied whole rather than shortened: it is what the other machine's
+    /// browser needs.
+    private func copyDesktopReleaseLink() {
+        UIPasteboard.general.string = Self.desktopReleaseURL.absoluteString
+        withMizarAnimation(.mizarSmooth) { releaseLinkCopied = true }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withMizarAnimation(.mizarSmooth) { releaseLinkCopied = false }
         }
     }
 

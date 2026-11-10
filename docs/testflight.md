@@ -11,7 +11,7 @@
 | **Bundle ID** | `me.shirazu.dshmizar` |
 | **显示名** | `DSH-Mizar` |
 | **版本号** | `0.9.9` |
-| **构建号** | `37` |
+| **构建号** | `38` |
 | **Team ID** | `5Q2A46685M` |
 | 团队名 | Vreeland Lee |
 | 签名身份 | `Apple Distribution: Vreeland Lee (5Q2A46685M)` |
@@ -106,7 +106,7 @@ open iOS/.devcache/DSH-Mizar.xcarchive
 
 Xcode 的 **Organizer** 会打开：
 
-1. 选中 **DSH-Mizar 0.9.9 (37)**
+1. 选中 **DSH-Mizar 0.9.9 (38)**
 2. 点右侧 **Distribute App**
 3. 选 **TestFlight & App Store** → **Distribute**
 4. 后面一路默认：
@@ -152,7 +152,7 @@ Xcode 的 **Organizer** 会打开：
    - **内部测试**：只能加你 App Store Connect 团队里的成员。
      一个个人开发者账号通常就是你自己，**用你的 Apple ID 邮箱**
    - **不需要 Apple 审核**，加完立刻能装 ← **自己测试走这条最快**
-3. 加完在构建那一栏点 **`+`** → 选 `0.9.9 (37)` → **Add**
+3. 加完在构建那一栏点 **`+`** → 选 `0.9.9 (38)` → **Add**
 
 > **外部测试**（External Testing）可以加最多 10000 人，但**第一次需要 Apple 审核**，
 > 通常 1–2 天。自己用不上走这条。

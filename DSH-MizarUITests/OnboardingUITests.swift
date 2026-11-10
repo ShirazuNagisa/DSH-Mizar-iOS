@@ -31,6 +31,28 @@ final class OnboardingUITests: XCTestCase {
         XCTAssertTrue(next.isEnabled, "the welcome page cannot advance")
         next.tap()
 
+        // The page after the welcome sends the operator to the desktop app:
+        // the link can be opened in the browser or copied for another machine.
+        let releaseURL = app.staticTexts["onboarding.desktop.url"]
+        XCTAssertTrue(releaseURL.waitForExistence(timeout: 6), "the download page did not appear")
+        XCTAssertTrue(
+            releaseURL.label.contains("github.com/ShirazuNagisa/AGI-Mizar/releases"),
+            "the download page does not name the release page: \(releaseURL.label)",
+        )
+        XCTAssertTrue(app.buttons["onboarding.desktop.open"].exists, "the download link cannot be opened")
+        let copy = app.buttons["onboarding.desktop.copy"]
+        XCTAssertTrue(copy.exists, "the download link cannot be copied")
+        copy.tap()
+        XCTAssertTrue(
+            app.buttons["onboarding.desktop.copy"].waitForExistence(timeout: 3),
+            "the copy button went away after a tap",
+        )
+        XCTAssertTrue(
+            copy.label.contains("Link copied") || copy.label.contains("链接已复制"),
+            "tapping copy said nothing: \(copy.label)",
+        )
+
+        next.tap()
         let signIn = app.buttons["onboarding.account.signIn"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 6), "the account page did not appear")
         XCTAssertFalse(next.isEnabled, "the account page let a signed-out person continue")
@@ -47,7 +69,7 @@ final class OnboardingUITests: XCTestCase {
             "-mizarSkipPermissionPrompts",
             "-mizarAccountFreshStart",
             "-mizarAccountURL", "http://127.0.0.1:1",
-            "-mizarOnboardingStep", "5",
+            "-mizarOnboardingStep", "6",
         ]
         app.launch()
 
@@ -98,7 +120,7 @@ final class OnboardingUITests: XCTestCase {
             "-mizarSkipPermissionPrompts",
             "-mizarAccountFreshStart",
             "-mizarAccountURL", "http://127.0.0.1:1",
-            "-mizarOnboardingStep", "6",
+            "-mizarOnboardingStep", "7",
         ]
         app.launch()
 
