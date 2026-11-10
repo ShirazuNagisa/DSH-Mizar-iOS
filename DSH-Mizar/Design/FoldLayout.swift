@@ -5,19 +5,18 @@
 //  The window read as pages.
 //
 //  iPhone Duo is the first iPhone whose window is not one screen. Folded it is
-//  a 466 x 678 pt cover display; unfolded it is a 951 x 669 pt spread with the
-//  hinge running down the middle, and each half of that spread is -- to within
-//  a few points -- the cover display's own width. That is the fact this file
-//  turns into a rule: **a page is a page whether the phone is open or closed**,
-//  so the conversation's reading measure never changes when the fold does.
+//  a 466 x 678 pt cover display -- an iPhone, in every way the app already
+//  knows. Unfolded it is a 951 x 669 pt spread with the hinge down the middle.
 //
-//  Three shapes, and only one of them is new:
+//  The spread is the iPad's arrangement, not a new one: the conversation keeps
+//  two thirds of the window, one sidebar takes the other third, and the two
+//  sidebars trade places because a third and a third and two thirds do not fit
+//  in a whole. That is exactly what the iPad's columns already do -- see
+//  `DrawerContainer.layoutColumns()` -- so the fold reuses it rather than
+//  inventing a second multi-pane system.
 //
-//    - `phone`: one page, everything the app has ever drawn on an iPhone.
-//    - `spread`: two pages with a valley between them. The left page behaves
-//      exactly like the phone's page -- the same compact layout, the same
-//      drawers -- and the right page is the context plane.
-//    - `columns`: the iPad's pinned columns, untouched by any of this.
+//  What this file adds is only the arithmetic: which shape the window is, and
+//  how wide a sidebar is when the shape is a spread.
 //
 //  Why the resolution is a measurement rather than a device check: the app
 //  should not care which iPhone it is on, only how wide the window is and how
@@ -27,39 +26,50 @@
 //
 //  The numbers are measured, not chosen. `capabilities.plist` for
 //  `iPhone Duo.simdevicetype` declares two integrated displays: `LCD`
-//  1398 x 2034 px at 3x (466 x 678 pt, corners 8 pt on the spine side and
-//  59 pt outside) and `LCD-1` 2007 x 2853 px at 3x, presented at 270 degrees
-//  (951 x 669 pt, corners 55 pt). `docs/ios/ios-iphone-duo-adaptation.md`
-//  records the measurement and how to repeat it.
+//  1398 x 2034 px at 3x (466 x 678 pt) and `LCD-1` 2007 x 2853 px at 3x,
+//  presented at 270 degrees (951 x 669 pt).
+//  `docs/ios/ios-iphone-duo-adaptation.md` records the measurement and how to
+//  repeat it.
 //
 
 import SwiftUI
 import UIKit
+
+extension EnvironmentValues {
+    /// Whether this part of the hierarchy is one pane of a spread.
+    ///
+    /// A value rather than the shell's context object, so a screen rendered on
+    /// its own -- the snapshot suite renders `SessionDetailView` directly --
+    /// keeps the phone's behaviour instead of crashing on a missing object.
+    ///
+    /// It exists because the quick rail is drawn by the shell on a spread: the
+    /// rail inside the conversation is gated on `sizeClass == .regular`, and
+    /// that trait belongs to the hosting controller's window. The debug
+    /// geometry injection can fake the layout but not the trait, so a rail that
+    /// lived behind the trait could never be photographed before the hardware
+    /// arrives.
+    @Entry var spreadWindow = false
+}
 
 /// The window as one page, two pages, or the iPad's columns.
 struct FoldLayout: Equatable {
     enum Shape: Equatable {
         /// One page: the folded cover display, and every other iPhone.
         case phone
-        /// Two pages side by side, the hinge between them.
+        /// Two panes: the unfolded inner display, laid out as the iPad's columns.
         case spread
         /// The iPad's pinned columns.
         case columns
     }
 
-    /// The reading measure: the widest a column of the conversation's own
-    /// content may be, folded or unfolded.
+    /// The window is divided into this many shares on a spread; one sidebar
+    /// takes one, the conversation the other two.
     ///
-    /// It is the cover display's width (466 pt), because that is the width the
-    /// conversation was designed to be read at and the width it must keep when
-    /// the second page appears. Anything wider and unfolding would reflow the
-    /// text the operator was already reading, which is the one thing a fold
-    /// must not do.
-    static let measure: CGFloat = 466
-
-    /// The valley the hinge leaves between two pages, in points: 14 on each
-    /// page's spine side. Content keeps out of it; only the spine may enter.
-    static let gutter: CGFloat = 28
+    /// A proportion, not a fixed width: the whole point of a spread is that it
+    /// is wide, and a 320-point column on a 951-point window wastes the page it
+    /// is standing on. Divided rather than multiplied by a fraction, so 951
+    /// gives exactly 317 and three of them are exactly the window.
+    static let sidebarDivisor: CGFloat = 3
 
     /// A spread is at least this wide. The unfolded Duo measures 951, so the
     /// threshold only has to separate a spread from a landscape phone (874 on
@@ -96,36 +106,14 @@ struct FoldLayout: Equatable {
 
     var isSpread: Bool { shape == .spread }
 
-    /// One page's width. A spread splits the window minus the valley; a phone
-    /// is one page.
-    var pageWidth: CGFloat {
-        guard isSpread else { return canvas.width }
-        return (canvas.width - Self.gutter) / 2
-    }
+    /// How wide one sidebar is on a spread: a third of the window.
+    ///
+    /// The shell hands this to both columns, which is what makes them mutually
+    /// exclusive: a third and a third and two thirds cannot all be on screen,
+    /// so opening one closes the other -- the iPad's own rule, arriving at the
+    /// same answer by arithmetic instead of by a special case.
+    var sidebarWidth: CGFloat { canvas.width / Self.sidebarDivisor }
 
-    /// The window's two pages, left to right. One entry for a phone.
-    var pages: [CGRect] {
-        let height = canvas.height
-        guard isSpread else { return [CGRect(x: 0, y: 0, width: canvas.width, height: height)] }
-        return [
-            CGRect(x: 0, y: 0, width: pageWidth, height: height),
-            CGRect(x: canvas.width - pageWidth, y: 0, width: pageWidth, height: height),
-        ]
-    }
-
-    var leftPage: CGRect { pages[0] }
-    var rightPage: CGRect { pages.count > 1 ? pages[1] : pages[0] }
-
-    /// The strip between the two pages, where nothing is drawn but the spine.
-    var valley: CGRect? {
-        guard isSpread else { return nil }
-        return CGRect(x: pageWidth, y: 0, width: Self.gutter, height: canvas.height)
-    }
-
-    /// The hinge's own coordinate: the x the spine and its hairline sit on.
-    var spineX: CGFloat? { isSpread ? canvas.width / 2 : nil }
-
-    /// The widest the page's content may be. Equal to the page in a spread
-    /// (the valley is already out of it); capped by the measure on a wide phone.
-    var readingWidth: CGFloat { min(pageWidth, Self.measure) }
+    /// What the conversation has left when one sidebar is out: two thirds.
+    var conversationWidth: CGFloat { canvas.width - sidebarWidth }
 }

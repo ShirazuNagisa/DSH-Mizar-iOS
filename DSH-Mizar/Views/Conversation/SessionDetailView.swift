@@ -47,6 +47,7 @@ struct SessionDetailView: View {
     @Environment(ShellState.self) private var shell
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.spreadWindow) private var isSpreadPane
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var stats: SessionStatsFrame?
     /// The live stream of the turn this screen is watching.
@@ -354,7 +355,11 @@ struct SessionDetailView: View {
                 // On an iPad with the index column put away, the turns stay at the
                 // edge as a rail to scrub.
                 .overlay(alignment: .trailing) {
-                    if sizeClass == .regular, !shell.indexPinnedVisible {
+                    // On a spread the shell draws the rail instead: it sits on
+                    // the pane's edge, which only the shell knows, and it must
+                    // be drawn whether or not the hosting controller's window
+                    // happens to report a regular width.
+                    if sizeClass == .regular, !shell.indexPinnedVisible, !isSpreadPane {
                         TurnRail()
                             .padding(.vertical, 90)
                             .padding(.bottom, composerHeight)
@@ -766,16 +771,6 @@ struct SessionDetailView: View {
             // Keep the latest value for the re-aim loops, but outside SwiftUI's
             // observation: a scroll tick must not rebuild the screen.
             placementGeometry.value = geometry
-            // The spine on a fold's second page wants the same fact at a
-            // coarser resolution. `reportReading` quantises, so this is at most
-            // a couple of dozen writes for a whole scroll rather than one a
-            // frame.
-            turnIndex.reportReading(fraction: ReadingProgress.fraction(
-                contentHeight: geometry.contentHeight,
-                viewportHeight: geometry.viewportHeight,
-                visibleMinY: geometry.visibleMinY,
-                topInset: geometry.topInset,
-            ))
             // A late success is still valid after the bounded re-aim budget.
             // Accept it without starting another scroll or network read.
             finishInitialPlacement()

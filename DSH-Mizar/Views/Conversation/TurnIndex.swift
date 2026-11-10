@@ -55,13 +55,6 @@ final class TurnIndex {
     /// to a row with no frame goes nowhere -- which is how a turn could be listed
     /// here, be tapped, and refuse to be shown.
     private(set) var realized: Set<String> = []
-    /// How far through the conversation the reader is, 0...1.
-    ///
-    /// Quantised to 24 steps by ``reportReading(fraction:)`` because the shell
-    /// reads it: a value that changed on every scroll tick would rebuild the
-    /// shell's body per frame, which is the cost this file's neighbour spent a
-    /// week removing.
-    private(set) var readingFraction: Double = 0
     /// The turn the operator asked to go to, and a count that makes asking
     /// for the same one twice a second request.
     private(set) var jumpTarget: String?
@@ -104,14 +97,6 @@ final class TurnIndex {
             guard visible.contains(id) else { return }
             visible.remove(id)
         }
-    }
-
-    /// Write the reading position, rounded so a scroll does not rebuild the
-    /// shell for every tick of it.
-    func reportReading(fraction: Double) {
-        let quantised = (min(1, max(0, fraction)) * 24).rounded() / 24
-        guard abs(quantised - readingFraction) > 0.0001 else { return }
-        readingFraction = quantised
     }
 
     /// Mark a turn built, with the same session fence as ``setVisible``.

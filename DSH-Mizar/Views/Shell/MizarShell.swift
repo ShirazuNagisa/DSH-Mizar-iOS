@@ -65,96 +65,88 @@ struct MizarShell: View {
                 width: geometry.size.width + insets.leading + insets.trailing,
                 height: geometry.size.height + insets.top + insets.bottom,
             )
-            // The window as pages (see `FoldLayout`). A spread is the cover
-            // display's width twice with the hinge's valley between them, so
-            // unfolding adds a page rather than reflowing the one being read:
-            // the same fact that makes "no black bars" and "the fold means
-            // something" the same design instead of two.
+            // The window as pages (see `FoldLayout`). Folded, it is one page and
+            // behaves like the iPhone it is; unfolded, it is the iPad's columns
+            // with a different fraction. Nothing new is invented for the fold:
+            // the multi-pane behaviour already existed three lines down.
             let fold = FoldLayout(
                 size: size,
                 widthClass: sizeClass,
                 idiom: UIDevice.current.userInterfaceIdiom,
             )
-            let compact = fold.shape != .columns
-            let leading = sidebarWidth(in: size, compact: compact)
-            let trailing = indexWidth(in: size, compact: compact)
-            // The second page: out only when there is a conversation for it to
-            // keep company, and only while the operator has not folded it away.
-            let secondPage = fold.isSpread
-                && shell.spreadPlaneOpen
-                && model.selectedSessionId != nil
+            // A spread is a regular width: the conversation gets the iPad's
+            // toolbar, its row spacing and -- the thing this redesign is about
+            // -- its quick navigation rail while the index column is away.
+            let compact = fold.shape == .phone
+            let leading = fold.isSpread
+                ? fold.sidebarWidth
+                : sidebarWidth(in: size, compact: compact)
+            let trailing = fold.isSpread
+                ? fold.sidebarWidth
+                : indexWidth(in: size, compact: compact)
             // The card is the whole screen, under the status bar and the home
             // indicator. The reader itself stays inside the safe area so it can
             // say how big the screen is; each layer's hosting controller takes
             // its own safe area, and the keyboard's, from the window.
             ZStack(alignment: .top) {
-                // One surface under both pages. The valley is this showing
-                // through, not a bar drawn where the hinge is -- a book's
-                // gutter is the absence of a page, not a line on one.
                 Theme.paneBackground
                     .ignoresSafeArea()
                 DrawerContainer(
                     shell: shell,
                     compact: compact,
                     leadingWidth: leading,
-                    // A spread has no drawer on the right: the plane lives on
-                    // the second page, pinned, and the spine is what opens it.
-                    trailingWidth: fold.isSpread ? 0 : trailing,
+                    trailingWidth: trailing,
                     pinnedVisible: shell.pinnedVisible,
                     indexColumnShown: indexColumnShown,
                     roots: roots ?? makeRoots(),
                     layers: layers,
                 )
-                .frame(width: fold.leftPage.width, height: size.height)
-                .frame(maxWidth: .infinity, alignment: fold.isSpread ? .leading : .center)
+                .frame(width: size.width, height: size.height)
                 .ignoresSafeArea()
                 .onChange(of: leading, initial: true) { _, width in shell.leadingWidth = width }
                 .onChange(of: trailing, initial: true) { _, width in shell.trailingWidth = width }
                 .onChange(of: size.width, initial: true) { _, width in shell.containerWidth = width }
-                .onChange(of: compact, initial: true) { _, compact in layers.compact = compact }
+                // One place decides every layout fact about the window, on
+                // the frame it becomes true: which shape it is, what the layers
+                // believe about their own width, and -- for a spread -- which
+                // column is out.
                 .onChange(of: fold.shape, initial: true) { _, shape in
-                    shell.fold = shape
+                    layers.compact = shape == .phone
                     layers.spread = shape == .spread
-                    // The plane only exists where it can be shown. A left-over
-                    // "open" would put the second page out the moment the
-                    // phone unfolds again, without anyone asking for it.
-                    if shape != .spread { shell.spreadPlaneOpen = false }
+                    shell.trailingAvailable = model.selectedSessionId != nil && shape == .phone
+                    guard shape == .spread else { return }
+                    // Unfolding opens on the workspaces: the operator has just
+                    // made room, and the left column is the one that says where
+                    // they are. The index column starts away, so its rail is the
+                    // way to it.
+                    //
+                    // A launch that is already unfolded lands here too -- the
+                    // default is the default, however the spread was reached --
+                    // and `-mizarOpenTurnIndex` still overrides it: a state that
+                    // can only be reached by a tap cannot otherwise be
+                    // photographed.
+                    #if DEBUG
+                    let indexAskedFor = ProcessInfo.processInfo.arguments.contains("-mizarOpenTurnIndex")
+                    #else
+                    let indexAskedFor = false
+                    #endif
+                    shell.pinnedVisible = !indexAskedFor
+                    shell.indexPinnedVisible = indexAskedFor
                 }
-                .onChange(of: fold.isSpread, initial: true) { _, spread in
-                    // Unfolding over an open conversation is the gesture this
-                    // whole adaptation exists for: the second page comes out
-                    // already carrying the turns, rather than making the
-                    // operator ask for the thing they just made room for.
-                    shell.trailingAvailable = model.selectedSessionId != nil && !spread
-                    if spread, model.selectedSessionId != nil { shell.spreadPlaneOpen = true }
-                }
-                if secondPage {
-                    SpreadPage(content: roots?.spreadPlane ?? AnyView(EmptyView()))
-                        .frame(width: fold.rightPage.width, height: size.height)
+                // The quick rail, on a spread, belongs to the pane's edge --
+                // and the pane's edge is the shell's to know. The conversation
+                // draws its own rail on a regular width, but that one is gated
+                // on the hosting controller's trait; this is the one the
+                // operator will actually see when the index column is away,
+                // and the one the injected geometry can photograph.
+                if fold.isSpread, !shell.indexPinnedVisible, model.selectedSessionId != nil {
+                    TurnRail()
+                        .padding(.vertical, 90)
+                        // Above the composer, which floats at the pane's foot.
+                        .padding(.bottom, 170)
+                        .padding(.trailing, 6)
                         .frame(maxWidth: .infinity, alignment: .trailing)
-                        .ignoresSafeArea()
-                    // In from the spine and back into it: the motion names the
-                    // hinge, so the page reads as the other half of the book
-                    // rather than a sheet that happens to sit on the right.
-                    .transition(
-                        .asymmetric(
-                            insertion: .move(edge: .leading).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity),
-                        ),
-                    )
-                }
-                if fold.isSpread {
-                    SpreadSpine(
-                        available: model.selectedSessionId != nil,
-                        open: secondPage,
-                        progress: readingProgress,
-                        toggle: { shell.toggleTrailing(compact: true) },
-                    )
-                    // The valley's own width, the full height: no content may
-                    // be under it, so the whole strip is a safe tap target.
-                    .frame(width: FoldLayout.gutter, height: size.height)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .ignoresSafeArea()
+                        .transition(.opacity)
                 }
 
                 // The banner is above the card, the sidebar and the composer:
@@ -185,7 +177,6 @@ struct MizarShell: View {
             // The page arrives and leaves on the same spring the columns use,
             // and the window's own change of shape eases too, so unfolding
             // settles instead of snapping.
-            .animation(Motion.pick(.mizarSmooth), value: secondPage)
             .animation(Motion.pick(.mizarSmooth), value: fold.isSpread)
                 // No second launch animation. The root's `LaunchingView`
                 // already covers the wait; once the phase is an answer the
@@ -213,11 +204,16 @@ struct MizarShell: View {
         .onAppear {
             guard !placed else { return }
             placed = true
-            // A launch opens on the app's own page, not on the folder list.
-            // The sidebar is one tap away; opening it for somebody who has not
-            // asked for it hides the page the app is about. Placed without
-            // animating; the first frame is a state, not a change.
-            shell.pinnedVisible = false
+            // A phone launches on the app's own page, not on the folder list:
+            // the sidebar is one tap away, and opening it for somebody who has
+            // not asked for it hides the page the app is about.
+            //
+            // A spread is the other case. Unfolding a Duo is the operator asking
+            // for a second pane; opening on it empty would waste the half of the
+            // screen the fold just bought, so the workspaces are already there.
+            // Placed without animating; the first frame is a state, not a change.
+            let spreadLaunch = isSpreadWindow
+            shell.pinnedVisible = spreadLaunch
             shell.place(open: false)
             shell.trailingAvailable = model.selectedSessionId != nil
             #if DEBUG
@@ -232,6 +228,9 @@ struct MizarShell: View {
                     shell.trailingAvailable = true
                     if sizeClass == .regular {
                         shell.indexPinnedVisible = true
+                        // The two columns trade places on a spread; a
+                        // screenshot of this state must show the same.
+                        if spreadLaunch { shell.pinnedVisible = false }
                     } else {
                         shell.openTrailing()
                     }
@@ -300,13 +299,7 @@ struct MizarShell: View {
         }
         return ShellLayerRoots(
             sidebar: root([.top, .leading, .bottom]) { _ in SidebarView() },
-            // The container's plane is the drawer on a phone and the column on
-            // an iPad; on a spread it is the second page instead, and two live
-            // copies of the plane would be two lists of the same turns.
-            plane: root([.top, .trailing, .bottom]) { _ in ContainerPlane() },
-            spreadPlane: root([.top, .trailing, .bottom]) { _ in
-                SessionSidePlane(onPick: {})
-            },
+            plane: root([.top, .trailing, .bottom]) { _ in SessionSidePlane(onPick: {}) },
             card: root(.all) { compact in ShellPane(compact: compact) },
         )
     }
@@ -321,20 +314,22 @@ struct MizarShell: View {
         Task { await preview.refreshCacheUsage() }
     }
 
+    /// Whether this window is the unfolded spread, decided from the traits the
+    /// shell can see without a layout pass.
+    ///
+    /// A phone idiom at a regular width *is* the Duo unfolded: no other iPhone
+    /// gets there, every iPad is excluded by its idiom, and a landscape iPhone
+    /// is regular too but never in this app's code paths for columns. The
+    /// precise size check lives in `FoldLayout`; this is the same answer for
+    /// the one place that runs before geometry exists.
+    private var isSpreadWindow: Bool {
+        sizeClass == .regular && UIDevice.current.userInterfaceIdiom == .phone
+    }
+
     /// Whether the iPad's index column is out: only beside a conversation.
     private var indexColumnShown: Bool {
         shell.indexPinnedVisible && model.selectedSessionId != nil
     }
-
-    /// How far through the conversation the operator has read, from the turns on
-    /// screen: 0 at the first turn, 1 at the last.
-    ///
-    /// Turn-granular on purpose. The precise answer is a scroll offset, and a
-    /// spine that tracked every pixel would be a scroll bar wearing a metaphor;
-    /// a book's thickness moves when you turn a page. The view eases between the
-    /// values, so the seam still never flickers -- it just knows about turns,
-    /// which is the unit this app already reads in.
-    private var readingProgress: Double { turnIndex.readingFraction }
 
     private func sidebarWidth(in size: CGSize, compact: Bool) -> CGFloat {
         compact ? min(330, size.width * 0.84) : min(340, max(280, size.width * 0.3))
@@ -350,8 +345,9 @@ struct MizarShell: View {
 @Observable
 final class ShellLayerContext {
     var compact = true
-    /// Whether the window is a spread. The pages' own content reads it to know
-    /// that a column is a page, not a drawer that happens to be pinned open.
+    /// Whether the window is a spread. Only the size class decision reads it:
+    /// a spread's column is a regular-width pane even when the *display* the
+    /// app happens to be running on reports a compact one.
     var spread = false
     var scenePhase: ScenePhase = .active
     /// The screen's safe area, from the untransformed container, on a phone;
@@ -363,9 +359,6 @@ final class ShellLayerContext {
 struct ShellLayerRoots {
     let sidebar: AnyView
     let plane: AnyView
-    /// The plane as the *second page* of a spread. A root of its own rather
-    /// than the same view again: a spread must mount one plane, not two.
-    let spreadPlane: AnyView
     let card: AnyView
 }
 
@@ -404,6 +397,7 @@ private struct ShellLayer<Content: View>: View {
             }
         }
         .safeAreaPadding(padding)
+            .environment(\.spreadWindow, context.spread)
             .environment(model)
             .environment(shell)
             .environment(context)
@@ -461,16 +455,6 @@ private struct ShellPane: View {
                 if !compact, model.selectedSessionId != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         TurnIndexToggle()
-                    }
-                }
-                // A spread's second page is opened from the toolbar as well as
-                // from the spine: the spine is the physical way, this is the
-                // discoverable one. The spine keeps working when the toolbar is
-                // scrolled out of the way, and the toolbar works when the
-                // operator has not yet noticed that the gutter is a handle.
-                if layers.spread, model.selectedSessionId != nil {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        SpreadPageToggle()
                     }
                 }
             }

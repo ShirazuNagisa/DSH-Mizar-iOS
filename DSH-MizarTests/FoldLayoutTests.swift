@@ -28,41 +28,31 @@ struct FoldLayoutTests {
         FoldLayout(size: size, widthClass: width, idiom: idiom)
     }
 
-    @Test("The unfolded Duo is a spread, and each page is a phone's width")
+    @Test("The unfolded Duo is a spread, and its sidebar is a third of it")
     func unfoldedDuoIsASpread() {
         let fold = layout(Self.duoInner)
         #expect(fold.shape == .spread)
-        #expect(fold.pages.count == 2)
-        // 951 - 28 valley, halved.
-        #expect(fold.pageWidth == (951 - FoldLayout.gutter) / 2)
-        #expect(fold.leftPage.width == fold.rightPage.width)
-        #expect(fold.leftPage.width == 461.5)
-        #expect(fold.spineX == 475.5)
-        // The valley is between them, and the two pages plus it are the window.
-        #expect(fold.valley?.width == FoldLayout.gutter)
-        #expect(fold.leftPage.maxX + (fold.valley?.width ?? 0) + fold.rightPage.width == 951)
-        // The whole point: a page is never wider than the cover display, so
-        // unfolding does not reflow the conversation.
-        #expect(fold.readingWidth <= FoldLayout.measure)
-        #expect(fold.readingWidth == 461.5)
+        // 951 / 3.
+        #expect(fold.sidebarWidth == 317)
+        // The conversation keeps the other two thirds.
+        #expect(fold.conversationWidth == 634)
+        #expect(fold.conversationWidth == fold.sidebarWidth * 2)
     }
 
-    @Test("The folded Duo is one page, and it is the cover display")
-    func foldedDuoIsOnePage() {
+    @Test("The folded Duo is a phone, and has no spread arithmetic")
+    func foldedDuoIsAPhone() {
         let fold = layout(Self.duoCover)
         #expect(fold.shape == .phone)
-        #expect(fold.pages.count == 1)
-        #expect(fold.pageWidth == 466)
-        #expect(fold.valley == nil)
-        #expect(fold.spineX == nil)
-        #expect(fold.readingWidth == 466)
+        #expect(!fold.isSpread)
+        // The sidebar width is the shell's business on a phone; the spread
+        // arithmetic is what this type owns, and it is a third either way.
+        #expect(abs(fold.sidebarWidth - 466.0 / 3.0) < 0.0001)
     }
 
-    @Test("A landscape iPhone stays one wide page rather than becoming a book")
+    @Test("A landscape iPhone stays one page rather than becoming a spread")
     func landscapePhoneIsNotASpread() {
         // iPhone 16 Pro, landscape: 874 x 402, ratio 2.17.
-        let fold = layout(CGSize(width: 874, height: 402))
-        #expect(fold.shape == .phone)
+        #expect(layout(CGSize(width: 874, height: 402)).shape == .phone)
         // A portrait phone is compact width and also one page.
         #expect(layout(CGSize(width: 402, height: 874), width: .compact).shape == .phone)
     }
@@ -88,17 +78,19 @@ struct FoldLayoutTests {
         #expect(layout(.zero).shape == .phone)
     }
 
-    @Test("Both halves of a spread meet the reading measure the cover sets")
-    func spreadKeepsTheMeasure() {
-        // Whatever the spread's width, a page never exceeds the measure the
-        // folded phone reads at, and never falls below the narrowest column
-        // the iPad's own layout already accepts (460). The upper bound is where
-        // the proportion rule stops calling it a book: 669 x 1.7 is 1137.
+    @Test("Two sidebars and two thirds can never all fit, which is the trade")
+    func theFractionsMakeTheColumnsExclusive() {
+        // This is the arithmetic the shell relies on to make opening one
+        // sidebar close the other: a third plus a third plus two thirds is
+        // more than the window, at every spread size.
         for width in stride(from: CGFloat(900), through: 1130, by: 50) {
             let fold = layout(CGSize(width: width, height: 669))
             #expect(fold.shape == .spread)
-            #expect(fold.readingWidth <= FoldLayout.measure)
+            let bothSidebarsAndTheConversation =
+                fold.sidebarWidth * 2 + fold.conversationWidth
+            #expect(bothSidebarsAndTheConversation > fold.canvas.width)
+            // And one sidebar plus the conversation is exactly the window.
+            #expect(fold.sidebarWidth + fold.conversationWidth == fold.canvas.width)
         }
-        #expect(layout(Self.duoInner).readingWidth >= 460)
     }
 }
