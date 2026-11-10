@@ -44,15 +44,17 @@ struct DSHMizarApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environment(model)
-                .onOpenURL { url in
-                    // The same payload the QR carries, arriving as a link. One
-                    // parse path for both means a scanned code and a tapped
-                    // link cannot behave differently.
-                    guard let target = PairingURI.parse(url.absoluteString) else { return }
-                    Task { await model.pair(with: target, deviceName: AppModel.deviceName) }
-                }
+            DebugFoldPreview {
+                RootView()
+                    .environment(model)
+                    .onOpenURL { url in
+                        // The same payload the QR carries, arriving as a link. One
+                        // parse path for both means a scanned code and a tapped
+                        // link cannot behave differently.
+                        guard let target = PairingURI.parse(url.absoluteString) else { return }
+                        Task { await model.pair(with: target, deviceName: AppModel.deviceName) }
+                    }
+            }
         }
     }
 }

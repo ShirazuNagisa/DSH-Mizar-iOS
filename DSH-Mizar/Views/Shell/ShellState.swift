@@ -79,6 +79,20 @@ final class ShellState {
     var indexPinnedVisible = false
     /// Whether there is a turn index to open: there is none on the home screen.
     var trailingAvailable = false
+    /// Which shape the window is -- one page, a spread, or the iPad's columns.
+    ///
+    /// Set by the shell every layout pass. The toggles consult it because they
+    /// are called from screens that cannot see the window's geometry: the
+    /// conversation's title button, for one, lives three hosting controllers
+    /// below the shell and knows only its own size class.
+    var fold: FoldLayout.Shape = .phone
+    /// On a spread, whether the second page has the plane out.
+    ///
+    /// Not `indexPinnedVisible`: on the iPad that flag also asks the sidebar to
+    /// step aside when the two columns would squeeze the conversation, and a
+    /// spread's pages cannot squeeze anything -- the conversation has its page
+    /// whether the plane is out or not.
+    var spreadPlaneOpen = false
     /// How wide each drawer is, so a drag is measured in drawers.
     var leadingWidth: CGFloat = 320
     var trailingWidth: CGFloat = 300
@@ -115,6 +129,12 @@ final class ShellState {
 
     func open() { settle(to: 1) }
     func openTrailing() {
+        // On a spread the second page is the plane's home: opening it is not a
+        // drawer coming out, it is a page arriving beside the one being read.
+        if fold == .spread {
+            withMizarAnimation(.mizarSmooth) { spreadPlaneOpen = true }
+            return
+        }
         guard trailingAvailable else { return }
         settle(to: -1)
     }
@@ -135,6 +155,12 @@ final class ShellState {
     }
 
     func toggleTrailing(compact: Bool) {
+        if fold == .spread {
+            // Whatever the caller thought: a spread has no drawer on the right,
+            // it has a page. One answer for every button that asks.
+            withMizarAnimation(.mizarSmooth) { spreadPlaneOpen.toggle() }
+            return
+        }
         if compact {
             if trailingOpen { close() } else { openTrailing() }
         } else {
