@@ -609,6 +609,18 @@ struct SessionDetailView: View {
                         .padding(.top, 14)
                 }
 
+                // The running clock is the page's last line, not a row inside
+                // the turn it measures: the operator may have sent another
+                // prompt since, and the status must not scroll up above it.
+                // The live stream already ends with the same clock while it
+                // owns the running turn, so this only fills the gap when the
+                // screen is reading the turn from history.
+                if let runningTurn, !streamOwnsRunningTail {
+                    TurnSummary(turn: runningTurn)
+                        .padding(.top, 14)
+                        .accessibilityIdentifier("conversation.runningTail")
+                }
+
                 // Room for the floating composer and the dock, as content
                 // rather than as a margin: a margin is ignored when the
                 // conversation is shorter than the screen, and the newest
@@ -1735,6 +1747,16 @@ struct SessionDetailView: View {
         // A new turn is a new piece of paper: the typewriter that already ran
         // must not decide that this turn's answer was typed too.
         .id(streamTurnId ?? "pending")
+    }
+
+    /// The newest turn the history still calls running.
+    private var runningTurn: ConversationTurn? {
+        shownTurns.last(where: { $0.isRunning })
+    }
+
+    /// Whether the live stream already ends with that turn's clock.
+    private var streamOwnsRunningTail: Bool {
+        showsStream && streamTurnId == runningTurn?.id
     }
 
     /// Whether the stream has anything to draw, including the moment between

@@ -403,7 +403,11 @@ private struct TurnSection: View {
         // notice are still history the stream never carried. Hiding the whole
         // body made those rows appear only when the screen was reopened.
         let visible = suppressBody ? items.filter { !isAssistantMessage($0) } : items
-        let showsSummary = !suppressBody && !isNoticeOnly
+        // A running turn's clock is not history: it belongs at the end of the
+        // page, under whatever the operator has sent since. Drawing it in the
+        // turn's own row put "DeepSeeking for 84 min" above the next prompt
+        // whenever a later message existed. The tail draws it instead.
+        let showsSummary = !suppressBody && !isNoticeOnly && !turn.isRunning
         let summaryIndex = visible.firstIndex(where: isStep) ?? visible.count
         // The turn's process: the agent's own messages before the last one.
         // The last one is the summary the turn is read by, and it stays.
@@ -526,7 +530,7 @@ private struct TurnSection: View {
 }
 
 /// "DeepSeeking for 2 min 14 s", "Completed in 2 min 14 s", or why it did not.
-private struct TurnSummary: View {
+struct TurnSummary: View {
     let turn: ConversationTurn
     /// Whether the row offers the paid detail, so a chevron shows that there is
     /// more behind it. Off for free accounts and for turns with no detail.
