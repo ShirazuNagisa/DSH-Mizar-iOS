@@ -33,8 +33,13 @@ enum SnapshotFixtures {
         return bundle
     }
 
-    /// The accent the mark and the composer use in the app's asset catalogue.
-    static var brandCyan: Color { Color(red: 0.235, green: 0.796, blue: 0.957) }
+    /// The app's light accent, for a fixture that has to draw it.
+    ///
+    /// The asset catalogue's `AccentColor` is invisible to the snapshot bundle
+    /// (its `Bundle.main` has no app assets), so a view that needs the real
+    /// light accent takes this literal. Keep it equal to the asset's light
+    /// entry, `#0A78AE`.
+    static var brandAccent: Color { Color(red: 0.039, green: 0.471, blue: 0.682) }
 
     /// The icon's own navy, from `Theme`.
     static var navy: Color { Color(red: 19 / 255, green: 31 / 255, blue: 61 / 255) }

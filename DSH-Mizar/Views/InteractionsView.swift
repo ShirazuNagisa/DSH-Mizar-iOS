@@ -366,8 +366,8 @@ struct ApprovalCard: View {
                     buttonLabel("Allow once", busy: answering == .allowedOnce)
                         // The prominent style fills with the accent; the label
                         // has to be the ink that goes on the accent, which is
-                        // near-black in both appearances now that the light
-                        // accent is bright cyan. Reject keeps its tint's colour.
+                        // white on the light appearance's blue and near-black on
+                        // the dark one's white. Reject keeps its tint's colour.
                         .foregroundStyle(Theme.onAccent)
                 }
                 .buttonStyle(.glassProminent)

@@ -261,8 +261,8 @@ private struct PageSwitcher: UIViewRepresentable {
             String(localized: "Preview", table: SidePlaneTable.name),
         ])
         // The chosen segment's ground is the accent, and its ink is whatever
-        // the theme says sits on the accent -- near-black in both appearances,
-        // because the light accent is bright cyan and the dark one is white.
+        // the theme says sits on the accent -- white on the light appearance's
+        // blue and near-black on the dark one's white.
         // The other two segments read as the system's secondary label.
         control.selectedSegmentTintColor = UIColor(Color.accentColor)
         control.setTitleTextAttributes([.foregroundColor: UIColor(Theme.onAccent)], for: .selected)
