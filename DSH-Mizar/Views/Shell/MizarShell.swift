@@ -376,6 +376,8 @@ struct ShellLayerRoots {
 /// the shell, the turn index and whether the drawers are moving are handed
 /// down here. The scene phase too, which a hosting controller that is not
 /// the scene's own does not otherwise follow.
+private let spreadEdgeInset: CGFloat = 18
+
 private struct ShellLayer<Content: View>: View {
     let model: AppModel
     let shell: ShellState
@@ -416,13 +418,29 @@ private struct ShellLayer<Content: View>: View {
             .environment(\.scenePhase, context.scenePhase)
     }
 
+    /// How far a spread's outer column keeps its content off the display edge.
+    ///
+    /// The inner display's corner radius is 55 points, and the outermost column
+    /// sits right on it: a phone gets a margin there from its safe area, an
+    /// unfolded display reports none, so the workspace's title and its footer
+    /// capsules ended up inside the curve. These are the margins the picture
+    /// asks for -- one inset shared by the column's top, bottom and outer edge,
+    /// so the header, the rows and the footer all sit on the same line.
+
     private var padding: EdgeInsets {
-        guard let insets = context.screenInsets else { return EdgeInsets() }
+        let insets = context.screenInsets ?? EdgeInsets()
+        // Only the *outer* columns: the card is interior when a column is out
+        // (and its own gutter handles the other side), and padding it would
+        // draw a band of the container's surface around the conversation.
+        let outer = context.spread && edges.contains(.leading) != edges.contains(.trailing)
+        func margin(_ value: CGFloat) -> CGFloat {
+            outer ? max(value, spreadEdgeInset) : value
+        }
         return EdgeInsets(
-            top: edges.contains(.top) ? insets.top : 0,
-            leading: edges.contains(.leading) ? insets.leading : 0,
-            bottom: edges.contains(.bottom) ? insets.bottom : 0,
-            trailing: edges.contains(.trailing) ? insets.trailing : 0,
+            top: edges.contains(.top) ? margin(insets.top) : 0,
+            leading: edges.contains(.leading) ? margin(insets.leading) : 0,
+            bottom: edges.contains(.bottom) ? margin(insets.bottom) : 0,
+            trailing: edges.contains(.trailing) ? margin(insets.trailing) : 0,
         )
     }
 }
