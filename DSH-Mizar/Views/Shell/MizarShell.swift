@@ -147,6 +147,7 @@ struct MizarShell: View {
                     SpreadSpine(
                         available: model.selectedSessionId != nil,
                         open: secondPage,
+                        progress: readingProgress,
                         toggle: { shell.toggleTrailing(compact: true) },
                     )
                     // The valley's own width, the full height: no content may
@@ -324,6 +325,16 @@ struct MizarShell: View {
     private var indexColumnShown: Bool {
         shell.indexPinnedVisible && model.selectedSessionId != nil
     }
+
+    /// How far through the conversation the operator has read, from the turns on
+    /// screen: 0 at the first turn, 1 at the last.
+    ///
+    /// Turn-granular on purpose. The precise answer is a scroll offset, and a
+    /// spine that tracked every pixel would be a scroll bar wearing a metaphor;
+    /// a book's thickness moves when you turn a page. The view eases between the
+    /// values, so the seam still never flickers -- it just knows about turns,
+    /// which is the unit this app already reads in.
+    private var readingProgress: Double { turnIndex.readingFraction }
 
     private func sidebarWidth(in size: CGSize, compact: Bool) -> CGFloat {
         compact ? min(330, size.width * 0.84) : min(340, max(280, size.width * 0.3))

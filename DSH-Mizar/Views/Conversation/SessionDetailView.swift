@@ -766,6 +766,16 @@ struct SessionDetailView: View {
             // Keep the latest value for the re-aim loops, but outside SwiftUI's
             // observation: a scroll tick must not rebuild the screen.
             placementGeometry.value = geometry
+            // The spine on a fold's second page wants the same fact at a
+            // coarser resolution. `reportReading` quantises, so this is at most
+            // a couple of dozen writes for a whole scroll rather than one a
+            // frame.
+            turnIndex.reportReading(fraction: ReadingProgress.fraction(
+                contentHeight: geometry.contentHeight,
+                viewportHeight: geometry.viewportHeight,
+                visibleMinY: geometry.visibleMinY,
+                topInset: geometry.topInset,
+            ))
             // A late success is still valid after the bounded re-aim budget.
             // Accept it without starting another scroll or network read.
             finishInitialPlacement()
