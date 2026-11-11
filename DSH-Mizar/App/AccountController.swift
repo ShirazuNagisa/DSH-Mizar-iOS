@@ -129,8 +129,14 @@ final class AccountController {
     ///     relay. `nil` builds one against ``resolvedBaseURL``.
     init(store: any AccountStoring = KeychainAccountStore(), client: AccountClient? = nil) {
         self.store = store
-        self.installId = store.installId
-        self.client = client ?? AccountClient(baseURL: Self.resolvedBaseURL)
+        // Read the install id once: it is the device id the account roster and
+        // the relay's `x-mizar-client-id` both use, and the account API must
+        // carry the same one. Without it `/connect` mints every phone of the
+        // account into one "phone" token slot, and two iOS devices take turns
+        // revoking each other.
+        let installId = store.installId
+        self.installId = installId
+        self.client = client ?? AccountClient(baseURL: Self.resolvedBaseURL, clientId: installId)
         #if DEBUG
         // UI tests relaunch the same installed app, and the Keychain survives a
         // reinstall-free test run. Clear it synchronously, before any screen can
