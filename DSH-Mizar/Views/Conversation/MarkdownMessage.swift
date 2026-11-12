@@ -58,8 +58,38 @@ struct MarkdownMessage: View {
             // The whole message, not the rendering of it -- and, for a reveal,
             // not only the part that has been typed. An answer must be readable
             // by VoiceOver, and findable by a test, while it is still arriving.
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(source)
+            //
+            // A message with a picture is the exception: collapsing it would
+            // swallow the picture's own element, and a picture is something the
+            // reader can open. Its blocks speak for themselves.
+            .modifier(MessageAccessibility(source: source, hasImages: blocks.hasPictures))
+    }
+}
+
+extension Array where Element == MarkdownBlock {
+    /// Whether any block is a picture. The one question the drawing and the
+    /// accessibility of a message both ask.
+    var hasPictures: Bool {
+        contains { block in
+            if case .image = block { return true }
+            return false
+        }
+    }
+}
+
+/// How a finished message presents itself to VoiceOver and to tests.
+private struct MessageAccessibility: ViewModifier {
+    let source: String
+    let hasImages: Bool
+
+    func body(content: Content) -> some View {
+        if hasImages {
+            content.accessibilityElement(children: .contain)
+        } else {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(source)
+        }
     }
 }
 
@@ -168,6 +198,13 @@ struct MarkdownBlocksView: View {
                 .fill(Color.primary.opacity(0.12))
                 .frame(height: 0.5)
                 .padding(.vertical, 2)
+
+        case .image(let alt, let path):
+            // The path is the message's, the bytes are the computer's: the row
+            // loads its own and owns its own failure, so a picture that cannot
+            // be had never takes the answer with it.
+            ConversationImageView(target: ConversationImageTarget(path: path, alt: alt))
+                .padding(.vertical, Theme.Space.xxs)
         }
     }
 

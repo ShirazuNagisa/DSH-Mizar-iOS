@@ -496,6 +496,9 @@ private struct TurnSection: View {
                 compact: sizeClass != .regular,
             )
         }
+        // A picture in prose names a path relative to *this* turn's workspace;
+        // the row that loads it needs to know which session that is.
+        .environment(\.conversationSessionId, sessionId)
         .animation(.mizarSmooth, value: turn.steps.count)
         // Arrived at from the index: a soft light behind the turn, once.
         .background {

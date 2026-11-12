@@ -964,3 +964,15 @@
 "Copy link" = "Copy link";
 "Link copied" = "Link copied";
 "macOS DMG on Releases; Windows installers are built by the repository's packaging script." = "macOS DMG on Releases; Windows installers are built by the repository's packaging script.";
+
+// Pictures inside answers.
+"The picture is no longer on the computer." = "The picture is no longer on the computer.";
+"The picture is outside the session's working folder." = "The picture is outside the session's working folder.";
+"The picture is larger than 12 MB, so it is not shown here." = "The picture is larger than 12 MB, so it is not shown here.";
+"This computer's Mizar plugin is too old to send pictures." = "This computer's Mizar plugin is too old to send pictures.";
+"Showing pictures needs a local network link or the paid plan." = "Showing pictures needs a local network link or the paid plan.";
+"This file is not a picture this app can show." = "This file is not a picture this app can show.";
+"This picture could not be read." = "This picture could not be read.";
+"Opens it full screen" = "Opens it full screen";
+"Loading the picture…" = "Loading the picture…";
+"Tapping tries again" = "Tapping tries again";

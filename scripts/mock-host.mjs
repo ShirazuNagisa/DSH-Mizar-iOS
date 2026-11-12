@@ -14,6 +14,7 @@
  * Usage: node scripts/mock-host.mjs [port]
  */
 import { createServer } from 'node:http'
+import { readFileSync } from 'node:fs'
 import ws from '../node_modules/ws/index.js'
 
 const { WebSocketServer } = ws
@@ -352,6 +353,22 @@ let messagesPeak = 0
 let holdingMessages = false
 let heldMessages = []
 
+/**
+ * Whether the fixture's answer carries a picture, and whether a second one is
+ * broken on purpose.
+ *
+ * A message never carries pixels: the model writes `![caption](path)` and the app
+ * reads the file over `file.stat` / `file.read`. That path is the thing being
+ * tested, so the fixture writes a real one and serves real bytes -- a 64x64 PNG
+ * by default, or whatever `MIZAR_MOCK_INLINE_IMAGE` names when a screenshot run
+ * wants a proper picture in the row.
+ */
+let inlineImages = false
+/** Whether the same answer also names a picture that is not there. */
+let inlineImageFails = false
+/** Whether the conversation is cut down to the turn that carries the picture. */
+let inlineOnly = false
+
 /** Every `session.model.set` the mock was asked to make, in order. */
 const modelSets = []
 /** How many times each method was refused, by method. */
@@ -508,6 +525,42 @@ const DELIVERED_FILES = {
   },
 }
 
+/**
+ * The picture inside the answer, when `/images?on=1` is set.
+ *
+ * The path is relative to the session's workspace on purpose: resolving it is the
+ * app's job and the computer's, and an absolute one would pass even if the app
+ * could not.
+ */
+const INLINE_IMAGE_PATH = 'shots/inline-survey.png'
+
+/** The bytes the inline picture is served with. */
+function inlineImageBody() {
+  const named = process.env['MIZAR_MOCK_INLINE_IMAGE']
+  if (named !== undefined && named !== '') {
+    try {
+      // eslint-disable-next-line n/no-sync -- read once, at the first request.
+      return readFileSync(named)
+    } catch (error) {
+      console.error(`mock-host: cannot read MIZAR_MOCK_INLINE_IMAGE ${named}: ${error.message}`)
+    }
+  }
+  return DELIVERED_FILES.image.body
+}
+
+let inlineImageBytes = null
+
+/** The inline file's entry, shaped like a delivered one. */
+function inlineImageFile() {
+  if (inlineImageBytes === null) inlineImageBytes = inlineImageBody()
+  return {
+    path: INLINE_IMAGE_PATH,
+    description: 'A picture in the answer',
+    body: inlineImageBytes,
+    mediaType: 'image/png',
+  }
+}
+
 /** Which delivered file the fixture's first turn declares. */
 let deliveredVariant = 'md'
 
@@ -518,7 +571,9 @@ function deliveredFile() {
 
 /** The fixture file a path names, whichever variant is selected. */
 function deliveredFileByPath(path) {
-  return Object.values(DELIVERED_FILES).find((file) => file.path === path) ?? null
+  const match = Object.values(DELIVERED_FILES).find((file) => file.path === path)
+  if (match !== undefined) return match
+  return path === INLINE_IMAGE_PATH ? inlineImageFile() : null
 }
 
 /** The extra sessions the list reports while `/forked?on=1` is set. */
@@ -679,6 +734,19 @@ const MAIN_PROMPT = SECOND_IDENTITY
 const MAIN_ANSWER = SECOND_IDENTITY
   ? 'The second computer answered this one.'
   : 'The parser is now two files.'
+
+/**
+ * The answer the first turn reads, with a picture in it when the fixture says so.
+ *
+ * A picture is a line of Markdown and nothing else -- the bytes live on the
+ * "computer" -- so this is the whole of what the app is given.
+ */
+function answerText() {
+  if (!inlineImages) return MAIN_ANSWER
+  const picture = `![A survey of the island](<${INLINE_IMAGE_PATH}>)`
+  const broken = '![A picture that is not there](shots/missing-inline.png)'
+  return [MAIN_ANSWER, '', picture, ...(inlineImageFails ? ['', broken] : [])].join('\n')
+}
 
 /**
  * Prompts the client has sent, in order.
@@ -910,11 +978,16 @@ function answer(frame) {
       // session's workspace.
       const statFile = deliveredFileByPath(frame.payload?.path)
       if (statFile === null) {
+        // Flat `code`/`message`, which is the envelope the client decodes: a
+        // nested `error` object is a frame it cannot read, and a frame it cannot
+        // read leaves the request pending for ever -- the failure state was
+        // unreachable from a test until this was fixed.
         return {
           v: 1,
           type: 'error',
+          code: 'FILE_UNKNOWN',
+          message: 'no such file in this fixture',
           id,
-          error: { code: 'FILE_UNKNOWN', message: 'no such file in this fixture' },
         }
       }
       return {
@@ -936,8 +1009,9 @@ function answer(frame) {
         return {
           v: 1,
           type: 'error',
+          code: 'FILE_UNKNOWN',
+          message: 'no such file in this fixture',
           id,
-          error: { code: 'FILE_UNKNOWN', message: 'no such file in this fixture' },
         }
       }
       const body = readFile.body
@@ -1739,7 +1813,7 @@ function answer(frame) {
               step: 3,
               message: {
                 role: 'assistant',
-                content: [{ type: 'text', text: MAIN_ANSWER }],
+                content: [{ type: 'text', text: answerText() }],
               },
             }),
             record('turn/end', {
@@ -1863,7 +1937,7 @@ function answer(frame) {
                   : []),
               ]
             }),
-          ],
+          ].filter((entry) => !inlineOnly || entry?.event?.data?.turn === 1),
         },
       }
     case 'ping':
@@ -2479,9 +2553,14 @@ const server = createServer((request, response) => {
     // `sessionRunning`.
     sessionRunning = !(request.url ?? '').includes('running=0')
     // `/reset` restores the whole fixture, the delivered file included: a test
-    // that leaves it on would put a card under every later test's answer.
+    // that leaves it on would put a card under every later test's answer. The
+    // inline picture goes with it, for the same reason.
     deliverablesPresent = false
+    inlineImages = false
+    inlineImageFails = false
     deliveredVariant = 'md'
+    inlineImages = false
+    inlineImageFails = false
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ ok: true, sessionRunning }))
     return
@@ -2547,6 +2626,18 @@ const server = createServer((request, response) => {
     statsVariant = /variant=(\w+)/.exec(request.url ?? '')?.[1] ?? 'full'
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ ok: true, statsVariant }))
+    return
+  }
+  if (request.url?.startsWith('/images')) {
+    // Put a picture in the fixture's answer, or take it out. Off is the default
+    // so every suite that predates inline pictures keeps measuring the screen it
+    // measured; `fail=1` adds one whose path is not there, for the row that has
+    // to say so instead of drawing nothing.
+    inlineImages = request.url.includes('on=1')
+    inlineImageFails = request.url.includes('fail=1')
+    inlineOnly = request.url.includes('only=1')
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ ok: true, inlineImages, inlineImageFails }))
     return
   }
   if (request.url?.startsWith('/deliverables')) {

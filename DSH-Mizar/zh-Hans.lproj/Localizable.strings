@@ -965,3 +965,15 @@
 "Copy link" = "复制链接";
 "Link copied" = "链接已复制";
 "macOS DMG on Releases; Windows installers are built by the repository's packaging script." = "macOS 的 DMG 在 Releases 里；Windows 安装包由仓库里的打包脚本生成。";
+
+// Pictures inside answers.
+"The picture is no longer on the computer." = "这张图已经不在电脑上了。";
+"The picture is outside the session's working folder." = "这张图在会话的工作目录之外。";
+"The picture is larger than 12 MB, so it is not shown here." = "这张图超过 12 MB，这里就不显示了。";
+"This computer's Mizar plugin is too old to send pictures." = "这台电脑上的 Mizar 插件太旧，还传不了图片。";
+"Showing pictures needs a local network link or the paid plan." = "看图需要局域网直连或付费方案。";
+"This file is not a picture this app can show." = "这个文件不是本应用能显示的图片。";
+"This picture could not be read." = "这张图读不出来。";
+"Opens it full screen" = "点开看全图";
+"Loading the picture…" = "正在取图…";
+"Tapping tries again" = "点一下重试";

@@ -172,4 +172,84 @@ struct MarkdownBlocksTests {
             ],
         )
     }
+
+    @Test("a line that is only an image becomes a picture block")
+    func standaloneImage() {
+        #expect(
+            MarkdownBlocks.parse("![实时活动浅/深与灵动岛](docs/evidence/shot.png)")
+                == [.image(alt: "实时活动浅/深与灵动岛", path: "docs/evidence/shot.png")],
+        )
+    }
+
+    @Test("an image with no alt text keeps a nil caption")
+    func imageWithoutAlt() {
+        #expect(
+            MarkdownBlocks.parse("![](docs/a.png)")
+                == [.image(alt: nil, path: "docs/a.png")],
+        )
+    }
+
+    @Test("a run of images is a run of picture blocks")
+    func imageRun() {
+        let blocks = MarkdownBlocks.parse("![一](a.png)\n![二](b.jpg)")
+        #expect(
+            blocks == [
+                .image(alt: "一", path: "a.png"),
+                .image(alt: "二", path: "b.jpg"),
+            ],
+        )
+    }
+
+    @Test("two images on one line are two blocks")
+    func twoImagesOnOneLine() {
+        #expect(
+            MarkdownBlocks.parse("![](a.png) ![](b.png)")
+                == [.image(alt: nil, path: "a.png"), .image(alt: nil, path: "b.png")],
+        )
+    }
+
+    @Test("an angle-bracketed destination keeps its spaces, a title is dropped")
+    func imageDestinationForms() {
+        #expect(
+            MarkdownBlocks.parse("![图](<docs/some shot.png>)")
+                == [.image(alt: "图", path: "docs/some shot.png")],
+        )
+        #expect(
+            MarkdownBlocks.parse("![图](docs/shot.png \"the shot\")")
+                == [.image(alt: "图", path: "docs/shot.png")],
+        )
+    }
+
+    @Test("an image inside a sentence stays prose")
+    func inlineImageStaysText() {
+        let source = "见下图 ![图](a.png) 里面的按钮"
+        #expect(MarkdownBlocks.parse(source) == [.paragraph(source)])
+    }
+
+    @Test("an image followed by a caption line is prose")
+    func imageWithCaptionLine() {
+        let source = "![图](a.png)\n这是说明"
+        #expect(MarkdownBlocks.parse(source) == [.paragraph(source)])
+    }
+
+    @Test("a picture between paragraphs splits them")
+    func imageBetweenParagraphs() {
+        let blocks = MarkdownBlocks.parse("前文\n\n![图](a.png)\n\n后文")
+        #expect(
+            blocks == [
+                .paragraph("前文"),
+                .image(alt: "图", path: "a.png"),
+                .paragraph("后文"),
+            ],
+        )
+    }
+
+    @Test("the image reference parser reads one reference and its length")
+    func imageReferenceAt() {
+        let parsed = MarkdownBlocks.imageReference(at: "![奖杯](a/b.png) 尾巴")
+        #expect(parsed?.reference == MarkdownBlocks.ImageReference(alt: "奖杯", destination: "a/b.png"))
+        #expect(parsed?.length == 14)
+        #expect(MarkdownBlocks.imageReference(at: "不是图片") == nil)
+        #expect(MarkdownBlocks.imageReference(at: "![空]()") == nil)
+    }
 }

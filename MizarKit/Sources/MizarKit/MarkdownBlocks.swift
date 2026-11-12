@@ -91,6 +91,17 @@ public enum MarkdownBlock: Sendable, Equatable {
     case table(MarkdownTable)
     /// A horizontal rule.
     case divider
+
+    /// An image the model wrote on its own line.
+    ///
+    /// Only a paragraph made *entirely* of image references becomes these: the
+    /// desktop draws a standalone Markdown image as a preview and leaves an
+    /// image inside a sentence as text, because a picture cannot sit in the
+    /// middle of a line without either shrinking to nothing or breaking the
+    /// paragraph. `alt` is what the model meant it to say -- the caption a
+    /// reader gets when the picture cannot be loaded; `path` is whatever it
+    /// wrote, still relative to the session's workspace more often than not.
+    case image(alt: String?, path: String)
 }
 
 /// The block parser behind the conversation screen.
@@ -202,7 +213,15 @@ public enum MarkdownBlocks {
                 paragraph.append(trimmed)
                 index += 1
             }
-            blocks.append(.paragraph(paragraph.joined(separator: "\n")))
+            // A paragraph that is nothing but image references is pictures, not
+            // prose: the desktop draws a standalone image as a preview, and a
+            // run of them stacks. Anything else keeps its text, so `见下图
+            // ![](x.png)` is still the sentence the model wrote.
+            if let pictures = images(in: paragraph) {
+                blocks.append(contentsOf: pictures)
+            } else {
+                blocks.append(.paragraph(paragraph.joined(separator: "\n")))
+            }
         }
 
         return blocks
@@ -355,5 +374,122 @@ private extension MarkdownBlocks {
         return body
             .split(separator: "|", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+}
+
+// MARK: - Images
+
+public extension MarkdownBlocks {
+    /// One image reference, as written.
+    ///
+    /// `![alt](dest)` and `![alt](<dest with spaces> "title")` are the shapes a
+    /// model actually writes; the title is dropped because nothing draws it --
+    /// the alt text is what a reader is told when the picture cannot be had.
+    struct ImageReference: Sendable, Equatable {
+        /// The text between the brackets, with surrounding spaces trimmed and
+        /// an empty one normalised to `nil`.
+        public let alt: String?
+        /// What follows in the parentheses: a path or a URL, brackets stripped.
+        public let destination: String
+
+        public init(alt: String?, destination: String) {
+            self.alt = alt
+            self.destination = destination
+        }
+    }
+
+    /// Read one image reference off the front of a string.
+    ///
+    /// - Parameter source: a line, trimmed.
+    /// - Returns: the reference and the number of characters it took, or `nil`
+    ///   when the line does not start with one.
+    static func imageReference(at source: String) -> (reference: ImageReference, length: Int)? {
+        let characters = Array(source)
+        guard characters.count > 4, characters[0] == "!", characters[1] == "[" else { return nil }
+
+        // The alt text: balanced brackets, so an alt that contains one survives.
+        var depth = 0
+        var close = -1
+        var cursor = 1
+        while cursor < characters.count {
+            let character = characters[cursor]
+            if character == "\\" {
+                cursor += 2
+                continue
+            }
+            if character == "[" { depth += 1 }
+            if character == "]" {
+                depth -= 1
+                if depth == 0 { close = cursor; break }
+            }
+            cursor += 1
+        }
+        guard close > 0, close + 1 < characters.count, characters[close + 1] == "(" else { return nil }
+
+        var alt = String(characters[2..<close]).trimmingCharacters(in: .whitespaces)
+        alt = alt.replacingOccurrences(of: "\\]", with: "]")
+            .replacingOccurrences(of: "\\[", with: "[")
+
+        // The destination: balanced parentheses, with an optional `"title"`.
+        var parens = 0
+        var end = -1
+        cursor = close + 1
+        while cursor < characters.count {
+            let character = characters[cursor]
+            if character == "\\" {
+                cursor += 2
+                continue
+            }
+            if character == "(" { parens += 1 }
+            if character == ")" {
+                parens -= 1
+                if parens == 0 { end = cursor; break }
+            }
+            cursor += 1
+        }
+        guard end > close + 2 else { return nil }
+
+        var inside = String(characters[(close + 2)..<end]).trimmingCharacters(in: .whitespaces)
+        if inside.hasPrefix("<"),
+           let angle = inside.firstIndex(of: ">") {
+            inside = String(inside[inside.index(after: inside.startIndex)..<angle])
+        } else if let space = inside.firstIndex(where: { $0 == " " || $0 == "\t" }),
+                  let quote = inside[space...].firstIndex(where: { $0 == "\"" || $0 == "'" }),
+                  space < quote {
+            // `dest "title"`: keep the destination, drop the title.
+            inside = String(inside[..<space])
+        }
+        inside = inside.trimmingCharacters(in: .whitespaces)
+        guard !inside.isEmpty else { return nil }
+
+        return (ImageReference(alt: alt.isEmpty ? nil : alt, destination: inside), end + 1)
+    }
+
+    /// Every image reference a paragraph is made of, when it is made of nothing
+    /// else.
+    ///
+    /// - Parameter lines: the paragraph's trimmed lines.
+    /// - Returns: one block per reference, or `nil` when the paragraph carries
+    ///   any prose and has to stay text.
+    static func images(in lines: [String]) -> [MarkdownBlock]? {
+        var found: [MarkdownBlock] = []
+        for line in lines {
+            var rest = Substring(line)
+            var placed = false
+            while true {
+                rest = rest.drop(while: { $0 == " " || $0 == "\t" })
+                guard !rest.isEmpty else { break }
+                guard let parsed = imageReference(at: String(rest)) else { break }
+                found.append(.image(alt: parsed.reference.alt, path: parsed.reference.destination))
+                placed = true
+                rest = rest.dropFirst(parsed.length)
+            }
+            // A line with text beside the picture is prose; so is a line with
+            // nothing this parser recognised.
+            if !placed || !rest.trimmingCharacters(in: .whitespaces).isEmpty {
+                return nil
+            }
+        }
+        return found.isEmpty ? nil : found
     }
 }

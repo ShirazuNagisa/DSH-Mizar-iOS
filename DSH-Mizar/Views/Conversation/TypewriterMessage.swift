@@ -185,8 +185,7 @@ struct TypewriterMessage: View {
         if isMarkdown {
             MarkdownBlocksView(blocks: MarkdownReveal.blocks(blocks, visibleCharacters: revealed))
                 .textSelection(.enabled)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(text)
+                .modifier(AnswerAccessibility(text: text, blocks: blocks))
                 .accessibilityIdentifier("conversation.answer.typing")
         } else {
             Text(String(text.prefix(revealed)))
@@ -204,8 +203,7 @@ struct TypewriterMessage: View {
         if isMarkdown {
             MarkdownBlocksView(blocks: blocks)
                 .textSelection(.enabled)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(text)
+                .modifier(AnswerAccessibility(text: text, blocks: blocks))
         } else {
             Text(text)
                 .textSelection(.enabled)
@@ -260,5 +258,27 @@ struct TypewriterMessage: View {
         guard !Task.isCancelled else { return }
         revealed = plan.totalCharacters
         running = false
+    }
+}
+
+/// How an answer presents itself to VoiceOver.
+///
+/// A plain answer is one element read as the text the model wrote -- what a
+/// reader hears is what was said, not the rendering of it, and it stays findable
+/// while it is still being typed. An answer with a picture cannot be one
+/// element: the picture has its own label and its own tap, and collapsing it
+/// into the message's text would make it unopenable.
+private struct AnswerAccessibility: ViewModifier {
+    let text: String
+    let blocks: [MarkdownBlock]
+
+    func body(content: Content) -> some View {
+        if blocks.hasPictures {
+            content.accessibilityElement(children: .contain)
+        } else {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(text)
+        }
     }
 }

@@ -38,6 +38,8 @@ struct MizarShell: View {
     @State private var sidePlane = SidePlaneState()
     /// What the preview page is showing, and the cache behind it.
     @State private var preview = PreviewCenter()
+    /// The pictures inside answers: their bytes, their bitmaps, their failures.
+    @State private var images = ConversationImageStore()
     /// What the three layers read that changes after they are made.
     @State private var layers = ShellLayerContext()
     /// The layers' roots, made once. Setting a hosting controller's root view
@@ -195,6 +197,7 @@ struct MizarShell: View {
         .environment(turnIndex)
         .environment(sidePlane)
         .environment(preview)
+        .environment(\.conversationImages, images)
         // The reader captures the socket, so it is rebuilt whenever the computer
         // changes and on the first frame. A stale closure would answer
         // `SOCKET_CLOSED` for every preview until the app restarted.
@@ -299,6 +302,7 @@ struct MizarShell: View {
                 turnIndex: turnIndex,
                 sidePlane: sidePlane,
                 preview: preview,
+                images: images,
                 context: layers,
                 edges: edges,
                 content: content,
@@ -311,11 +315,17 @@ struct MizarShell: View {
         )
     }
 
-    /// Point the preview at this computer's socket.
+    /// Point the preview and the inline pictures at this computer's socket.
     private func attachPreviewReader() {
         guard let host = model.host else { return }
         let model = model
         preview.attach(hostId: host.hostId) { method, payload in
+            try await model.previewCall(method, payload)
+        }
+        // One reader, one permission: a picture in an answer is read off the
+        // same computer through the same gate as the preview page, and it fails
+        // with the same sentence when the gate is shut.
+        images.attach(hostId: host.hostId) { method, payload in
             try await model.previewCall(method, payload)
         }
         Task { await preview.refreshCacheUsage() }
@@ -384,6 +394,7 @@ private struct ShellLayer<Content: View>: View {
     let turnIndex: TurnIndex
     let sidePlane: SidePlaneState
     let preview: PreviewCenter
+    let images: ConversationImageStore
     let context: ShellLayerContext
     /// Which of the screen's insets this layer is given: the card all of them,
     /// each drawer all but the edge the card covers.
@@ -413,6 +424,7 @@ private struct ShellLayer<Content: View>: View {
             .environment(turnIndex)
             .environment(sidePlane)
             .environment(preview)
+            .environment(\.conversationImages, images)
             .environment(\.drawersStill, !shell.isDragging && !shell.isSettling)
             .environment(\.drawerGate, shell.gate)
             .environment(\.scenePhase, context.scenePhase)

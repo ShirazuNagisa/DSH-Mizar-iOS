@@ -157,6 +157,9 @@ struct ConversationStreamView: View {
         // one, because two different texts in the same place for half a
         // second read as two pages at once.
         .animation(Motion.pick(.mizarSnappy), value: live)
+        // Pictures in a live answer are read from this turn's workspace, the
+        // same way the settled row reads its own.
+        .environment(\.conversationSessionId, sessionId)
     }
 
     /// While the turn works: everything it has produced, the divider, and the

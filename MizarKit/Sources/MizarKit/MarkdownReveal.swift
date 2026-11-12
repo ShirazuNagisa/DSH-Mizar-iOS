@@ -99,6 +99,13 @@ public enum MarkdownReveal {
                 // Zero characters, so it costs nothing and is shown once the
                 // reveal has reached it.
                 if remaining > 0 { revealed.append(.divider) }
+
+            case .image:
+                // Also zero characters: a picture is not typed onto the page,
+                // and the desktop resolves one only after its message settles.
+                // Waiting on the same budget as a divider is what keeps it from
+                // appearing ahead of the sentence that introduces it.
+                if remaining > 0 { revealed.append(block) }
             }
         }
         return revealed
@@ -121,7 +128,7 @@ public enum MarkdownReveal {
                 items.map(\.text)
             case .table(let table):
                 table.header + table.rows.flatMap { $0 }
-            case .divider:
+            case .divider, .image:
                 []
             }
         }
