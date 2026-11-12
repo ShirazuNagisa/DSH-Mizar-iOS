@@ -108,7 +108,9 @@ public enum ConversationImagePolicy {
     ///
     /// - Parameter bytes: the file's size, as `file.stat` reported it.
     public static func accepts(bytes: Int) -> Bool {
-        bytes > 0 && bytes <= maximumBytes
+        // Zero bytes is not "too large": an empty file is a file this app cannot
+        // draw, and saying it was past a ceiling would be the wrong sentence.
+        bytes >= 0 && bytes <= maximumBytes
     }
 
     /// Whether the pixel budget allows the bitmap.

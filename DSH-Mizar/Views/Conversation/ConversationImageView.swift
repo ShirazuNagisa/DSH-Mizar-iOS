@@ -65,13 +65,21 @@ struct ConversationImageView: View {
 
     var body: some View {
         Group {
-            switch phase {
+            if store == nil {
+                // No store on this screen: a Markdown *document* preview draws
+                // the same blocks and has no conversation to read files through.
+                // A card saying "the computer is not connected" would be a lie
+                // about a page that never asked it anything.
+                captionOnly
+            } else {
+                switch phase {
             case .loaded(let picture):
                 pictureButton(picture)
             case .failed(let failure):
                 failureCard(failure)
-            case .idle, .loading:
-                placeholder
+                case .idle, .loading:
+                    placeholder
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -88,6 +96,16 @@ struct ConversationImageView: View {
     /// About one and a third screens of an ordinary phone; anything past it is
     /// centred and smaller, and one tap puts it full screen.
     private static let maximumHeight: CGFloat = 460
+
+    /// The caption, when there is no picture and no way to get one.
+    @ViewBuilder private var captionOnly: some View {
+        if let alt = target.alt {
+            Text(alt)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 
     // MARK: States
 

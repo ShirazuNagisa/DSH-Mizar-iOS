@@ -32,7 +32,7 @@ struct ConversationImageTests {
 
     @Test("the size ceiling has a bottom as well as a top")
     func sizeGate() {
-        #expect(!ConversationImagePolicy.accepts(bytes: 0))
+        #expect(ConversationImagePolicy.accepts(bytes: 0))
         #expect(ConversationImagePolicy.accepts(bytes: 1))
         #expect(ConversationImagePolicy.accepts(bytes: ConversationImagePolicy.maximumBytes))
         #expect(!ConversationImagePolicy.accepts(bytes: ConversationImagePolicy.maximumBytes + 1))
