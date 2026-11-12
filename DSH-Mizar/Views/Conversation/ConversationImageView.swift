@@ -36,6 +36,14 @@ private struct ConversationSessionKey: EnvironmentKey {
     static let defaultValue: String = ""
 }
 
+/// Whether pictures in answers may be read on this connection.
+///
+/// Default `true`: a screen that never injects it -- a preview, a snapshot --
+/// asks for nothing over a socket, and the block falls back to its caption.
+private struct ConversationImagesEntitledKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
 extension EnvironmentValues {
     /// The picture store, when this screen has one.
     var conversationImages: ConversationImageStore? {
@@ -48,6 +56,12 @@ extension EnvironmentValues {
         get { self[ConversationSessionKey.self] }
         set { self[ConversationSessionKey.self] = newValue }
     }
+
+    /// Whether this connection may read the pictures a message points at.
+    var conversationImagesEntitled: Bool {
+        get { self[ConversationImagesEntitledKey.self] }
+        set { self[ConversationImagesEntitledKey.self] = newValue }
+    }
 }
 
 // MARK: - The row
@@ -59,13 +73,20 @@ struct ConversationImageView: View {
 
     @Environment(\.conversationImages) private var store
     @Environment(\.conversationSessionId) private var sessionId
+    @Environment(\.conversationImagesEntitled) private var entitled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var phase: ConversationImagePhase = .idle
     @State private var showingLightbox = false
 
     var body: some View {
         Group {
-            if store == nil {
+            if !entitled {
+                // Free account on a relay link: the picture is not drawn and the
+                // read is never made. One line where the picture would have
+                // been, saying what would make it appear -- not a failure card,
+                // because nothing failed.
+                subscriptionLine
+            } else if store == nil {
                 // No store on this screen: a Markdown *document* preview draws
                 // the same blocks and has no conversation to read files through.
                 // A card saying "the computer is not connected" would be a lie
@@ -96,6 +117,21 @@ struct ConversationImageView: View {
     /// About one and a third screens of an ordinary phone; anything past it is
     /// centred and smaller, and one tap puts it full screen.
     private static let maximumHeight: CGFloat = 460
+
+    /// The line drawn where a picture would be, on a link that may not have it.
+    ///
+    /// Blank around it on purpose: the message's own text keeps its rhythm, and
+    /// the operator reads a sentence rather than an error about a connection
+    /// that is working exactly as intended.
+    private var subscriptionLine: some View {
+        Text("Subscribe to the paid plan to view pictures over the network")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 96)
+            .accessibilityIdentifier("conversation.image.subscription")
+    }
 
     /// The caption, when there is no picture and no way to get one.
     @ViewBuilder private var captionOnly: some View {
@@ -202,10 +238,10 @@ struct ConversationImageView: View {
     // MARK: Loading
 
     private func load() async {
-        // No store on this screen means nothing to ask: the caption is the whole
-        // of what it draws, and a failure card would be about a request nobody
-        // made.
-        guard let store else { return }
+        // Nothing to ask here: no store on this screen (the caption is the whole
+        // of what it draws), or a link that is not entitled to the bytes (the
+        // line says so, and a request would only be refused).
+        guard entitled, let store else { return }
         if case .loaded = phase { return }
         if case .idle = phase { phase = .loading }
         let result = await store.picture(sessionId: sessionId, target: target)

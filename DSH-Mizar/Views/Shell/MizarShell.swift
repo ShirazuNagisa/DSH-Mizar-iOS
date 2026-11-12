@@ -198,6 +198,7 @@ struct MizarShell: View {
         .environment(sidePlane)
         .environment(preview)
         .environment(\.conversationImages, images)
+        .environment(\.conversationImagesEntitled, model.inlinePicturesUnlocked)
         // The reader captures the socket, so it is rebuilt whenever the computer
         // changes and on the first frame. A stale closure would answer
         // `SOCKET_CLOSED` for every preview until the app restarted.
@@ -425,6 +426,7 @@ private struct ShellLayer<Content: View>: View {
             .environment(sidePlane)
             .environment(preview)
             .environment(\.conversationImages, images)
+            .environment(\.conversationImagesEntitled, model.inlinePicturesUnlocked)
             .environment(\.drawersStill, !shell.isDragging && !shell.isSettling)
             .environment(\.drawerGate, shell.gate)
             .environment(\.scenePhase, context.scenePhase)

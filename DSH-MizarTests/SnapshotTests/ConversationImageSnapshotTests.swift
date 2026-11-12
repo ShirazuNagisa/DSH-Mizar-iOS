@@ -54,6 +54,22 @@ struct ConversationImageSnapshotTests {
         #expect(snapshot.pixelHeight == 1688)
     }
 
+    @Test("a link that may not have the bytes draws one line, and no room for a picture")
+    func subscriptionLine() throws {
+        let view = ConversationImageView(target: ConversationImageTarget(
+            path: "shots/survey.png",
+            alt: "A survey of the island",
+        ))
+        .environment(\.conversationImagesEntitled, false)
+        .padding(16)
+        let snapshot = try SnapshotHarness.assertSnapshot(
+            of: view,
+            named: "ConversationImageSubscription",
+            size: CGSize(width: 390, height: 150),
+        )
+        #expect(snapshot.pixelWidth == 780)
+    }
+
     @Test("a message with a picture and no bridge draws its caption, not a failure")
     func captionWithoutABridge() throws {
         let message = MarkdownMessage("![A survey of the island](shots/survey.png)")

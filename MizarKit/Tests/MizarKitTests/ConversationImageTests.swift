@@ -170,6 +170,21 @@ struct ConversationImageTests {
         }
     }
 
+    @Test("pictures are free on a local network, paid over the relay, and never on the direct path")
+    func accessRule() {
+        // Paid, whatever the link: theirs.
+        #expect(InlinePictureAccess.isEntitled(isPaid: true, isLocalNetwork: false, isDirectPath: false, isLocalAgent: false))
+        // Free on the operator's own wires: the relay is not carrying anything.
+        #expect(InlinePictureAccess.isEntitled(isPaid: false, isLocalNetwork: true, isDirectPath: false, isLocalAgent: false))
+        // Free over the relay: the bytes are the project's bandwidth, so no.
+        #expect(!InlinePictureAccess.isEntitled(isPaid: false, isLocalNetwork: false, isDirectPath: false, isLocalAgent: false))
+        // The direct path carries no files for anybody, paid included.
+        #expect(!InlinePictureAccess.isEntitled(isPaid: true, isLocalNetwork: false, isDirectPath: true, isLocalAgent: false))
+        #expect(!InlinePictureAccess.isEntitled(isPaid: false, isLocalNetwork: true, isDirectPath: true, isLocalAgent: false))
+        // The on-device agent has no file RPC to serve a picture from.
+        #expect(!InlinePictureAccess.isEntitled(isPaid: true, isLocalNetwork: true, isDirectPath: false, isLocalAgent: true))
+    }
+
     @Test("a network URL is refused without touching the bridge")
     func remoteIsNotFetched() async throws {
         let recorded = Recorder()

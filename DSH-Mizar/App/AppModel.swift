@@ -179,6 +179,26 @@ final class AppModel {
             && advancedFeaturesUnlocked
             && activeEndpoint?.isDirectPath != true
     }
+    /// Whether a picture *inside an answer* may be read off the computer.
+    ///
+    /// The same capability as the preview page, because it is the same bytes:
+    /// the picture is a file on the computer, and on a relay link those bytes
+    /// are the project's bandwidth. So the rule is the preview's rule -- paid,
+    /// or a local-network link -- and a picture free of charge on a relay would
+    /// be a hole in the plan rather than a feature.
+    ///
+    /// Kept as its own name even though it is an alias today: what the view asks
+    /// is "may I draw this?", and that question is allowed to grow a case the
+    /// preview page never has.
+    var inlinePicturesUnlocked: Bool {
+        InlinePictureAccess.isEntitled(
+            isPaid: account.isPaid,
+            isLocalNetwork: isLocalCommunication,
+            isDirectPath: activeEndpoint?.isDirectPath == true,
+            isLocalAgent: isLocalAgentMode,
+        )
+    }
+
     /// Which agent this phone opened on the computer, when it chose one.
     ///
     /// A computer runs three agents and they share nothing, so "the Mac's

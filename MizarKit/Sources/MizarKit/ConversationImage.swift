@@ -66,6 +66,37 @@ public struct ConversationImageTarget: Sendable, Equatable, Hashable {
     }
 }
 
+/// Who may see a picture that lives on the computer.
+///
+/// The picture is a file, and the file's bytes cross the link the phone is on.
+/// On a local-network link they are the operator's own wires and cost the
+/// project nothing, so every account may have them; over the relay they are the
+/// project's bandwidth, which is what the paid plan pays for. The rule is
+/// therefore about the *link* as much as the account, and it is written down
+/// here, as arithmetic, because a paid feature that nobody can point at is a
+/// feature that drifts.
+public enum InlinePictureAccess {
+    /// Whether a picture may be read and drawn.
+    ///
+    /// - Parameters:
+    ///   - isPaid: whether the signed-in account is on the paid plan.
+    ///   - isLocalNetwork: whether the link is the operator's own network.
+    ///   - isDirectPath: whether the link is the experimental P2P direct path,
+    ///     which carries no files at all, for anybody.
+    ///   - isLocalAgent: whether this session runs on the phone's own kernel,
+    ///     which has no `file.stat`/`file.read` to serve a picture from.
+    /// - Returns: whether the picture may be had.
+    public static func isEntitled(
+        isPaid: Bool,
+        isLocalNetwork: Bool,
+        isDirectPath: Bool,
+        isLocalAgent: Bool,
+    ) -> Bool {
+        guard !isLocalAgent, !isDirectPath else { return false }
+        return isPaid || isLocalNetwork
+    }
+}
+
 /// What an inline picture will agree to load.
 ///
 /// Numbers, not opinions: the same ceiling on both sides of the wire would be a

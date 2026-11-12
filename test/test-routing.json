@@ -1,7 +1,7 @@
 {
   "version": 1,
   "uiTestDir": "DSH-MizarUITests",
-  "expectedUiTests": 131,
+  "expectedUiTests": 132,
   "impactMap": "test/impact-map.json",
   "unitCommand": "scripts/swift.sh test",
   "forceFull": [

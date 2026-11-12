@@ -121,12 +121,52 @@ final class ConversationImagesUITests: XCTestCase {
         capture(app, named: "conversation-picture-failed")
     }
 
+    // MARK: - The plan
+
+    /// A free account on a relay link is asked to subscribe, and is not handed a
+    /// picture it may not have.
+    ///
+    /// The fixture answers on loopback, which the real rule does not call a local
+    /// network: without the `-mizarLocalNetwork` flag this launch is the
+    /// free-account-over-the-relay case, which is the one the sentence is for.
+    func testAFreeAccountIsAskedToSubscribeInsteadOfPictured() {
+        Self.resetMockHost()
+        _ = Self.setInlineImages(on: true)
+        let app = launch(localNetwork: false)
+        openSessionIfNeeded(app)
+
+        let line = app.staticTexts["conversation.image.subscription"]
+        XCTAssertTrue(
+            line.waitForExistence(timeout: Self.patience),
+            "the answer draws no subscription line where the picture would be. \(app.debugDescription)",
+        )
+        XCTAssertTrue(
+            line.label.contains("Subscribe to the paid plan"),
+            "the line does not say what would make the picture appear: \(line.label)",
+        )
+        XCTAssertFalse(
+            app.buttons["conversation.image"].exists,
+            "a free account on a relay was handed the picture anyway",
+        )
+        XCTAssertEqual(
+            Self.methodCount("file.read"),
+            0,
+            "the picture's bytes were read for an account that may not have them",
+        )
+        capture(app, named: "conversation-picture-subscription")
+    }
+
     // MARK: - Plumbing
 
     /// Launch against this class's mock host.
-    private func launch() -> XCUIApplication {
+    ///
+    /// - Parameter localNetwork: whether this launch claims a local-network link.
+    ///   The fixture answers on loopback, which the real rule excludes, so this
+    ///   flag is the only way to be either side of the plan's line.
+    /// - Returns: the running application.
+    private func launch(localNetwork: Bool = true) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [
+        var arguments: [String] = [
             "-mizarPairURI", Self.mockPairingURI,
             "-mizarFreshStart",
             "-mizarSkipPermissionPrompts", "-mizarSkipLoginGate", "-mizarSkipOnboarding",
@@ -135,16 +175,19 @@ final class ConversationImagesUITests: XCTestCase {
             // default to off without this.
             "-mizarDirectConnection", "-mizarLocalNetworkRoute", "-mizarSkipSplash",
             "-mizarAccountFreshStart",
-            // The fixture is on 127.0.0.1, which the real rule excludes from
-            // "local". Reading a picture off the computer is the same feature as
-            // the preview page, and the same Debug-only flag is how a test
-            // reaches the LAN-unlocked UI.
-            "-mizarLocalNetwork",
+        ]
+        // The fixture is on 127.0.0.1, which the real rule excludes from
+        // "local". Reading a picture off the computer is the same feature as the
+        // preview page, and the same Debug-only flag is how a test reaches the
+        // LAN-unlocked UI -- or, without it, the free-account-over-the-relay one.
+        if localNetwork { arguments.append("-mizarLocalNetwork") }
+        arguments += [
             "-mizarAccountURL", Self.mockBaseURL,
             "-mizarSelectSession", "first",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]
+        app.launchArguments = arguments
         app.launch()
         dismissNamingIfPresented(app)
         return app
@@ -232,12 +275,14 @@ final class ConversationImagesUITests: XCTestCase {
     private static func methodCount(_ method: String) -> Int {
         guard let data = get("/loads"),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let methods = json["methods"] as? [String: Any],
-              let count = methods[method] as? Int
+              let methods = json["methods"] as? [String: Any]
         else {
             return -1
         }
-        return count
+        // A method that was never called has no counter at all, which is zero
+        // calls -- not an unreadable answer. -1 stays for "the mock did not
+        // answer", which is a different fact and must not read as "no calls".
+        return methods[method] as? Int ?? 0
     }
 
     /// One request to the mock host, synchronously.
