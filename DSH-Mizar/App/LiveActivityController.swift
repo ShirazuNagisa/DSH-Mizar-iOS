@@ -246,6 +246,13 @@ final class LiveActivityController {
         activityWatch = Task { [weak self] in
             for await _ in Activity<DSHMizarActivityAttributes>.activityUpdates {
                 guard !Task.isCancelled, let self else { return }
+                // A start push can create a second card while no code of this
+                // app is running; the wake is the first moment anybody can take
+                // it down. Do that before registering a token, so the address
+                // the host keeps is the survivor's.
+                if let line = await ActivityCalls.endSurplus(why: "a start push posted a second card") {
+                    self.log.add(.live, line)
+                }
                 _ = self.capturePushToken()
             }
         }
@@ -767,8 +774,12 @@ private enum ActivityCalls {
     static func endSurplus(why: String) async -> String? {
         let all = presentable
         guard all.count > 1 else { return nil }
+        // Keep the card that carries an approval: it is the one the operator
+        // can answer, and it is the host's card. Ending that one instead would
+        // take a pending approval off the Lock Screen until the next push.
+        let survivor = all.first { !$0.content.state.approvals.isEmpty } ?? all[0]
         var ended = 0
-        for activity in all.dropFirst() {
+        for activity in all where activity.id != survivor.id {
             await activity.end(
                 ActivityContent(state: LiveActivityState(), staleDate: nil),
                 dismissalPolicy: .immediate,
