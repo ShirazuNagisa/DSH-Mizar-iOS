@@ -103,13 +103,19 @@ final class ConversationImagesUITests: XCTestCase {
         let app = launch()
         openSessionIfNeeded(app)
 
-        let failed = app.otherElements["conversation.image.failed"].firstMatch
+        // `descendants(matching: .any)`: a card that carries a tap action is
+        // classified by the iOS accessibility layer as a button in some builds
+        // and as an "other" element in others, and which one it is, is not the
+        // fact under test.
+        let failed = app.descendants(matching: .any)["conversation.image.failed"].firstMatch
         XCTAssertTrue(
             failed.waitForExistence(timeout: Self.patience),
             "the missing picture drew nothing at all. \(app.debugDescription)",
         )
         XCTAssertTrue(
-            failed.label.contains("no longer on the computer") || failed.label.contains("not there"),
+            failed.label.contains("no longer on the computer")
+                || failed.label.contains("not there")
+                || failed.label.contains("这张图"),
             "the missing picture does not say why: \(failed.label)",
         )
         capture(app, named: "conversation-picture-failed")
