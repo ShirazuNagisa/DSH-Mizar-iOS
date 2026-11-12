@@ -73,10 +73,10 @@ struct ConversationImageView: View {
                 captionOnly
             } else {
                 switch phase {
-            case .loaded(let picture):
-                pictureButton(picture)
-            case .failed(let failure):
-                failureCard(failure)
+                case .loaded(let picture):
+                    pictureButton(picture)
+                case .failed(let failure):
+                    failureCard(failure)
                 case .idle, .loading:
                     placeholder
                 }
@@ -202,10 +202,10 @@ struct ConversationImageView: View {
     // MARK: Loading
 
     private func load() async {
-        guard let store else {
-            phase = .failed(.offline)
-            return
-        }
+        // No store on this screen means nothing to ask: the caption is the whole
+        // of what it draws, and a failure card would be about a request nobody
+        // made.
+        guard let store else { return }
         if case .loaded = phase { return }
         if case .idle = phase { phase = .loading }
         let result = await store.picture(sessionId: sessionId, target: target)
