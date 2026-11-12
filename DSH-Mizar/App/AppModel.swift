@@ -172,12 +172,16 @@ final class AppModel {
     /// deliberately not riding it yet. The switch in Settings says experimental;
     /// this is one of the places that means something.
     var previewUnlocked: Bool {
-        // The on-device agent has no `file.stat`/`file.read` to serve a preview
-        // from -- the kernel's tool surface reads its own workspace and nothing
-        // else -- so the feature is off there whatever the plan says.
-        !isLocalAgentMode
-            && advancedFeaturesUnlocked
-            && activeEndpoint?.isDirectPath != true
+        // The rule is shared with the pictures inside answers, and written down
+        // once in `MizarKit.InlinePictureAccess`: the on-device agent has no
+        // `file.stat`/`file.read` to serve a file from, the direct path carries
+        // no files for anybody, and otherwise it is paid-or-local.
+        InlinePictureAccess.isEntitled(
+            isPaid: account.isPaid,
+            isLocalNetwork: isLocalCommunication,
+            isDirectPath: activeEndpoint?.isDirectPath == true,
+            isLocalAgent: isLocalAgentMode,
+        )
     }
     /// Whether a picture *inside an answer* may be read off the computer.
     ///
@@ -190,14 +194,7 @@ final class AppModel {
     /// Kept as its own name even though it is an alias today: what the view asks
     /// is "may I draw this?", and that question is allowed to grow a case the
     /// preview page never has.
-    var inlinePicturesUnlocked: Bool {
-        InlinePictureAccess.isEntitled(
-            isPaid: account.isPaid,
-            isLocalNetwork: isLocalCommunication,
-            isDirectPath: activeEndpoint?.isDirectPath == true,
-            isLocalAgent: isLocalAgentMode,
-        )
-    }
+    var inlinePicturesUnlocked: Bool { previewUnlocked }
 
     /// Which agent this phone opened on the computer, when it chose one.
     ///
