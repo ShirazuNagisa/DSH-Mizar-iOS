@@ -125,6 +125,18 @@ public actor FilePreviewCache {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    /// What the cache knows about a file, whether or not the bytes are still there.
+    ///
+    /// For a caller that has no host to ask -- a phone whose computer is gone --
+    /// and needs the name and size the file had when it was read.
+    ///
+    /// - Parameter key: which file.
+    /// - Returns: the entry the bytes were stored with, or `nil` when there is none.
+    public func entry(for key: PreviewCacheKey) -> PreviewCacheEntry? {
+        guard FileManager.default.fileExists(atPath: fileURL(for: key).path) else { return nil }
+        return readEntry(for: key)
+    }
+
     /// Store a file's bytes.
     ///
     /// - Parameters:

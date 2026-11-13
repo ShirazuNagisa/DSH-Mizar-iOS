@@ -978,3 +978,6 @@
 "Loading the picture…" = "正在取图…";
 "Tapping tries again" = "点一下重试";
 "Subscribe to the paid plan to view pictures over the network" = "订阅付费账户以跨网查看图片";
+"Previewed files and pictures" = "预览过的文件与图片";
+"Clear cached files" = "清除缓存文件";
+"Files the model delivered, and pictures shown in answers, are kept on this phone so a second look does not send them again — and so they survive losing the computer. Clearing them frees the space; the next look reads them from the computer." = "模型交付的文件、以及回答里显示过的图片都留在这台手机上：再看一次不必重新传输，电脑断开也还在。清除可以腾出空间，下次再看向电脑重新读取。";

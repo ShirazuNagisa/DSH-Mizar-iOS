@@ -252,6 +252,25 @@ public struct ConversationImageFetcher: Sendable {
         target: ConversationImageTarget,
         progress: (@Sendable (Double) -> Void)? = nil,
     ) async throws -> ConversationImagePayload {
+        let facts = try await self.facts(sessionId: sessionId, target: target)
+        return try await bytes(sessionId: sessionId, target: target, facts: facts, progress: progress)
+    }
+
+    /// Ask the host what the picture is.
+    ///
+    /// Split from the read because a caller that already has the bytes needs the
+    /// facts alone: they are how it decides whether its copy is still current,
+    /// and a stale picture shown under today's name is worse than a slow one.
+    ///
+    /// - Parameters:
+    ///   - sessionId: the session whose workspace the path is resolved in.
+    ///   - target: the picture the message asked for.
+    /// - Returns: the file's facts, once the policy has accepted them.
+    /// - Throws: ``ConversationImageFailure``, or `CancellationError`.
+    public func facts(
+        sessionId: String,
+        target: ConversationImageTarget,
+    ) async throws -> FileFacts {
         guard target.isLocal else { throw ConversationImageFailure.notAnImage }
         let path = target.lookupPath
         let facts: FileFacts
@@ -272,6 +291,25 @@ public struct ConversationImageFetcher: Sendable {
         guard ConversationImagePolicy.accepts(bytes: facts.byteSize) else {
             throw ConversationImageFailure.tooLarge
         }
+        return facts
+    }
+
+    /// Read the bytes over the link.
+    ///
+    /// - Parameters:
+    ///   - sessionId: the session whose workspace the path is resolved in.
+    ///   - target: the picture the message asked for.
+    ///   - facts: what ``facts(sessionId:target:)`` answered.
+    ///   - progress: fraction read, for the placeholder.
+    /// - Returns: the bytes and the host's facts.
+    /// - Throws: ``ConversationImageFailure``, or `CancellationError`.
+    public func bytes(
+        sessionId: String,
+        target: ConversationImageTarget,
+        facts: FileFacts,
+        progress: (@Sendable (Double) -> Void)? = nil,
+    ) async throws -> ConversationImagePayload {
+        let path = target.lookupPath
         let data: Data
         do {
             data = try await reader.read(

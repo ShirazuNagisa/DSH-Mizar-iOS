@@ -78,6 +78,13 @@ final class ConversationImageStore {
     private static let byteBudget = 96 * 1_048_576
 
     private var reader: FileReader?
+    /// The same on-disk cache the preview page uses: a picture the phone has
+    /// already read is the phone's, and stays readable when the computer does
+    /// not.
+    private let diskCache = FilePreviewCache()
+    /// How to reach the computer; `nil` until the shell attaches, which is also
+    /// how a phone with no socket asks only for what it already has.
+    private var loader: ConversationImageLoader?
     private var hostId = ""
     /// Keyed by host, session and path: two computers can have the same path.
     private var cache: [String: Picture] = [:]
@@ -103,7 +110,13 @@ final class ConversationImageStore {
     ///   - call: how to dispatch one bridge method.
     func attach(hostId: String, call: @escaping FileReader.Call) {
         self.hostId = hostId
-        reader = FileReader(call: call)
+        let reader = FileReader(call: call)
+        self.reader = reader
+        loader = ConversationImageLoader(
+            hostId: hostId,
+            fetcher: ConversationImageFetcher(reader: reader),
+            cache: diskCache,
+        )
     }
 
     /// Whether a bridge is attached. A row shown before the shell connects draws
@@ -139,14 +152,14 @@ final class ConversationImageStore {
                 return .failure(.unreadable)
             }
         }
-        guard let reader else {
-            // No reader yet: the shell has not attached, so there is nothing to ask.
+        guard let loader else {
+            // The shell has not attached: this phone has no computer to ask, and
+            // nothing on disk -- `picture` is only reached when the cache missed.
             return .failure(.offline)
         }
-        let fetcher = ConversationImageFetcher(reader: reader)
         let task = Task<Picture, Error> { [weak self] in
-            let payload = try await fetcher.fetch(sessionId: sessionId, target: target)
-            let picture = try await Self.decode(payload, alt: target.alt)
+            let loaded = try await loader.load(sessionId: sessionId, target: target)
+            let picture = try await Self.decode(loaded, alt: target.alt)
             await self?.remember(picture, for: key)
             return picture
         }
@@ -240,7 +253,7 @@ final class ConversationImageStore {
     ///   - alt: the message's caption.
     /// - Returns: the bitmap and its real pixel size.
     private static func decode(
-        _ payload: ConversationImagePayload,
+        _ payload: ConversationImageLoader.Loaded,
         alt: String?,
     ) async throws -> Picture {
         try await Task.detached(priority: .userInitiated) {

@@ -58,7 +58,7 @@ struct FilesSettingsView: View {
                     .monospacedDigit()
                     .accessibilityIdentifier("settings.files.size")
             } label: {
-                SettingsRowLabel("Previewed files", systemImage: "doc.text.magnifyingglass")
+                SettingsRowLabel("Previewed files and pictures", systemImage: "doc.text.magnifyingglass")
             }
 
             Button(role: .destructive) {
@@ -67,7 +67,7 @@ struct FilesSettingsView: View {
                     mizarSuccess = true
                 }
             } label: {
-                Label("Clear file cache", systemImage: "trash")
+                Label("Clear cached files", systemImage: "trash")
             }
             .disabled((preview?.cacheFiles ?? 0) == 0)
             .accessibilityIdentifier("settings.files.clear")
@@ -77,7 +77,7 @@ struct FilesSettingsView: View {
         } footer: {
             Text(
                 String(
-                    localized: "Files the model delivered are kept on this phone so a second look does not send them again. Clearing them frees the space; the next preview reads the file from the computer.",
+                    localized: "Files the model delivered, and pictures shown in answers, are kept on this phone so a second look does not send them again — and so they survive losing the computer. Clearing them frees the space; the next look reads them from the computer.",
                 ),
             )
         }

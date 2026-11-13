@@ -156,6 +156,47 @@ final class ConversationImagesUITests: XCTestCase {
         capture(app, named: "conversation-picture-subscription")
     }
 
+    // MARK: - The phone's own copy
+
+    /// A picture already read stays readable when the computer goes away.
+    ///
+    /// The bytes are kept on the phone, the way the transcript is: a connection
+    /// that drops must not take the pictures in an answer with it. This lets the
+    /// host refuse connections mid-session and then uses the picture -- which is
+    /// the state the operator is in on a train, and the one that used to fail.
+    func testAPictureSurvivesTheComputerGoingAway() {
+        Self.resetMockHost()
+        Self.setOffline(false)
+        defer { Self.setOffline(false) }
+        _ = Self.setInlineImages(on: true)
+        let app = launch()
+        openSessionIfNeeded(app)
+
+        let picture = app.buttons["conversation.image"]
+        XCTAssertTrue(
+            picture.waitForExistence(timeout: Self.patience),
+            "the picture never arrived, so there is nothing to lose. \(app.debugDescription)",
+        )
+
+        // The computer is gone: every connection now fails, the account server
+        // with it.
+        Self.setOffline(true)
+        app.buttons["session.refresh"].tap()
+
+        XCTAssertTrue(
+            picture.waitForExistence(timeout: Self.patience),
+            "the picture went away with the connection. \(app.debugDescription)",
+        )
+        picture.tap()
+        let lightbox = app.images["conversation.image.lightbox"]
+        XCTAssertTrue(
+            lightbox.waitForExistence(timeout: 5),
+            "the picture is on screen but cannot be opened once the host is gone. \(app.debugDescription)",
+        )
+        app.buttons["conversation.image.close"].tap()
+        capture(app, named: "conversation-picture-offline")
+    }
+
     // MARK: - Plumbing
 
     /// Launch against this class's mock host.
@@ -168,13 +209,12 @@ final class ConversationImagesUITests: XCTestCase {
         let app = XCUIApplication()
         var arguments: [String] = [
             "-mizarPairURI", Self.mockPairingURI,
-            "-mizarFreshStart",
+            "-mizarFreshStart", "-mizarAccountFreshStart",
             "-mizarSkipPermissionPrompts", "-mizarSkipLoginGate", "-mizarSkipOnboarding",
             "-mizarCreditsFixture",
             // The fixture answers on a direct address; the transport switches
             // default to off without this.
             "-mizarDirectConnection", "-mizarLocalNetworkRoute", "-mizarSkipSplash",
-            "-mizarAccountFreshStart",
         ]
         // The fixture is on 127.0.0.1, which the real rule excludes from
         // "local". Reading a picture off the computer is the same feature as the
@@ -261,6 +301,11 @@ final class ConversationImagesUITests: XCTestCase {
             return false
         }
         return (json["inlineImages"] as? Bool) == on
+    }
+
+    /// Make the mock host refuse connections, or stop refusing them.
+    private static func setOffline(_ off: Bool) {
+        _ = get("/offline?on=\(off ? 1 : 0)")
     }
 
     /// Put the mock host's conversation back to its fixture.

@@ -30,7 +30,7 @@ enum ConversationImageDecoder {
     ///   fit the budget, ``ConversationImageFailure/unreadable`` when the bytes
     ///   are not an image this device can decode.
     static func decode(
-        _ payload: ConversationImagePayload,
+        _ payload: ConversationImageLoader.Loaded,
         alt: String?,
     ) throws -> ConversationImageStore.Picture {
         guard let source = CGImageSourceCreateWithData(payload.data as CFData, nil),
