@@ -135,6 +135,15 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     /// `AppSettings.shared` at delivery time rather than caching it is what makes
     /// a switch take effect on the next notification instead of the next launch.
     ///
+    /// A question or an approval the phone is **already drawing** is the other
+    /// thing that keeps a banner off the screen, and it is here rather than on
+    /// the computer because only the phone knows it. The host used to leave such
+    /// a device out of the push entirely, on the strength of a `push.presence`
+    /// report that iOS can leave behind when it suspends the app -- so a phone
+    /// that went to the lock screen seconds after reporting itself on screen
+    /// received nothing at all, and the agent sat blocked on a card no screen
+    /// showed. See ``InteractionCoverage``.
+    ///
     /// The two strings are read out of the notification here, before the hop to
     /// the main queue: `UNNotification` and its `userInfo` are not `Sendable`,
     /// and only a `String` and the classified kind need to cross.
@@ -166,19 +175,36 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
             reason: userInfo["reason"] as? String,
         )
         let described = kind?.rawValue ?? (userInfo["kind"] as? String ?? "unknown")
+        // Read off the notification before the hop: `userInfo` is not `Sendable`,
+        // and only a `String` needs to cross.
+        let sessionID = userInfo["sessionId"] as? String
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 let wanted = kind.map(AppSettings.shared.isEnabled) ?? true
+                // The host no longer leaves out a phone that reported itself on
+                // screen -- iOS suspends the process before that report can be
+                // corrected, and the exclusion was swallowing the only wake-up
+                // an approval or a question ever sends. The duplicate is dropped
+                // here instead, where the truth is: if the matching card is
+                // already in front of the operator, this banner would be the
+                // second time they are told about one request.
+                let covered = InteractionCoverage.covers(
+                    kind,
+                    sessionId: sessionID,
+                    pending: AppModel.shared.pending,
+                )
                 ActivityLog.shared.add(
                     .push,
-                    wanted
-                        ? "presented \(described)"
-                        : "suppressed \(described): switched off in settings",
+                    !wanted
+                        ? "suppressed \(described): switched off in settings"
+                        : covered
+                            ? "suppressed \(described): already on screen"
+                            : "presented \(described)",
                 )
                 // One exit, exactly once: the switch decision and the
                 // completion are the same main-queue step, so there is no
                 // branch that can answer twice -- or not at all.
-                completionHandler(wanted ? [.banner, .list, .sound] : [])
+                completionHandler(wanted && !covered ? [.banner, .list, .sound] : [])
             }
         }
     }
