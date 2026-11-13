@@ -1705,9 +1705,17 @@ final class AppModel {
         guard !Self.showsManualPairing,
               !account.desktops.isEmpty else { return }
         let known = Set(account.desktops.map(\.deviceId))
+        // A pairing records the *host's* Mizar id, while `/desktops` lists the
+        // *account* device id. They are different namespaces, and a QR pairing
+        // made against the current host therefore never matches `known` --
+        // reconciling on the id alone deleted the one pairing that had just
+        // worked (and left older records whose tokens the host had rotated).
+        // The display name is what both sides agree on for the same machine;
+        // ids still win when they are present.
+        let knownNames = Set(account.desktops.map { $0.name.lowercased() })
         var kept: [PairedHost] = []
         for host in hosts {
-            if known.contains(host.hostId) {
+            if known.contains(host.hostId) || knownNames.contains(host.hostName.lowercased()) {
                 kept.append(host)
                 continue
             }
@@ -1834,6 +1842,12 @@ final class AppModel {
                 await account.loadDesktops()
             }
             hosts = try await credentials.loadAll().sorted { $0.pairedAt < $1.pairedAt }
+            log.add(
+                .connection,
+                "pairings loaded: \(hosts.count) ["
+                    + hosts.map { "\($0.hostId.prefix(8)):\($0.deviceToken.count)" }.joined(separator: ",")
+                    + "]",
+            )
             await reconcileLegacyHosts()
             // The machine the operator last opened, not the one paired last:
             // with several computers paired, "paired last" is a fact about a past
@@ -3385,6 +3399,13 @@ final class AppModel {
         guard !isLocalAgentMode else { return }
         guard let connection, phase == .ready else { return }
         guard let info = try? await connection.call("host.info", as: HostInfo.self) else { return }
+        // The direct-path line is what a cable-attached test reads when the
+        // punched route is planned and never attempted: "nil" here is the whole
+        // answer, and it is otherwise invisible from the outside.
+        log.add(
+            .connection,
+            "host.info: netEndpointId \(info.netEndpointId.map { String($0.prefix(8)) + "…" } ?? "nil")",
+        )
         // Learned on every ready socket rather than at pairing: the host may
         // have been upgraded, or its engine may have failed to start at pairing
         // time and started since. A pairing that gains an identity gains a route
@@ -6978,6 +6999,7 @@ final class AppModel {
                 "paired with \(paired.hostName) (\(paired.hostId)) over "
                     + Self.routeName(outcome.route.endpoint),
             )
+            log.add(.connection, "pairing saved: token \(paired.deviceToken.count) chars")
             hosts = try await credentials.loadAll().sorted { $0.pairedAt < $1.pairedAt }
             // A pairing is the operator saying "this is my computer, on this
             // network". Both transport switches default to off, and the route
@@ -7238,11 +7260,31 @@ final class AppModel {
         await loadIndex(for: host.hostId)
         // The pairing's order when nothing is preferred; the route that just
         // answered in front of it when something is.
-        let endpoints = ReconnectPlan.routes(
+        log.add(.connection, "connecting with token \(host.deviceToken.count) chars")
+        var endpoints = ReconnectPlan.routes(
             endpoints: host.endpoints,
             active: preferred,
             allowingLocalNetwork: settings.localNetworkFirst,
             allowingDirectPath: settings.directConnection,
+        )
+        #if DEBUG
+        // A cable-attached test can ask for the punched route alone. The launch
+        // race otherwise lets the relay win whenever its handshake is a few
+        // milliseconds faster, which makes "the app connected over P2P"
+        // impossible to observe even when the punch landed.
+        if ProcessInfo.processInfo.arguments.contains("-mizarP2POnly") {
+            endpoints = endpoints.filter { endpoint in
+                if case .p2p = endpoint { return true }
+                return false
+            }
+        }
+        #endif
+        log.add(
+            .connection,
+            "connect: routes \(endpoints.isEmpty ? "none" : endpoints.map(Self.routeName).joined(separator: ","))"
+                + " · switches lan \(settings.localNetworkFirst ? "on" : "off")"
+                + " p2p \(settings.directConnection ? "on" : "off")"
+                + " · key \(host.netEndpointId == nil ? "none" : "present")",
         )
         guard !endpoints.isEmpty else {
             // Two different silences, told apart: a pairing with no address at
@@ -7260,23 +7302,32 @@ final class AppModel {
             throw error
         }
 
-        // The local network goes first, alone, for a moment. Everything that is
-        // not the operator's own network -- the punched route and every relay --
-        // is held back by the same head start, so the order the operator asked
-        // for is the order the dials start in: LAN, then P2P and relay together,
-        // and whichever of the two answers first wins.
+        // LAN first, then the punched route, then the relay. The relay used to
+        // start beside the punch, and on a network where the punch worked it
+        // still lost every race: a relay handshake is a couple of round trips
+        // and a punch is a few hundred milliseconds. A head start gives the
+        // route the operator asked for a chance to win, and costs the fallback
+        // only that head start -- the relay dial is already in flight if the
+        // punch fails.
         //
-        // A pairing with no direct address -- the usual one for a computer that
-        // listens only on loopback -- has nothing to prefer, so its dials all
-        // start at once.
+        // A pairing with no direct address and no punched route has nothing to
+        // prefer, so its relay starts at once.
         let hasDirect = endpoints.contains { if case .direct = $0 { return true } else { return false } }
+        let hasP2P = endpoints.contains { if case .p2p = $0 { return true } else { return false } }
+        let directDelay: Duration = hasDirect ? Self.launchDirectHeadStart : .zero
+        let p2pDelay = directDelay
+        let relayDelay = directDelay + (hasP2P ? Self.launchDirectHeadStart : .zero)
         let dials = endpoints.map { endpoint in
-            (
+            let delay: Duration
+            switch endpoint {
+            case .direct: delay = .zero
+            case .p2p: delay = p2pDelay
+            case .relay: delay = relayDelay
+            }
+            return (
                 endpoint: endpoint,
                 connection: makeConnection(host: host, endpoint: endpoint),
-                delay: hasDirect && !ReconnectPlan.isDirect(endpoint)
-                    ? Self.launchDirectHeadStart
-                    : .zero,
+                delay: delay,
             )
         }
 
@@ -7554,6 +7605,24 @@ final class AppModel {
             relayHeaders = headers
         }
 
+        // The punched route's bytes skip the relay, but its *signaling* channel
+        // goes through the relay's room -- and the relay's paywall applies to
+        // that path exactly as it does to the data socket. Without these
+        // headers the signal upgrade is refused with 401 before the desktop
+        // ever sees a hello, which looks exactly like "the punch does not work".
+        // The device token is not this: the relay knows nothing about it.
+        let signalHeaders: [String: String]
+        switch endpoint {
+        case .p2p(let relayBaseURL, _):
+            var headers = account.identity.headers
+            if AccountClient.isAccountHost(relayBaseURL) {
+                headers.merge(account.identity.sessionHeaders) { _, new in new }
+            }
+            signalHeaders = headers
+        case .direct, .relay:
+            signalHeaders = [:]
+        }
+
         let configuration: MizarConnection.Configuration
         switch endpoint {
         case .direct(let authority):
@@ -7626,7 +7695,7 @@ final class AppModel {
                         let channel = WebSocketSignalingTransport(
                             socket: URLSessionWebSocketTransport(timeout: timeout),
                         )
-                        try await channel.open(url: url)
+                        try await channel.open(url: url, headers: signalHeaders)
                         return channel
                     },
                     // The desktop's signal endpoint says nothing until it

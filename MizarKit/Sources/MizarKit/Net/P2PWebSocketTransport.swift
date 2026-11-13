@@ -124,15 +124,27 @@ public actor P2PWebSocketTransport: WebSocketTransport {
             // attempt that fails -- which the route above handles by falling
             // through to the relay, not by surfacing an error to the operator.
             if openedSignaling == nil, let makeSignaling, signaling == nil {
-                let channel = try? await makeSignaling()
-                // `close()` can land while the channel is opening — the losing
-                // side of a route race is cancelled exactly then — and a channel
-                // assigned after that would never be closed by anybody.
-                if closed {
-                    await channel?.close()
-                    throw MizarNetError.cancelled
+                do {
+                    let channel = try await makeSignaling()
+                    // `close()` can land while the channel is opening — the losing
+                    // side of a route race is cancelled exactly then — and a channel
+                    // assigned after that would never be closed by anybody.
+                    if closed {
+                        await channel.close()
+                        throw MizarNetError.cancelled
+                    }
+                    openedSignaling = channel
+                } catch {
+                    // A signal channel that did not open is the one failure the
+                    // user cannot tell from "the punch did not land". Keep the
+                    // error instead of turning it into a silent nil: the route
+                    // falls back to the relay either way, but the diagnosis log
+                    // now says which half failed.
+                    #if DEBUG
+                    print("p2p: the signal channel did not open — \(error)")
+                    #endif
+                    throw error
                 }
-                openedSignaling = channel
             }
             let connection = MizarNetConnection(
                 engine: makeEngine(),
@@ -143,7 +155,13 @@ public actor P2PWebSocketTransport: WebSocketTransport {
             self.connection = connection
             let stream = try await connection.connect()
             self.stream = stream
+            #if DEBUG
+            print("p2p: punched to \(ticket.endpointId.prefix(8))…")
+            #endif
         } catch let error as MizarNetError {
+            #if DEBUG
+            print("p2p: the punch failed — \(error)")
+            #endif
             // Everything the kernel can throw crosses this boundary as a
             // Mizar error: the diagnosis layer above only speaks that
             // vocabulary, and a raw kernel error would surface to the user

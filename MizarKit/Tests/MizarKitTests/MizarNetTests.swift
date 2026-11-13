@@ -129,6 +129,32 @@ struct MizarNetTests {
         #expect(MizarNetCandidate.sortedByPriority([host, preferred]).first == preferred)
     }
 
+    @Test("a candidate speaks the wire's spelling, not the Swift case name")
+    func candidateWireSpelling() throws {
+        // The desktop's signaling answer is a hello whose candidate kinds are
+        // ICE's: `host` and `srflx`. `Codable` synthesis encodes a String enum
+        // by its raw value, so the case name must *be* the wire name. When it
+        // was not, one `srflx` entry failed the whole hello and the dialler
+        // reported "no candidate addresses to dial" while the desktop had
+        // answered.
+        let json = #"{"address":"203.0.113.9","kind":"srflx","port":40000,"priority":1694498817}"#
+        let decoded = try JSONDecoder().decode(MizarNetCandidate.self, from: Data(json.utf8))
+        #expect(decoded.kind == .serverReflexive)
+        let encoded = try JSONEncoder().encode(decoded)
+        let text = String(decoding: encoded, as: UTF8.self)
+        #expect(text.contains("\"srflx\""))
+        #expect(!text.contains("serverReflexive"))
+
+        let hello = #"{"candidates":[{"address":"10.0.0.2","kind":"host","port":19390,"priority":1},{"address":"203.0.113.9","kind":"srflx","port":40000,"priority":2}],"endpointId":"x","type":"hello","v":1}"#
+        let signal = try MizarNetSignalingJSON.decode(hello)
+        guard case .hello(let decodedHello) = signal else {
+            Issue.record("the desktop's hello did not decode")
+            return
+        }
+        #expect(decodedHello.candidates.count == 2)
+        #expect(decodedHello.candidates.map(\.kind) == [.host, .serverReflexive])
+    }
+
     // MARK: - Signaling
 
     @Test("a signal survives the JSON form")

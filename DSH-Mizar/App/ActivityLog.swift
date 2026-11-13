@@ -70,6 +70,14 @@ final class ActivityLog {
         // measured, not assumed. `info` is in memory for the life of the log and
         // in Console.app with no flags.
         logger.info("[\(category.rawValue, privacy: .public)] \(message, privacy: .public)")
+        #if DEBUG
+        // The device console (`devicectl ... --console`) is the only channel a
+        // cable-attached test has while no one is watching Console.app. os_log
+        // alone is invisible there, and "the route was never attempted" is
+        // exactly the kind of fact that has to be readable at the moment it
+        // happens.
+        print("[\(category.rawValue)] \(message)")
+        #endif
     }
 
     /// How many records are held.

@@ -305,8 +305,14 @@ public actor MizarNetConnection {
             for await signal in signals {
                 switch signal {
                 case .hello(let hello):
+                    #if DEBUG
+                    print("p2p: signal hello \(hello.candidates.count) candidate(s)")
+                    #endif
                     await engine.offerCandidates(hello.candidates)
                 case .candidates(let candidates):
+                    #if DEBUG
+                    print("p2p: signal \(candidates.count) more candidate(s)")
+                    #endif
                     await engine.offerCandidates(candidates)
                 case .bye:
                     break

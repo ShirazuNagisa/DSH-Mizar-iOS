@@ -24,20 +24,21 @@ public struct MizarNetCandidate: Sendable, Equatable, Codable {
     /// What kind of address this is.
     public enum Kind: String, Sendable, Codable, CaseIterable {
         /// An address on a local interface — the LAN.
-        case host
+        case host = "host"
         /// The public side of a NAT, as observed by a STUN server.
-        case serverReflexive
+        ///
+        /// The raw value is the *wire* name (`srflx`), not the case name:
+        /// `Codable` synthesis encodes a `String` enum by its raw value, and
+        /// the desktop sends ICE's spelling. With the case name as the raw
+        /// value the desktop's answer failed to decode as a whole -- one
+        /// `srflx` entry poisoned the hello, the candidate list stayed empty,
+        /// and every punch ended in "no candidate addresses to dial".
+        case serverReflexive = "srflx"
         /// An allocation on a relay.
-        case relay
+        case relay = "relay"
 
         /// The wire name, matching ICE's vocabulary.
-        public var wireName: String {
-            switch self {
-            case .host: return "host"
-            case .serverReflexive: return "srflx"
-            case .relay: return "relay"
-            }
-        }
+        public var wireName: String { rawValue }
 
         /// ICE's type preference: host beats server-reflexive beats relay.
         public var typePreference: Int {
