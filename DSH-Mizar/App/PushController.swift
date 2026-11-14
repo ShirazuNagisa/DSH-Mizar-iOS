@@ -300,15 +300,29 @@ enum PushRegistration {
 
     /// Which APNs service issued this build's tokens.
     ///
-    /// Debug builds are signed with a development profile and get sandbox
-    /// tokens; a release build gets production ones. The two services do not
-    /// accept each other's tokens, and the relay has to be told which one to
-    /// talk to -- see `docs/relay-deployment.md` §10.2.
+    /// A Release build gets production tokens and a development-signed build
+    /// gets sandbox ones -- but the question is answered by the signature, not
+    /// by the compiler. `#if DEBUG` used to decide, and a Release build
+    /// installed from Xcode is optimised (`DEBUG` off) while still signed for
+    /// development: it said production for a sandbox token, Apple refused every
+    /// push with `BadDeviceToken`, and the card on the Lock Screen could never
+    /// be updated or ended. See `Distribution.apsEnvironment`, which reads the
+    /// value out of the profile that signed the build.
+    ///
+    /// The two services do not accept each other's tokens, and the relay has to
+    /// be told which one to talk to -- see `docs/relay-deployment.md` §10.2. A
+    /// wrong answer is now survivable rather than silent: the relay asks the
+    /// other Apple once and remembers the answer (`dsh-relay/src/push.ts`).
     static var environment: String {
         #if DEBUG
+        // A debug build is development-signed by definition, and the simulator
+        // has no profile to ask. The compiler is the one source that answers
+        // there.
         return "sandbox"
         #else
-        return "production"
+        // No profile means no embedded signature: an App Store or TestFlight
+        // install, both of which use production.
+        return Distribution.apsEnvironment ?? "production"
         #endif
     }
 
