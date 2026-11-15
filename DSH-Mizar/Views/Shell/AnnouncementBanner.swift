@@ -103,7 +103,7 @@ struct AnnouncementBanner: View {
     VStack {
         AnnouncementBanner(
             announcement: Announcement.preview(
-                title: "0.9.9 is on TestFlight",
+                title: "0.9.10 is on TestFlight",
                 body: "The new settings directory and turn cycle are ready to try.",
                 button: AnnouncementButton(label: "Open settings", target: "notifications"),
             ),

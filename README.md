@@ -2,7 +2,7 @@
 
 用手机看 DSH Agent 干活，也能给它发消息、回答审批。iPhone 和 iPad 都能装。
 
-当前版本 **0.9.9（37）**，通过 TestFlight 分发。
+当前版本 **0.9.10（39）**，通过 TestFlight 分发。
 
 这个仓库是 **iOS / iPadOS App**。配套仓库：
 
