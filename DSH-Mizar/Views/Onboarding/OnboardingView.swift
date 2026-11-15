@@ -24,10 +24,10 @@ enum OnboardingKeys {
     static let version = "mizar.onboarding.version"
     /// The guide this build wants walked.
     ///
-    /// 0.10.0 is the one that adds the server page and the self-hosted walk:
+    /// 0.9.11 is the one that adds the server page and the self-hosted walk:
     /// every phone walks the guide once more, so an existing operator is
     /// asked which relay to use and is shown the page that connects it.
-    static let requiredVersion = "0.10.0"
+    static let requiredVersion = "0.9.11"
 
     /// Whether the guide has been walked in the version this build wants.
     static func isComplete(storedVersion: String?) -> Bool {
