@@ -83,6 +83,10 @@ struct HostListView: View {
     /// computer filters the list it sends: the phone never sees another agent's
     /// sessions even for a moment.
     private func connect(_ desktop: AccountDesktop, target: AgentTarget) async {
+        // An account desktop is brokered by the account relay. A self-hosted
+        // server has neither the roster nor the endpoint, so a stale row must
+        // not be able to send a request to it.
+        guard !model.isSelfHosted else { return }
         do {
             let connection = try await model.account.connect(to: desktop, engine: target.engine)
             guard let origin = URL(string: RelayTier.paidBaseURL) else { return }
@@ -772,6 +776,9 @@ struct UnpairedView<Mark: View>: View {
 
     /// Open a computer on the target last used there, or its first target.
     private func connect(_ desktop: AccountDesktop, target: AgentTarget) async {
+        // See `HostListView.connect`: an account desktop belongs to the
+        // official server's roster.
+        guard model?.isSelfHosted != true else { return }
         opening = true
         defer { opening = false }
         do {

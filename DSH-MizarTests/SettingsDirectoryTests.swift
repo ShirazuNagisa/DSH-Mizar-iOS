@@ -39,6 +39,7 @@ struct SettingsDirectoryTests {
                 """
                     case notifications
                     case sending
+                    case server
                     case transfer
                     case localAgent
                     case files

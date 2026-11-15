@@ -27,9 +27,24 @@ import Foundation
 
 /// The relay tier a pairing's tunnel should use.
 public enum RelayTier {
+    /// The origin a self-hosted build is configured for, when there is one.
+    ///
+    /// One process-wide value rather than a parameter on every call: the
+    /// connection, the credential repair and the usage reader ask
+    /// ``baseURL(paid:)`` from places that do not hold the server selection.
+    /// The app sets it when its settings load and again whenever the operator
+    /// changes servers, and clears it when they switch back to the official
+    /// relay.
+    ///
+    /// `nonisolated(unsafe)` with a lock, rather than an actor: the reads are
+    /// synchronous (an origin is needed while building a request, not in its
+    /// own task), and a lock is what makes the write visible to a reconnect
+    /// reading it on another thread.
+    nonisolated(unsafe) private static var customOriginStorage: String?
+    private static let customOriginLock = NSLock()
+
     /// The free relay's origin.
-    public static let freeBaseURL = "https://dshmizar.shirazu-nagisa.com"
-    /// The account (paid) relay's origin.
+    public static let freeBaseURL = "https://dshmizar.shirazu-nagisa.com"    /// The account (paid) relay's origin.
     ///
     /// The account-gated instance: same host and certificate as the paid relay,
     /// but a separate process that refuses anonymous traffic. A build that does
@@ -51,18 +66,62 @@ public enum RelayTier {
     /// relay. The parameter is kept because callers still phrase the question
     /// that way, and because a future split would come back through here.
     ///
+    /// A configured self-hosted origin wins over both: it is the only relay
+    /// that build may dial, and the official relays are not a fallback for it
+    /// (a self-hosted pairing's room does not exist there).
+    ///
     /// - Parameter paid: whether the signed-in account is paid.
     /// - Returns: the relay origin.
     public static func baseURL(paid: Bool) -> String {
         _ = paid
+        if let customOrigin { return customOrigin }
         return unifiedBaseURL
+    }
+
+    /// Set the self-hosted origin this process uses, or clear it.
+    ///
+    /// Written through a lock because the app writes it on the main actor while
+    /// a reconnect may be reading it to build a URL. An empty or all-whitespace
+    /// value clears the override, so "back to the official relay" needs no
+    /// separate call.
+    ///
+    /// - Parameter origin: the normalised self-hosted origin, or `nil`.
+    public static func setCustomOrigin(_ origin: String?) {
+        let trimmed = origin?.trimmingCharacters(in: .whitespacesAndNewlines)
+        customOriginLock.lock()
+        defer { customOriginLock.unlock() }
+        if let trimmed, !trimmed.isEmpty {
+            customOriginStorage = trimmed
+        } else {
+            customOriginStorage = nil
+        }
+    }
+
+    /// The self-hosted origin this process was last configured for, if any.
+    public static var customOrigin: String? {
+        customOriginLock.lock()
+        defer { customOriginLock.unlock() }
+        return customOriginStorage
+    }
+
+    /// Whether an origin or room URL belongs to the configured self-hosted relay.
+    ///
+    /// - Parameter baseURL: a relay origin or a room URL under one.
+    /// - Returns: whether it is the self-hosted relay.
+    public static func isSelfHosted(_ baseURL: String) -> Bool {
+        guard let customOrigin,
+              let origin = canonicalOrigin(baseURL),
+              let configured = canonicalOrigin(customOrigin)
+        else { return false }
+        return origin == configured
     }
 
     /// Whether an origin is one of the two public relays.
     /// - Parameter baseURL: a relay origin or a room URL under one.
     /// - Returns: whether it is a public relay.
     public static func isPublicRelay(_ baseURL: String) -> Bool {
-        canonicalOrigin(baseURL) == freeBaseURL
+        guard !isSelfHosted(baseURL) else { return false }
+        return canonicalOrigin(baseURL) == freeBaseURL
             || canonicalOrigin(baseURL) == paidBaseURL
             || canonicalOrigin(baseURL) == unifiedBaseURL
     }
@@ -71,7 +130,8 @@ public enum RelayTier {
     /// - Parameter baseURL: a relay origin or a room URL under one.
     /// - Returns: whether it is the paid relay.
     public static func isPaidRelay(_ baseURL: String) -> Bool {
-        canonicalOrigin(baseURL) == paidBaseURL || canonicalOrigin(baseURL) == unifiedBaseURL
+        guard !isSelfHosted(baseURL) else { return false }
+        return canonicalOrigin(baseURL) == paidBaseURL || canonicalOrigin(baseURL) == unifiedBaseURL
     }
 
     /// The scheme-and-host of a URL, lowercased, without a trailing slash.

@@ -273,6 +273,22 @@ final class AccountController {
         }
     }
 
+    /// Read the stored session without asking the relay.
+    ///
+    /// For a self-hosted server: that server has no account service, so there
+    /// is nothing to refresh against. The stored profile is still this phone's
+    /// own copy -- it is what the account screen would show after a switch
+    /// back -- and the phase has to settle, because the root view waits for an
+    /// answer before it shows anything.
+    func startOffline() {
+        guard phase == .idle else { return }
+        if let stored = store.load(), stored.isUsable {
+            session = stored
+            loadCustomAvatar()
+        }
+        phase = .ready
+    }
+
     /// Re-read the profile for a stored token.
     ///
     /// The call that turns a stalled session into "signed out". A network failure

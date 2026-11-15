@@ -31,7 +31,17 @@ final class OnboardingUITests: XCTestCase {
         XCTAssertTrue(next.isEnabled, "the welcome page cannot advance")
         next.tap()
 
-        // The page after the welcome sends the operator to the desktop app:
+        // The page after the welcome is the server choice. The official
+        // server is the default, so Continue stays enabled without a check.
+        XCTAssertTrue(
+            app.buttons["onboarding.server.official"].waitForExistence(timeout: 6),
+            "the server page did not appear after the welcome",
+        )
+        XCTAssertTrue(app.buttons["onboarding.server.self"].exists, "the server page has no self-hosted choice")
+        XCTAssertTrue(next.isEnabled, "the official server should need no verification")
+        next.tap()
+
+        // The page after the server sends the operator to the desktop app:
         // the link can be opened in the browser or copied for another machine.
         let releaseURL = app.staticTexts["onboarding.desktop.url"]
         XCTAssertTrue(releaseURL.waitForExistence(timeout: 6), "the download page did not appear")
@@ -69,7 +79,7 @@ final class OnboardingUITests: XCTestCase {
             "-mizarSkipPermissionPrompts",
             "-mizarAccountFreshStart",
             "-mizarAccountURL", "http://127.0.0.1:1",
-            "-mizarOnboardingStep", "6",
+            "-mizarOnboardingStep", "8",
         ]
         app.launch()
 
@@ -120,7 +130,7 @@ final class OnboardingUITests: XCTestCase {
             "-mizarSkipPermissionPrompts",
             "-mizarAccountFreshStart",
             "-mizarAccountURL", "http://127.0.0.1:1",
-            "-mizarOnboardingStep", "7",
+            "-mizarOnboardingStep", "9",
         ]
         app.launch()
 
@@ -137,4 +147,49 @@ final class OnboardingUITests: XCTestCase {
     }
 
 
+    /// The server page: official by default, and a self-hosted address cannot
+    /// be walked past until it has answered.
+    ///
+    /// The invalid-origin case is deliberate: `ServerProbe` refuses it before
+    /// any request, so the test proves the gate without a relay to talk to.
+    func testServerPageNeedsAVerifiedSelfHostedAddress() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-mizarFreshStart",
+            "-mizarResetOnboarding",
+            "-mizarSkipSplash",
+            "-mizarSkipPermissionPrompts",
+            "-mizarAccountFreshStart",
+            "-mizarAccountURL", "http://127.0.0.1:1",
+            "-mizarOnboardingStep", "1",
+        ]
+        app.launch()
+
+        let next = app.buttons["onboarding.next"]
+        let official = app.buttons["onboarding.server.official"]
+        XCTAssertTrue(official.waitForExistence(timeout: 25), "the server page did not appear")
+        XCTAssertTrue(next.isEnabled, "the official server should need no verification")
+
+        app.buttons["onboarding.server.self"].tap()
+        let domain = app.textFields["onboarding.server.domain"]
+        XCTAssertTrue(domain.waitForExistence(timeout: 6), "the self-hosted fields did not appear")
+        XCTAssertFalse(next.isEnabled, "a self-hosted server let an unverified address continue")
+
+        domain.tap()
+        domain.typeText("http://relay.example.com")
+        app.buttons["onboarding.server.verify"].tap()
+
+        let status = app.descendants(matching: .any)["onboarding.server.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 6), "the check produced no status line")
+        let refused = status.label.contains("Enter the server's address")
+            || status.label.contains("请输入服务器地址")
+        XCTAssertTrue(refused, "an http origin was not refused: \(status.label)")
+        XCTAssertFalse(next.isEnabled, "an unverified address let the guide continue")
+
+        // The app is not reinstalled between test methods, so this choice is
+        // shared with everything that launches after it: put the official
+        // server back before leaving.
+        app.buttons["onboarding.server.official"].tap()
+        app.terminate()
+    }
 }

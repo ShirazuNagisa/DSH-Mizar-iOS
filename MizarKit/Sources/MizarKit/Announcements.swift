@@ -31,6 +31,7 @@ public enum AnnouncementTarget: String, Sendable, CaseIterable {
     case account
     case notifications
     case sending
+    case server
     case transfer
     case localAgent
     case files

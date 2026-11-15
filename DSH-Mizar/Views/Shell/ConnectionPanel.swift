@@ -133,6 +133,11 @@ struct ConnectionPanel: View {
         if model.isLocalCommunication { return String(localized: "On the local network") }
         switch model.activeEndpoint {
         case .relay(let baseURL):
+            // The operator's own server is neither a tier nor a plan: it says
+            // which server it is, and no plan copy is shown for it.
+            if RelayTier.isSelfHosted(baseURL) {
+                return String(localized: "Self-hosted server")
+            }
             return RelayTier.isPaidRelay(baseURL)
                 ? String(localized: "High-bandwidth server")
                 : String(localized: "Free-tier server")

@@ -213,7 +213,12 @@ struct AccountScreen: View {
 
     var body: some View {
         List {
-            if model.account.isLoggedIn {
+            if model.isSelfHosted {
+                // A self-hosted server has no account service: no sign-in, no
+                // subscription, no invite code and no plan. The stored account
+                // is kept for a switch back, not shown as something to use.
+                selfHostedSection
+            } else if model.account.isLoggedIn {
                 profileSection
                 subscriptionSection
                 devicesSection
@@ -237,6 +242,9 @@ struct AccountScreen: View {
             }
         }
         .task {
+            // Nothing on this screen is an answer from a self-hosted server,
+            // and the account service it asks does not exist there.
+            guard !model.isSelfHosted else { return }
             // The price is read even while signed out: a subscription section
             // that shows "…" until somebody signs in reads as broken.
             await model.subscription.load()
@@ -245,6 +253,7 @@ struct AccountScreen: View {
             }
         }
         .refreshable {
+            guard !model.isSelfHosted else { return }
             await model.account.loadDesktops()
         }
         .onChange(of: mode) { _, _ in
@@ -837,6 +846,28 @@ struct AccountScreen: View {
                 Label("Redeem invite code", systemImage: "ticket")
             }
             .accessibilityIdentifier("account.redeem")
+        }
+    }
+
+    /// What this screen says on a server that has no accounts.
+    private var selfHostedSection: some View {
+        Section {
+            Label {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Self-hosted server")
+                        .font(.body.weight(.medium))
+                    Text("Accounts, plans and invite codes belong to the official server. This phone is on a server you run, so there is nothing to sign in to.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } icon: {
+                Image(systemName: "server.rack")
+                    .foregroundStyle(Theme.accentText)
+            }
+            .accessibilityIdentifier("account.selfHosted")
+        } header: {
+            Text("Account")
         }
     }
 

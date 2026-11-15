@@ -231,6 +231,17 @@ public protocol SettingsStorage {
     ///   - value: the value.
     ///   - key: the key.
     func set(_ value: Bool, forKey key: String)
+
+    /// Read a stored string.
+    /// - Parameter key: the key.
+    /// - Returns: the value, or `nil` when nothing has been stored.
+    func string(forKey key: String) -> String?
+
+    /// Store a string, or remove the entry when it is `nil`.
+    /// - Parameters:
+    ///   - value: the value.
+    ///   - key: the key.
+    func set(_ value: String?, forKey key: String)
 }
 
 /// `UserDefaults`, which is where the app's settings live.
@@ -257,6 +268,18 @@ public struct UserDefaultsSettingsStorage: SettingsStorage {
 
     public func set(_ value: Bool, forKey key: String) {
         defaults.set(value, forKey: key)
+    }
+
+    public func string(forKey key: String) -> String? {
+        defaults.string(forKey: key)
+    }
+
+    public func set(_ value: String?, forKey key: String) {
+        if let value {
+            defaults.set(value, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
     }
 }
 
@@ -338,22 +361,68 @@ public struct MizarSettings: Equatable, Sendable, Codable {
     /// time the text is -- and is queued unless this is on.
     public var guidedSendByDefault: Bool
 
+    /// Which relay this phone uses: the official one, or the operator's own.
+    ///
+    /// Kept here with the other choices so the guide, the settings page and the
+    /// relay tier all read one value. It decides much more than an address:
+    /// accounts, plans and push are official-only, and a self-hosted relay is
+    /// addressed by ``selfHostedOrigin`` instead of the built-in relay URLs.
+    public var serverMode: ServerMode
+
+    /// The self-hosted relay's origin, as the operator entered it.
+    ///
+    /// Stored unnormalised so the settings field shows what they typed; the
+    /// form that is dialled is ``ServerSelection/normalizedOrigin``.
+    public var selfHostedOrigin: String
+
+    /// The self-hosted relay's PIN, empty when it does not require one.
+    public var selfHostedPin: String
+
     /// Everything at its default: notifications on, live activity on, the local
     /// network looked for only when the operator asks for it, the punched
-    /// route off until it has a success rate, and a send into a running turn
-    /// held for the end of that turn.
+    /// route off until it has a success rate, a send into a running turn
+    /// held for the end of that turn, and the official server.
     public init(
         liveActivitiesEnabled: Bool = true,
         notifications: NotificationPreferences = .allEnabled,
         localNetworkFirst: Bool = false,
         directConnection: Bool = false,
         guidedSendByDefault: Bool = false,
+        serverMode: ServerMode = .official,
+        selfHostedOrigin: String = "",
+        selfHostedPin: String = "",
     ) {
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.notifications = notifications
         self.localNetworkFirst = localNetworkFirst
         self.directConnection = directConnection
         self.guidedSendByDefault = guidedSendByDefault
+        self.serverMode = serverMode
+        self.selfHostedOrigin = selfHostedOrigin
+        self.selfHostedPin = selfHostedPin
+    }
+
+    /// The server choice as one value.
+    ///
+    /// The three fields are stored separately because two of them are a form
+    /// somebody is halfway through typing (an origin with no PIN yet). This is
+    /// the read the model and the verification use.
+    public var serverSelection: ServerSelection {
+        get {
+            ServerSelection(
+                mode: serverMode,
+                origin: selfHostedOrigin,
+                pin: selfHostedPin,
+            )
+        }
+        set {
+            serverMode = newValue.mode
+            // Trimmed at the one place a whole selection is written: the form
+            // fields can hold a trailing space while somebody is typing, and a
+            // stored value is read back by another process.
+            selfHostedOrigin = newValue.origin.trimmingCharacters(in: .whitespacesAndNewlines)
+            selfHostedPin = newValue.pin.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     /// The key the live activity switch is stored under.
@@ -367,6 +436,15 @@ public struct MizarSettings: Equatable, Sendable, Codable {
 
     /// The key the guided-send switch is stored under.
     public static let guidedSendKey = "mizar.settings.guidedSend"
+
+    /// The key the official/self-hosted choice is stored under.
+    public static let serverModeKey = "mizar.settings.serverMode"
+
+    /// The key the self-hosted origin is stored under.
+    public static let selfHostedOriginKey = "mizar.settings.selfHostedOrigin"
+
+    /// The key the self-hosted server PIN is stored under.
+    public static let selfHostedPinKey = "mizar.settings.selfHostedPin"
 
     /// The key one notification kind is stored under.
     /// - Parameter kind: the kind.
@@ -407,6 +485,16 @@ public struct MizarSettings: Equatable, Sendable, Codable {
             // and guidance into a running turn is a change the operator asks
             // for. See ``guidedSendByDefault``.
             guidedSendByDefault: storage.bool(forKey: guidedSendKey) ?? false,
+            // Official by default: the official path is the one that existed
+            // before this field, and a default read must not change it.
+            serverMode: ServerMode(rawValue: storage.string(forKey: serverModeKey) ?? "") ?? .official,
+            // A stored origin is trimmed on the way in. Normalisation (scheme,
+            // trailing slash) happens where it is dialled, so the settings field
+            // keeps showing what the operator typed.
+            selfHostedOrigin: (storage.string(forKey: selfHostedOriginKey) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            selfHostedPin: (storage.string(forKey: selfHostedPinKey) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines),
         )
     }
 
@@ -417,6 +505,9 @@ public struct MizarSettings: Equatable, Sendable, Codable {
         storage.set(localNetworkFirst, forKey: Self.localNetworkFirstKey)
         storage.set(directConnection, forKey: Self.directConnectionKey)
         storage.set(guidedSendByDefault, forKey: Self.guidedSendKey)
+        storage.set(serverMode.rawValue, forKey: Self.serverModeKey)
+        storage.set(selfHostedOrigin, forKey: Self.selfHostedOriginKey)
+        storage.set(selfHostedPin, forKey: Self.selfHostedPinKey)
         for kind in NotificationKind.allCases {
             storage.set(notifications.isEnabled(kind), forKey: Self.notificationsKey(kind))
         }

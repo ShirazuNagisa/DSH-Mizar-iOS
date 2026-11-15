@@ -779,7 +779,12 @@ private struct SidebarFooter: View {
         if model.isLocalAgentMode { return String(localized: "On this device") }
         if model.isLocalCommunication { return String(localized: "LAN communication") }
         switch model.activeEndpoint {
-        case .relay: return String(localized: "Through the relay")
+        case .relay(let baseURL):
+            // A self-hosted relay is not a tier of the official one, so it
+            // says what it is rather than naming a plan.
+            return RelayTier.isSelfHosted(baseURL)
+                ? String(localized: "Via self-hosted server")
+                : String(localized: "Through the relay")
         case .direct(let authority): return authority
         case .p2p: return String(localized: "P2P direct connection")
         case nil: return model.host?.authority ?? ""

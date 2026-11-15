@@ -149,14 +149,58 @@ final class AppModel {
         return activeEndpoint?.isLocalNetwork ?? false
     }
 
-    /// Whether the paid feature set is available: a paid account, or a link the
-    /// relay is not carrying.
+    /// Which relay this phone is configured for, read from settings at launch.
+    ///
+    /// Assignment writes the three settings fields and points ``RelayTier`` at
+    /// the self-hosted origin, or back at the official relay. The guide assigns
+    /// it while the operator walks the server page; the settings page goes
+    /// through ``updateServerSelection(_:)``, which also deals with a switch
+    /// made while a connection is open.
+    var serverSelection: ServerSelection = .official {
+        didSet {
+            guard serverSelection != oldValue else { return }
+            settings.values.serverMode = serverSelection.mode
+            settings.values.selfHostedOrigin = serverSelection.origin
+            settings.values.selfHostedPin = serverSelection.pin
+            Self.applyCustomOrigin(serverSelection)
+        }
+    }
+
+    /// Whether this phone is on a self-hosted relay.
+    ///
+    /// The one question every official-only path asks: accounts, plans, push,
+    /// announcements and the relay tier all answer "not for a self-hosted
+    /// server" through this.
+    var isSelfHosted: Bool { serverSelection.isSelfHosted }
+
+    /// The origin a self-hosted relay is dialled at, when this phone is on one.
+    var selfHostedOrigin: String? {
+        guard serverSelection.isSelfHosted else { return nil }
+        return serverSelection.normalizedOrigin
+    }
+
+    /// A server switch the settings page has just made, for it to show.
+    ///
+    /// A switch keeps the account and the pairings, and still needs the
+    /// computer to be paired again: the old pairing's room exists on the old
+    /// server only. Cleared when the page says it.
+    private(set) var serverChangeNotice: String?
+
+    /// Point the relay tier at the selection's origin, or clear the override.
+    /// - Parameter selection: the selection to apply.
+    private static func applyCustomOrigin(_ selection: ServerSelection) {
+        RelayTier.setCustomOrigin(selection.isSelfHosted ? selection.normalizedOrigin : nil)
+    }
+
+    /// Whether the paid feature set is available: a paid account, a link the
+    /// relay is not carrying, or a self-hosted relay the operator pays for
+    /// themselves.
     ///
     /// Gates exactly the two features unlocked on a LAN link -- composer
     /// attachments and the running turn's full process detail. Everything else
     /// the app does was already free.
     var advancedFeaturesUnlocked: Bool {
-        account.isPaid || isLocalCommunication
+        account.isPaid || isLocalCommunication || isSelfHosted
     }
 
     /// Whether the file preview may run.
@@ -164,19 +208,23 @@ final class AppModel {
     /// The preview is a paid-plan feature for the same reason attachments are:
     /// it moves the computer's bytes, and on a relay those bytes are the
     /// project's bandwidth. So it follows ``advancedFeaturesUnlocked`` exactly
-    /// -- paid, or a LAN link where the relay carries nothing.
+    /// -- paid, or a LAN link where the relay carries nothing, or a
+    /// self-hosted relay where the operator's own server carries it.
     ///
     /// The punched path is then excluded on top of that, for paid accounts too.
     /// A P2P direct link is not the operator's own network and not the
     /// metered relay either: it is the experimental route, and file transfer is
     /// deliberately not riding it yet. The switch in Settings says experimental;
-    /// this is one of the places that means something.
+    /// this is one of the places that means something. A self-hosted relay is
+    /// exempt from the exclusion: there is no plan to protect, and the operator
+    /// has already paid for the server.
     var previewUnlocked: Bool {
+        if isSelfHosted { return true }
         // The rule is shared with the pictures inside answers, and written down
         // once in `MizarKit.InlinePictureAccess`: the on-device agent has no
         // `file.stat`/`file.read` to serve a file from, the direct path carries
         // no files for anybody, and otherwise it is paid-or-local.
-        InlinePictureAccess.isEntitled(
+        return InlinePictureAccess.isEntitled(
             isPaid: account.isPaid,
             isLocalNetwork: isLocalCommunication,
             isDirectPath: activeEndpoint?.isDirectPath == true,
@@ -195,6 +243,168 @@ final class AppModel {
     /// is "may I draw this?", and that question is allowed to grow a case the
     /// preview page never has.
     var inlinePicturesUnlocked: Bool { previewUnlocked }
+
+    // MARK: - Server choice
+
+    /// Save a new server choice, and deal with the consequences of a switch.
+    ///
+    /// The account and the pairings are kept, as the contract says. What a
+    /// switch does change is where a tunnel is dialled: the pairings already
+    /// stored belong to the server that was configured when they were made, so
+    /// a live connection is closed and the operator is told that the computer
+    /// has to be paired again. A same-mode edit of the origin is the same fact
+    /// -- the old room does not exist on the new server.
+    ///
+    /// - Parameter selection: the choice to save. A self-hosted choice without
+    ///   a usable origin is refused rather than written.
+    /// - Returns: whether the choice was saved.
+    @discardableResult
+    func updateServerSelection(_ selection: ServerSelection) -> Bool {
+        guard !selection.isSelfHosted || selection.normalizedOrigin != nil else { return false }
+        var next = selection
+        if let normalized = selection.normalizedOrigin { next.origin = normalized }
+        next.pin = selection.pin.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard next != serverSelection else { return true }
+
+        let previous = serverSelection
+        serverSelection = next
+        // The announcement socket is an account feature whose lifetime is the
+        // session's. A switch to self-hosted has to close it, and a switch
+        // back has to reopen it once there is a token.
+        syncAnnouncements()
+
+        let needsRepair = previous.mode != next.mode
+            || (next.isSelfHosted && previous.normalizedOrigin != next.normalizedOrigin)
+        if needsRepair {
+            if connection != nil { disconnectCurrent() }
+            serverChangeNotice = String(
+                localized: "Server changed. Pair your computer again for this server; the account and the existing pairings are kept.",
+            )
+        }
+        log.add(
+            .settings,
+            "server: " + (next.isSelfHosted ? "self-hosted \(next.normalizedOrigin ?? "?")" : "official"),
+        )
+        return true
+    }
+
+    /// Say that a server switch has been read.
+    func clearServerChangeNotice() {
+        serverChangeNotice = nil
+    }
+
+    /// The pairings that belong to the configured server.
+    ///
+    /// A direct pairing has no server and belongs to both. A relayed one
+    /// records the relay it was made through, so a stored pairing from the
+    /// other server stays on disk (a switch back must find it) without being
+    /// dialled behind the operator's back.
+    var hostsOnCurrentServer: [PairedHost] {
+        hosts.filter { host in
+            guard let baseURL = host.baseURL else { return true }
+            return isSelfHosted ? RelayTier.isSelfHosted(baseURL) : RelayTier.isPublicRelay(baseURL)
+        }
+    }
+
+    /// The computers that are online on the configured self-hosted relay.
+    ///
+    /// - Returns: the list, or the reason it could not be read.
+    func selfHostedDesktops() async -> Result<[SelfHostedDesktop], SelfHostedDirectoryError> {
+        guard let origin = selfHostedOrigin else { return .failure(.invalidOrigin) }
+        return await SelfHostedDirectoryClient(origin: origin, pin: serverSelection.pin).list()
+    }
+
+    /// Why a self-hosted pairing did not complete.
+    enum SelfHostedPairFailure: Error, Equatable {
+        /// No self-hosted server is configured.
+        case notConfigured
+        /// The code is not the six-to-twelve character form the computer shows.
+        case invalidCode
+        /// The computer answered, and the answer is in the message.
+        case pairingFailed(String)
+    }
+
+    /// Pair with a computer found on the self-hosted relay.
+    ///
+    /// The relay's directory only discovers; the code the computer shows is
+    /// still what authorises the pairing. This builds the same target a QR
+    /// would carry (``PairingURI/selfHosted(origin:room:code:name:)``) and
+    /// hands it to the ordinary ``pair(with:deviceName:)`` path, so a
+    /// discovered computer and a scanned one take one code path.
+    ///
+    /// - Parameters:
+    ///   - desktop: the computer, as the directory listed it.
+    ///   - code: the code shown on that computer.
+    /// - Returns: the stored pairing, or the reason it failed.
+    func pairSelfHosted(
+        desktop: SelfHostedDesktop,
+        code: String,
+    ) async -> Result<PairedHost, SelfHostedPairFailure> {
+        guard let origin = selfHostedOrigin else { return .failure(.notConfigured) }
+        let code = Self.normalizedPairingCode(code)
+        guard Self.isPlausiblePairingCode(code) else { return .failure(.invalidCode) }
+        guard let target = PairingURI.selfHosted(
+            origin: origin,
+            room: desktop.room,
+            code: code,
+            name: desktop.name,
+        ) else {
+            return .failure(.invalidCode)
+        }
+        guard let paired = await pair(with: target, deviceName: Self.deviceName) else {
+            let message: String
+            if case .failed(let reason) = phase, !reason.isEmpty {
+                message = reason
+            } else {
+                message = String(localized: "The computer could not be paired. Check the code and try again.")
+            }
+            return .failure(.pairingFailed(message))
+        }
+        log.add(.connection, "paired with \(desktop.name) on the self-hosted relay")
+        return .success(paired)
+    }
+
+    /// A pairing code as the computer means it: uppercase, and without the
+    /// dashes and spaces the display form carries.
+    /// - Parameter code: what was typed.
+    /// - Returns: the canonical form.
+    static func normalizedPairingCode(_ code: String) -> String {
+        code.uppercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// Whether a normalised code is long enough to be worth sending.
+    ///
+    /// The contract and the guide call it a six-digit code. The desktop's own
+    /// generator (`PairingCode` in AGI Mizar) emits eight Crockford
+    /// characters today, so the accepted window covers both rather than
+    /// rejecting a code a newer desktop shows.
+    /// - Parameter code: the normalised code.
+    /// - Returns: whether it is plausible.
+    static func isPlausiblePairingCode(_ code: String) -> Bool {
+        (6...12).contains(code.count)
+    }
+
+    /// Start the account for this launch.
+    ///
+    /// Official: the ordinary start, which refreshes a stored session. Self-
+    /// hosted: the stored profile is read but nothing is sent, because a
+    /// self-hosted server has no account service to ask -- and the account
+    /// itself is kept for the day the operator switches back.
+    func startAccount() async {
+        if isSelfHosted {
+            account.startOffline()
+            announcements.update(token: nil, active: false)
+        } else {
+            await account.start()
+        }
+    }
+
+    /// Refresh the account when the app returns to the foreground, unless this
+    /// phone is on a server that has no account service.
+    func refreshAccountOnForeground() async {
+        guard !isSelfHosted else { return }
+        await account.refreshOnForeground()
+    }
 
     /// Which agent this phone opened on the computer, when it chose one.
     ///
@@ -1128,6 +1338,11 @@ final class AppModel {
         account.onPlanChange = { [weak self] in
             self?.accountPlanChanged()
         }
+        // The server choice was loaded with the rest of the settings. Applied
+        // here, before any screen can dial, so a self-hosted build never opens
+        // a socket to an official relay first.
+        serverSelection = settings.values.serverSelection
+        Self.applyCustomOrigin(settings.values.serverSelection)
     }
 
     /// Read what this phone already knows and make the island match it.
@@ -1471,6 +1686,9 @@ final class AppModel {
     /// - Parameter desktop: the computer, as the account lists it.
     /// - Returns: what it answered, or `nil` when it did not.
     private func usageOverview(of desktop: AccountDesktop) async -> UsageOverview? {
+        // A usage read of an account desktop is an account-relay call. A
+        // self-hosted server has neither account computers nor this endpoint.
+        guard !isSelfHosted else { return nil }
         guard let relay = URL(string: RelayTier.paidBaseURL),
               let granted = try? await account.connect(to: desktop, engine: nil)
         else { return nil }
@@ -1702,7 +1920,12 @@ final class AppModel {
     /// list, used for a launch connection); every other pairing is deleted
     /// with its index, remembered session and cached figures.
     private func reconcileLegacyHosts() async {
-        guard !Self.showsManualPairing,
+        // The reconcile rule is an account rule: a pairing whose computer is
+        // not on this account is a legacy QR. A self-hosted server has no
+        // account roster to reconcile against, and deleting its pairings
+        // because the roster is empty is the one thing a switch must not do.
+        guard !isSelfHosted,
+              !Self.showsManualPairing,
               !account.desktops.isEmpty else { return }
         let known = Set(account.desktops.map(\.deviceId))
         // A pairing records the *host's* Mizar id, while `/desktops` lists the
@@ -1715,6 +1938,13 @@ final class AppModel {
         let knownNames = Set(account.desktops.map { $0.name.lowercased() })
         var kept: [PairedHost] = []
         for host in hosts {
+            // A pairing on a relay that is not a public one was made while a
+            // self-hosted server was configured. It is not a legacy QR and it
+            // is not on this account's roster: it is kept for the switch back.
+            if let baseURL = host.baseURL, !RelayTier.isPublicRelay(baseURL) {
+                kept.append(host)
+                continue
+            }
             if known.contains(host.hostId) || knownNames.contains(host.hostName.lowercased()) {
                 kept.append(host)
                 continue
@@ -1822,6 +2052,11 @@ final class AppModel {
             ] {
                 UserDefaults.standard.removeObject(forKey: key)
             }
+            // The server choice is app state too, and it outlives a reinstall
+            // on a simulator because the data container does. A fresh-start
+            // launch that kept a self-hosted relay would run every following
+            // test against a server that is not there.
+            serverSelection = .official
             log.add(.cache, "starting from nothing: stored conversations and index cleared")
         }
         if !Self.launchPairingURIs.isEmpty {
@@ -1838,7 +2073,10 @@ final class AppModel {
             return
         }
         do {
-            if account.isLoggedIn, account.desktops.isEmpty {
+            // An account desktop list is an account-server answer. A
+            // self-hosted server has no such endpoint, and its pairings come
+            // from the guide's directory instead.
+            if !isSelfHosted, account.isLoggedIn, account.desktops.isEmpty {
                 await account.loadDesktops()
             }
             hosts = try await credentials.loadAll().sorted { $0.pairedAt < $1.pairedAt }
@@ -1855,8 +2093,12 @@ final class AppModel {
             // approvals, the Live Activity and the push registration on a computer
             // the operator was not using. `HostSelection` also owns the fallback
             // for a fresh install and a forgotten machine.
+            // Only a pairing made through the configured server may be
+            // dialled. The others stay on disk for a switch back, but opening
+            // one here would put this phone on a relay the operator did not
+            // choose.
             guard let stored = HostSelection.preferred(
-                in: hosts,
+                in: hostsOnCurrentServer,
                 lastOpenedId: LastOpenedHostStore.stored(),
             ) else {
                 phase = .unpaired
@@ -2345,6 +2587,13 @@ final class AppModel {
             return
         }
         #endif
+        // Announcements are the official relay's socket, authenticated with the
+        // account session. A self-hosted server has no account and this phone
+        // must not open one.
+        if isSelfHosted {
+            announcements.update(token: nil, active: false)
+            return
+        }
         announcements.update(token: account.token, active: appIsActive && account.isLoggedIn)
     }
 
@@ -3397,6 +3646,9 @@ final class AppModel {
         // has no tunnel, and asking it would read `host.info` for an answer it
         // does not have.
         guard !isLocalAgentMode else { return }
+        // A self-hosted relay is where it is because the operator configured
+        // it, not because a plan moved. There is no other tier to move to.
+        guard !isSelfHosted else { return }
         guard let connection, phase == .ready else { return }
         guard let info = try? await connection.call("host.info", as: HostInfo.self) else { return }
         // The direct-path line is what a cable-attached test reads when the
@@ -3611,7 +3863,8 @@ final class AppModel {
         let hostId = hostId ?? host?.hostId
         // An account desktop's token is minted for one engine. Redialling the
         // old token cannot change agents, so mint a new one before opening.
-        if let hostId, host?.hostId == hostId,
+        if !isSelfHosted,
+           let hostId, host?.hostId == hostId,
            target.engine != engineScope,
            let desktop = account.desktops.first(where: { $0.deviceId == hostId }) {
             do {
@@ -6770,6 +7023,7 @@ final class AppModel {
         // no push channel -- so registering is a round trip that can only say
         // no. Skipped here rather than left to the kernel's polite refusal.
         guard !isLocalAgentMode else { return }
+        guard !isSelfHosted else { return }
         guard let connection, let token = PushRegistration.storedToken else { return }
         var fields: [String: JSONValue] = [
             "token": .string(token),
@@ -6867,6 +7121,13 @@ final class AppModel {
     /// Apple for a token when permission is already granted costs nothing and
     /// closes that hole.
     func ensurePushRegistration() async {
+        // APNs is the official relay's push channel. A self-hosted deployment
+        // has no APNs key -- the contract says so -- and a token registered
+        // against a server that cannot send is a registration into nothing.
+        guard !isSelfHosted else {
+            PushRegistration.storedToken = nil
+            return
+        }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         guard settings.authorizationStatus == .authorized
             || settings.authorizationStatus == .provisional
@@ -6908,7 +7169,7 @@ final class AppModel {
         // The onboarding page is the place these are decided; only ask for what
         // the operator left switched on. A notification prompt for notifications
         // they just switched off is a prompt that trains them to dismiss prompts.
-        if settings.values.notifications.suppressed.isEmpty {
+        if !isSelfHosted, settings.values.notifications.suppressed.isEmpty {
             await Permissions.requestNotifications()
             // Only if the answer was yes. Registering regardless gave a phone that
             // tapped "Don't Allow" a token anyway, which it then handed to the computer --
@@ -6959,7 +7220,12 @@ final class AppModel {
     /// - Parameters:
     ///   - target: the decoded QR payload.
     ///   - deviceName: what to call this device in the host's roster.
-    func pair(with target: PairingTarget, deviceName: String) async {
+    /// - Returns: the stored pairing, or `nil` when it failed. The failure is
+    ///   also on `phase` and in the log, which is where the screens read it;
+    ///   this return is for callers that need to know *that* it failed (the
+    ///   self-hosted guide, whose page keeps the operator on the code field).
+    @discardableResult
+    func pair(with target: PairingTarget, deviceName: String) async -> PairedHost? {
         phase = .connecting
         // A naming prompt for a *previous* machine must not survive into this
         // pairing. It is presented over the main screen, and when the machine
@@ -6985,7 +7251,7 @@ final class AppModel {
             // through to the relay a fallback rather than a second wait.
             let client = PairingClient(
                 makeTransport: { URLSessionHTTPTransport(timeout: $0.timeout) },
-                headers: account.identity.headers,
+                headers: pairingHeaders,
             )
             let outcome = try await client.pair(
                 target: target,
@@ -7062,6 +7328,7 @@ final class AppModel {
             // screen is still.
             try? await Task.sleep(for: .milliseconds(700))
             if !Self.skipNaming { pendingNameHostId = paired.hostId }
+            return paired
         } catch {
             if error is CancellationError || Task.isCancelled {
                 // The task that started this pairing went away (a view rebuilt
@@ -7072,7 +7339,7 @@ final class AppModel {
                 log.add(.connection, "pairing cancelled before it finished")
                 firstLoad = false
                 hasStarted = false
-                return
+                return nil
             }
             // One line per route that was tried, then the answer to act on. A
             // pairing that fell through the LAN to the relay and then failed
@@ -7102,7 +7369,22 @@ final class AppModel {
             // screen up: the failure screen behind it is the one that answers.
             firstLoad = false
             phase = .failed(message)
+            return nil
         }
+    }
+
+    /// The identity headers a pairing attempt carries.
+    ///
+    /// The relay's own traffic bookkeeping: the install id, and the account
+    /// hash when there is one. A self-hosted relay is somebody else's server
+    /// with no account store, so it gets the install id alone -- never the
+    /// account hash, and (see ``AccountController/identity``) never the session
+    /// token.
+    private var pairingHeaders: [String: String] {
+        if isSelfHosted {
+            return RelayIdentity.guest(clientId: account.installId).headers
+        }
+        return account.identity.headers
     }
 
     /// How long the relay waits while a direct route is being dialled.
@@ -7598,8 +7880,12 @@ final class AppModel {
             // derivative leaving the phone for nothing.
             relayHeaders = [:]
         case .relay(let baseURL):
-            var headers = account.identity.headers
-            if AccountClient.isAccountHost(baseURL) {
+            // A self-hosted relay has no account store: the install id is the
+            // whole identity it may be given, and no session token is sent.
+            var headers = isSelfHosted
+                ? RelayIdentity.guest(clientId: account.installId).headers
+                : account.identity.headers
+            if !isSelfHosted, AccountClient.isAccountHost(baseURL) {
                 headers.merge(account.identity.sessionHeaders) { _, new in new }
             }
             relayHeaders = headers
@@ -7614,8 +7900,10 @@ final class AppModel {
         let signalHeaders: [String: String]
         switch endpoint {
         case .p2p(let relayBaseURL, _):
-            var headers = account.identity.headers
-            if AccountClient.isAccountHost(relayBaseURL) {
+            var headers = isSelfHosted
+                ? RelayIdentity.guest(clientId: account.installId).headers
+                : account.identity.headers
+            if !isSelfHosted, AccountClient.isAccountHost(relayBaseURL) {
                 headers.merge(account.identity.sessionHeaders) { _, new in new }
             }
             signalHeaders = headers
@@ -7637,7 +7925,7 @@ final class AppModel {
                 engine: host.engine,
                 // Which account this phone is signed in to, when it is. A
                 // computer signed in to another one refuses the socket.
-                accountId: account.session?.profile.id,
+                accountId: isSelfHosted ? nil : account.session?.profile.id,
                 // The handshake is given the same leash as the dial. A socket
                 // that opens and then says nothing is otherwise a screen stuck
                 // on "Connecting…" for as long as the process lives, and this
@@ -7652,7 +7940,7 @@ final class AppModel {
                 appVersion: Self.appVersion,
                 deviceModel: Self.deviceModel,
                 engine: host.engine,
-                accountId: account.session?.profile.id,
+                accountId: isSelfHosted ? nil : account.session?.profile.id,
                 baseURL: baseURL,
                 handshakeTimeout: .seconds(timeout),
                 relayHeaders: relayHeaders,
@@ -7664,7 +7952,7 @@ final class AppModel {
                 appVersion: Self.appVersion,
                 deviceModel: Self.deviceModel,
                 engine: host.engine,
-                accountId: account.session?.profile.id,
+                accountId: isSelfHosted ? nil : account.session?.profile.id,
                 handshakeTimeout: .seconds(timeout),
                 relayHeaders: relayHeaders,
                 p2p: P2PRoute(relayBaseURL: relayBaseURL, endpointId: endpointId),

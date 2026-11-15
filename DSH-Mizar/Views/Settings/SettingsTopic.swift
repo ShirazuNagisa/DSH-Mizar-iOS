@@ -25,6 +25,7 @@ import SwiftUI
 enum SettingsTopic: String, CaseIterable, Identifiable {
     case notifications
     case sending
+    case server
     case transfer
     case localAgent
     case files
@@ -39,6 +40,7 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
         switch self {
         case .notifications: "Notifications & Live Activity"
         case .sending: "Sending Preferences"
+        case .server: "Server"
         case .transfer: "Transfer"
         case .localAgent: "On-Device Agent (Experimental)"
         case .files: "Files & Cache"
@@ -54,6 +56,7 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
         switch self {
         case .notifications: "Notification kinds, the Live Activity and haptics."
         case .sending: "What happens to a message sent while a turn is running."
+        case .server: "The official relay, or a server you run yourself."
         case .transfer: "Local network first, and the P2P direct connection."
         case .localAgent: "Model configuration, and the sessions it keeps on this phone."
         case .files: "Previewed files, the file cache, and the local session data."
@@ -68,6 +71,7 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
         switch self {
         case .notifications: "bell.badge"
         case .sending: "paperplane"
+        case .server: "server.rack"
         case .transfer: "network"
         case .localAgent: "cpu"
         case .files: "externaldrive"
@@ -102,6 +106,7 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
         switch self {
         case .notifications: NotificationsSettingsView(onDone: onDone)
         case .sending: SendingSettingsView(onDone: onDone)
+        case .server: ServerSettingsView(onDone: onDone)
         case .transfer: TransferSettingsView(onDone: onDone)
         case .localAgent: LocalAgentSettingsView(onDone: onDone)
         case .files: FilesSettingsView(onDone: onDone)
@@ -153,6 +158,7 @@ extension AnnouncementTarget {
         case .account: nil
         case .notifications: .notifications
         case .sending: .sending
+        case .server: .server
         case .transfer: .transfer
         case .localAgent: .localAgent
         case .files: .files

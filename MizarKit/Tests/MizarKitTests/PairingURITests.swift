@@ -225,4 +225,51 @@ struct PairingURITests {
         #expect(PairingURI.relayHTTPURL(baseURL: try #require(target.baseURL), path: "/mizar/v1/pair") != nil)
         #expect(PairingURI.relayWebSocketURL(baseURL: try #require(target.baseURL)) != nil)
     }
+
+    @Test("a discovered self-hosted computer builds the same URI a QR would carry")
+    func selfHostedRoundTrip() throws {
+        let target = try #require(PairingURI.selfHosted(
+            origin: " https://relay.example.com/ ",
+            room: "ROOM1",
+            code: " K7QP-3M2X ",
+            name: "Office Mac",
+        ))
+        #expect(target.baseURL == "https://relay.example.com/r/ROOM1")
+        #expect(target.authority == nil)
+        #expect(target.code == "K7QP-3M2X")
+        #expect(target.hostName == "Office Mac")
+        #expect(target.protocolVersion == 1)
+        // The payload is what a QR carries, so the scanned path and the
+        // discovered path cannot produce two different kinds of target.
+        let rebuilt = try #require(PairingURI.build(
+            authority: "",
+            code: target.code,
+            hostName: target.hostName ?? "",
+            protocolVersion: 1,
+            baseURL: target.baseURL,
+        ))
+        #expect(PairingURI.parse(rebuilt)?.baseURL == target.baseURL)
+        #expect(PairingURI.parse(rebuilt)?.code == target.code)
+    }
+
+    @Test("a self-hosted URI without a name still parses")
+    func selfHostedWithoutName() throws {
+        let target = try #require(PairingURI.selfHosted(
+            origin: "relay.example.com",
+            room: "ROOM1",
+            code: "123456",
+            name: nil,
+        ))
+        #expect(target.hostName == nil)
+        #expect(target.baseURL == "https://relay.example.com/r/ROOM1")
+    }
+
+    @Test("a room that is not one path segment, and an empty code, are refused")
+    func selfHostedRejects() {
+        #expect(PairingURI.selfHosted(origin: "relay.example.com", room: "", code: "123456", name: nil) == nil)
+        #expect(PairingURI.selfHosted(origin: "relay.example.com", room: "ROOM/OTHER", code: "123456", name: nil) == nil)
+        #expect(PairingURI.selfHosted(origin: "relay.example.com", room: "ROOM?x=1", code: "123456", name: nil) == nil)
+        #expect(PairingURI.selfHosted(origin: "relay.example.com", room: "ROOM1", code: "  ", name: nil) == nil)
+        #expect(PairingURI.selfHosted(origin: "http://relay.example.com", room: "ROOM1", code: "123456", name: nil) == nil)
+    }
 }

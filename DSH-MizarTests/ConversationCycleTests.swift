@@ -30,18 +30,21 @@ struct ConversationCycleTests {
     func olderVersionWalksAgain() {
         #expect(!OnboardingKeys.isComplete(storedVersion: "0.9.7"))
         #expect(!OnboardingKeys.isComplete(storedVersion: "0.9.8"))
+        // 0.9.10 predates the server page and the self-hosted walk, so the
+        // migration has to catch it too.
+        #expect(!OnboardingKeys.isComplete(storedVersion: "0.9.10"))
     }
 
     @Test("a phone that walked this guide does not walk it again")
     func currentVersionIsEnough() {
         #expect(OnboardingKeys.isComplete(storedVersion: OnboardingKeys.requiredVersion))
-        #expect(OnboardingKeys.isComplete(storedVersion: "0.9.10"))
+        #expect(OnboardingKeys.isComplete(storedVersion: "0.10.0"))
         #expect(OnboardingKeys.isComplete(storedVersion: "1.0.0"))
     }
 
-    @Test("the guide this build wants is the one 0.9.9 asks for")
+    @Test("the guide this build wants is the one 0.10.0 asks for")
     func requiredVersion() {
-        #expect(OnboardingKeys.requiredVersion == "0.9.9")
+        #expect(OnboardingKeys.requiredVersion == "0.10.0")
     }
 
     // MARK: - The process

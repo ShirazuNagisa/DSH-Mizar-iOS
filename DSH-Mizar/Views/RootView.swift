@@ -67,19 +67,26 @@ struct RootView: View {
         // gate would put bytes on the relay as a `guest:` identity, which is the
         // one thing the gate exists to prevent.
         .task(id: startKey) {
-            if Self.skipLoginGate || model.account.isLoggedIn {
+            // A self-hosted server has no account to wait for: the guide is
+            // where the computer gets paired, and the connection follows the
+            // stored pairing exactly as it does for a signed-in official user.
+            if Self.skipLoginGate || model.account.isLoggedIn || model.isSelfHosted {
                 model.scheduleStart()
             }
         }
         .task {
-            await model.account.start()
-            // The announcement socket's identity is the session, and `start()`
-            // is what reads it: after this there is a token or there is not.
+            // Self-hosted reads the stored profile without asking the server;
+            // the announcement socket stays closed and there is no Apple
+            // subscription to report to a server that does not have accounts.
+            await model.startAccount()
             model.syncAnnouncements()
-            // A subscription bought on another device, or before a reinstall,
-            // exists only in Apple's records: the relay has to be told what the
-            // App Store holds, or the plan lapses at the end of the period.
-            await model.subscription.syncEntitlements()
+            if !model.isSelfHosted {
+                // A subscription bought on another device, or before a
+                // reinstall, exists only in Apple's records: the relay has to be
+                // told what the App Store holds, or the plan lapses at the end
+                // of the period.
+                await model.subscription.syncEntitlements()
+            }
         }
         .task { await model.ensurePushRegistration() }
         .alert(
@@ -160,8 +167,9 @@ struct RootView: View {
                 }
                 // A plan bought on another device, or a refunded subscription,
                 // is only true on the server: the cached profile is refreshed
-                // when the app comes back rather than when a screen opens.
-                Task { await model.account.refreshOnForeground() }
+                // when the app comes back rather than when a screen opens. A
+                // self-hosted server has no account service to refresh against.
+                Task { await model.refreshAccountOnForeground() }
             case .inactive:
                 break
             @unknown default:
@@ -311,16 +319,20 @@ private extension RootView {
     }
 
     /// Whether the login gate is in front of the app.
+    ///
+    /// A self-hosted server has no accounts at all, so there is nothing to
+    /// gate: the welcome gate is an official-server screen.
     var requiresLogin: Bool {
         #if DEBUG
         if Self.skipLoginGate { return false }
         #endif
+        if model.isSelfHosted { return false }
         return !model.account.isLoggedIn
     }
 
     /// Changes when the first connect becomes allowed.
     var startKey: String {
-        "\(model.account.isLoggedIn)-\(Self.skipLoginGate)"
+        "\(model.account.isLoggedIn)-\(model.isSelfHosted)-\(Self.skipLoginGate)"
     }
 
     /// Whether a debug build was launched with the gate bypassed.

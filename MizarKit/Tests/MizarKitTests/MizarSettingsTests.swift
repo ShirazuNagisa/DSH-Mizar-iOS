@@ -147,6 +147,7 @@ struct MizarSettingsTests {
     /// one holding a `false`.
     private final class MemoryStorage: SettingsStorage {
         private var values: [String: Bool] = [:]
+        private var strings: [String: String] = [:]
 
         init(values: [String: Bool] = [:]) {
             self.values = values
@@ -155,6 +156,10 @@ struct MizarSettingsTests {
         func bool(forKey key: String) -> Bool? { values[key] }
 
         func set(_ value: Bool, forKey key: String) { values[key] = value }
+
+        func string(forKey key: String) -> String? { strings[key] }
+
+        func set(_ value: String?, forKey key: String) { strings[key] = value }
     }
 
     @Test("reads a storage that has never been written to as the defaults")
@@ -289,10 +294,15 @@ struct DirectConnectionSettingTests {
     /// defaults are not used.
     private final class MemoryStorage: SettingsStorage {
         var values: [String: Bool] = [:]
+        var strings: [String: String] = [:]
 
         func bool(forKey key: String) -> Bool? { values[key] }
 
         func set(_ value: Bool, forKey key: String) { values[key] = value }
+
+        func string(forKey key: String) -> String? { strings[key] }
+
+        func set(_ value: String?, forKey key: String) { strings[key] = value }
     }
 
     @Test("is off on a store that has never been written to")

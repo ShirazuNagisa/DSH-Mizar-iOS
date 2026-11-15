@@ -68,6 +68,7 @@ struct AnnouncementCenterTests {
         #expect(AnnouncementTarget.account.settingsTopic == nil)
         #expect(AnnouncementTarget.notifications.settingsTopic == .notifications)
         #expect(AnnouncementTarget.sending.settingsTopic == .sending)
+        #expect(AnnouncementTarget.server.settingsTopic == .server)
         #expect(AnnouncementTarget.transfer.settingsTopic == .transfer)
         #expect(AnnouncementTarget.localAgent.settingsTopic == .localAgent)
         #expect(AnnouncementTarget.files.settingsTopic == .files)

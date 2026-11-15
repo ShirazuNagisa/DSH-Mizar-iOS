@@ -125,6 +125,54 @@ public enum PairingURI {
         )
     }
 
+    /// Build the pairing URI for a computer found on a self-hosted relay.
+    ///
+    /// The directory gives a room, the computer shows a code, and the phone
+    /// turns the two into the same `mizar://pair?u=...` payload a QR code would
+    /// carry -- then hands it to ``parse`` so both paths produce one kind of
+    /// target. That is the point: a discovered computer and a scanned one must
+    /// not be able to disagree about what a pairing is.
+    ///
+    /// - Parameters:
+    ///   - origin: the relay's origin, as configured. Normalised here, so a
+    ///     trailing slash or a missing scheme is not the caller's problem.
+    ///   - room: the relay room the computer listed.
+    ///   - code: the code the computer is showing.
+    ///   - name: the computer's display name, when it has one.
+    /// - Returns: the parsed target, or `nil` when an input is unusable.
+    public static func selfHosted(
+        origin: String,
+        room: String,
+        code: String,
+        name: String?,
+    ) -> PairingTarget? {
+        guard let origin = ServerSelection(mode: .selfHosted, origin: origin).normalizedOrigin else {
+            return nil
+        }
+        let room = room.trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A room is a path segment, not a path: a slash here would move the
+        // relay's room somewhere else, and a query would become part of the
+        // base URL that the WebSocket path is appended to.
+        let roomCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-")
+        guard !room.isEmpty,
+              room.unicodeScalars.allSatisfy(roomCharacters.contains),
+              !code.isEmpty
+        else { return nil }
+
+        var components = URLComponents()
+        var items = [
+            URLQueryItem(name: "u", value: "\(origin)/r/\(room)"),
+            URLQueryItem(name: "c", value: code),
+        ]
+        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            items.append(URLQueryItem(name: "n", value: name))
+        }
+        items.append(URLQueryItem(name: "v", value: "1"))
+        components.queryItems = items
+        return parse("\(prefix)?\(components.percentEncodedQuery ?? "")")
+    }
+
     /// Whether a base URL is one this client can dial.
     ///
     /// A scanned code is untrusted input from a camera, and this URL decides

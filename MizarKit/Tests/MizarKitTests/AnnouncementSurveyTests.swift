@@ -85,7 +85,7 @@ struct AnnouncementSurveyTests {
     func targetVocabulary() {
         #expect(
             AnnouncementTarget.allRawValues == [
-                "account", "notifications", "sending", "transfer",
+                "account", "notifications", "sending", "server", "transfer",
                 "localAgent", "files", "community", "logs", "about",
             ],
         )

@@ -45,7 +45,11 @@ struct SettingsView: View {
         NavigationStack(path: $path) {
             List {
                 header
-                accountSection
+                // A self-hosted server has no account: the row would open a
+                // sign-in screen for a service that is not there.
+                if !model.isSelfHosted {
+                    accountSection
+                }
                 topicsSection
             }
             .navigationDestination(for: SettingsTopic.self) { topic in
