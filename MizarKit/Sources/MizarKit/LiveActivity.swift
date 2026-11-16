@@ -143,7 +143,7 @@ extension RunningSession {
     ///     top-level sessions only), so a subagent has no prompt and no start
     ///     time here. It would arrive on the island as a row reading "0:03" for
     ///     work that has been going for ten minutes, and -- because the decision
-    ///     layer keeps the two longest-running rows -- it could push the session
+    ///     layer keeps the four longest-running rows -- it could push the session
     ///     the operator is actually watching off the card. The test is
     ///     ``SessionRow/isLiveActivityCandidate``, the same one the background
     ///     refresh picks its reads with, and it keys on the host's `origin`
@@ -247,6 +247,13 @@ extension ConversationItem {
 /// `ActivityAttributes.ContentState` is required to be `Hashable`, so the state
 /// an activity carries has to be. The row is a value with no reference in it, so
 /// this is a conformance the compiler writes and nothing here has to maintain.
+public enum LiveActivitySessionStatus: String, Codable, Sendable {
+    case running
+    case waitingApproval
+    case waitingAnswer
+    case offline
+}
+
 public struct LiveActivityRow: Codable, Sendable, Hashable, Identifiable {
     /// The session this row is about.
     public let id: String
@@ -267,6 +274,17 @@ public struct LiveActivityRow: Codable, Sendable, Hashable, Identifiable {
     public let elapsed: TimeInterval
     /// The instant ``elapsed`` was measured from.
     public let countingSince: Date
+    /// Stable host identity, empty for payloads produced before multi-host support.
+    public let hostId: String
+    /// Short display name for the host.
+    public let hostName: String
+    /// The session's current lifecycle state.
+    public let status: LiveActivitySessionStatus
+    /// When this session entered its current waiting state, if known.
+    public let waitingSince: Date?
+
+    /// A collision-safe identity for this session across hosts.
+    public var compositeId: String { Self.composite(hostId: hostId, localId: id) }
 
     /// - Parameters:
     ///   - id: the session.
@@ -280,12 +298,41 @@ public struct LiveActivityRow: Codable, Sendable, Hashable, Identifiable {
         title: String? = nil,
         elapsed: TimeInterval,
         countingSince: Date,
+        hostId: String = "",
+        hostName: String = "",
+        status: LiveActivitySessionStatus = .running,
+        waitingSince: Date? = nil,
     ) {
         self.id = id
         self.prompt = prompt
         self.title = title
         self.elapsed = elapsed
         self.countingSince = countingSince
+        self.hostId = hostId
+        self.hostName = hostName
+        self.status = status
+        self.waitingSince = waitingSince
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, prompt, title, elapsed, countingSince, hostId, hostName, status, waitingSince
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        elapsed = try container.decode(TimeInterval.self, forKey: .elapsed)
+        countingSince = try container.decode(Date.self, forKey: .countingSince)
+        hostId = try container.decodeIfPresent(String.self, forKey: .hostId) ?? ""
+        hostName = try container.decodeIfPresent(String.self, forKey: .hostName) ?? ""
+        status = try container.decodeIfPresent(LiveActivitySessionStatus.self, forKey: .status) ?? .running
+        waitingSince = try container.decodeIfPresent(Date.self, forKey: .waitingSince)
+    }
+
+    private static func composite(hostId: String, localId: String) -> String {
+        "\(hostId.utf8.count):\(hostId)\(localId.utf8.count):\(localId)"
     }
 
     /// What the left side of the row says.
@@ -326,7 +373,7 @@ public struct LiveActivityRow: Codable, Sendable, Hashable, Identifiable {
 /// from outside. The rows are now a property, so the payload is
 /// `{"rows":[…]}` and there is nothing left to invent.
 public struct LiveActivityState: Codable, Sendable, Hashable {
-    /// The rows to draw, longest-running first: one or two, and none when
+    /// The rows to draw, longest-running first: up to four, and none when
     /// nothing is running.
     public var rows: [LiveActivityRow]
     /// The approvals waiting on the operator, oldest first.
@@ -336,17 +383,41 @@ public struct LiveActivityState: Codable, Sendable, Hashable {
     /// empty list rather than failing the whole card. That tolerance is what
     /// lets the desktop start pushing these without a lockstep app release.
     public var approvals: [LiveActivityApproval]
+    public var totalCount: Int
+    public var deviceCount: Int
+    public var approvalCount: Int
+    public var longestRunningSince: Date?
+    public var revision: Int
+    public var presentationRevision: Int
 
     /// - Parameters:
     ///   - rows: the rows to draw; empty means nothing is running.
     ///   - approvals: the pending approvals to draw beside them.
-    public init(rows: [LiveActivityRow] = [], approvals: [LiveActivityApproval] = []) {
+    public init(
+        rows: [LiveActivityRow] = [],
+        approvals: [LiveActivityApproval] = [],
+        totalCount: Int? = nil,
+        deviceCount: Int? = nil,
+        approvalCount: Int? = nil,
+        longestRunningSince: Date? = nil,
+        revision: Int = 0,
+        presentationRevision: Int = 0,
+    ) {
         self.rows = rows
         self.approvals = approvals
+        self.totalCount = totalCount ?? rows.count
+        self.deviceCount = deviceCount ?? Self.deviceCount(rows: rows, approvals: approvals)
+        self.approvalCount = approvalCount ?? approvals.count
+        self.longestRunningSince = longestRunningSince ?? rows
+            .filter { $0.status == .running }
+            .map(\.countingSince)
+            .min()
+        self.revision = revision
+        self.presentationRevision = presentationRevision
     }
 
     private enum CodingKeys: String, CodingKey {
-        case rows, approvals
+        case rows, approvals, totalCount, deviceCount, approvalCount, longestRunningSince, revision, presentationRevision
     }
 
     /// Decode, tolerating a state from a computer that predates `approvals`.
@@ -359,6 +430,14 @@ public struct LiveActivityState: Codable, Sendable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         rows = try container.decodeIfPresent([LiveActivityRow].self, forKey: .rows) ?? []
         approvals = try container.decodeIfPresent([LiveActivityApproval].self, forKey: .approvals) ?? []
+        totalCount = try container.decodeIfPresent(Int.self, forKey: .totalCount) ?? rows.count
+        deviceCount = try container.decodeIfPresent(Int.self, forKey: .deviceCount)
+            ?? Self.deviceCount(rows: rows, approvals: approvals)
+        approvalCount = try container.decodeIfPresent(Int.self, forKey: .approvalCount) ?? approvals.count
+        longestRunningSince = try container.decodeIfPresent(Date.self, forKey: .longestRunningSince)
+            ?? rows.filter { $0.status == .running }.map(\.countingSince).min()
+        revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+        presentationRevision = try container.decodeIfPresent(Int.self, forKey: .presentationRevision) ?? 0
     }
 
     /// Whether nothing is running and nothing is waiting, so nothing is counting.
@@ -366,14 +445,24 @@ public struct LiveActivityState: Codable, Sendable, Hashable {
     /// An approval alone keeps the card up: the operator has to be able to answer
     /// it, and a card that vanished because the turn is blocked rather than
     /// running is exactly the case this exists for.
-    public var isFinished: Bool { rows.isEmpty && approvals.isEmpty }
+    public var isFinished: Bool { rows.isEmpty && approvals.isEmpty && totalCount == 0 && approvalCount == 0 }
 
     /// The time on the island's right side: the clock of the session that has
     /// been running longest, which is the first row's.
     ///
     /// Derived rather than stored, and `nil` once nothing is running. A second
     /// copy of a number is a second number that can disagree with the first.
-    public var headline: TimeInterval? { rows.first?.elapsed }
+    public var headline: TimeInterval? {
+        rows.filter { $0.status == .running }.min { left, right in
+            if left.countingSince != right.countingSince { return left.countingSince < right.countingSince }
+            return left.compositeId < right.compositeId
+        }?.elapsed
+    }
+
+    private static func deviceCount(rows: [LiveActivityRow], approvals: [LiveActivityApproval]) -> Int {
+        let hosts = Set((rows.map(\.hostId) + approvals.map(\.hostId)).filter { !$0.isEmpty })
+        return hosts.isEmpty && (!rows.isEmpty || !approvals.isEmpty) ? 1 : hosts.count
+    }
 }
 
 /// One approval the card draws and the operator may answer from the island.
@@ -389,6 +478,12 @@ public struct LiveActivityApproval: Codable, Sendable, Hashable, Identifiable {
     public let tool: String
     /// The sentence the agent wrote about it.
     public let detail: String
+    public let hostId: String
+    public let hostName: String
+    public let requestedAt: Date?
+    public let requiresDetail: Bool
+
+    public var compositeId: String { "\(hostId.utf8.count):\(hostId)\(requestId.utf8.count):\(requestId)" }
 
     public var id: String { requestId }
 
@@ -397,11 +492,40 @@ public struct LiveActivityApproval: Codable, Sendable, Hashable, Identifiable {
     ///   - sessionId: the session the turn belongs to.
     ///   - tool: the tool asking.
     ///   - detail: the sentence the agent wrote.
-    public init(requestId: String, sessionId: String, tool: String, detail: String) {
+    public init(
+        requestId: String,
+        sessionId: String,
+        tool: String,
+        detail: String,
+        hostId: String = "",
+        hostName: String = "",
+        requestedAt: Date? = nil,
+        requiresDetail: Bool = false,
+    ) {
         self.requestId = requestId
         self.sessionId = sessionId
         self.tool = tool
         self.detail = detail
+        self.hostId = hostId
+        self.hostName = hostName
+        self.requestedAt = requestedAt
+        self.requiresDetail = requiresDetail
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId, sessionId, tool, detail, hostId, hostName, requestedAt, requiresDetail
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try container.decode(String.self, forKey: .requestId)
+        sessionId = try container.decode(String.self, forKey: .sessionId)
+        tool = try container.decode(String.self, forKey: .tool)
+        detail = try container.decode(String.self, forKey: .detail)
+        hostId = try container.decodeIfPresent(String.self, forKey: .hostId) ?? ""
+        hostName = try container.decodeIfPresent(String.self, forKey: .hostName) ?? ""
+        requestedAt = try container.decodeIfPresent(Date.self, forKey: .requestedAt)
+        requiresDetail = try container.decodeIfPresent(Bool.self, forKey: .requiresDetail) ?? false
     }
 
     /// What the island says above the buttons.
@@ -445,16 +569,16 @@ public struct LiveActivityDecision: Codable, Sendable, Equatable {
 
     /// How many rows the expanded activity shows.
     ///
-    /// Two, and no more, however many sessions are running. They are the two
+    /// Four, and no more, however many sessions are running. They are the four
     /// that have been running longest, because that is where the attention is:
     /// the operator wants to know about the work that is taking a while.
-    public static let maximumRows = 2
+    public static let maximumRows = 4
 
     /// How many approvals the expanded activity shows.
     ///
-    /// Two, for the same reason the rows are two: a card with three questions on
+    /// Four, for the same reason the rows are four: a card with many questions on
     /// it is a card the operator reads twice and answers once.
-    public static let maximumApprovals = 2
+    public static let maximumApprovals = 4
 
     /// How much of an instruction a row shows before it is cut short.
     ///
@@ -493,9 +617,11 @@ public struct LiveActivityDecision: Codable, Sendable, Equatable {
         approvals: [LiveActivityApproval] = [],
         appOpenedSinceLastFinish: Bool,
         now: Date,
+        hostId: String = "",
+        hostName: String = "",
     ) -> LiveActivityDecision {
-        let rows = sessions
-            .sorted(by: longestRunningFirst)
+        let sortedSessions = sessions.sorted(by: longestRunningFirst)
+        let rows = sortedSessions
             .prefix(maximumRows)
             .map { session in
                 // A clock never starts after the instant it is measured at.
@@ -511,8 +637,14 @@ public struct LiveActivityDecision: Codable, Sendable, Equatable {
                     title: session.title,
                     elapsed: session.elapsed(asOf: now),
                     countingSince: min(session.countingSince, now),
+                    hostId: hostId,
+                    hostName: hostName,
                 )
             }
+        let longestRunningSince = sortedSessions.first.map { min($0.countingSince, now) }
+        var hostIds = Set(approvals.map(\.hostId).filter { !$0.isEmpty })
+        if !sessions.isEmpty, !hostId.isEmpty { hostIds.insert(hostId) }
+        let deviceCount = hostIds.isEmpty && (!sessions.isEmpty || !approvals.isEmpty) ? 1 : hostIds.count
         guard !rows.isEmpty || !approvals.isEmpty else {
             // Nothing is running and nothing is waiting: the island stops
             // counting, and the card comes down. A finished card is not left
@@ -522,12 +654,26 @@ public struct LiveActivityDecision: Codable, Sendable, Equatable {
             // code of this app at all. The flag is the second, confirming half of
             // the same rule: the operator has been back since the last finish, so
             // a card still up is one whose moment has passed.
-            return LiveActivityDecision(phase: LiveActivityState(), shouldDismiss: appOpenedSinceLastFinish)
+            return LiveActivityDecision(
+                phase: LiveActivityState(
+                    totalCount: sessions.count,
+                    deviceCount: deviceCount,
+                    approvalCount: approvals.count,
+                ),
+                shouldDismiss: appOpenedSinceLastFinish,
+            )
         }
         // An approval with no running row is still a card: the turn is blocked
         // rather than working, and the button is the whole reason it is up.
         return LiveActivityDecision(
-            phase: LiveActivityState(rows: rows, approvals: Array(approvals.prefix(maximumApprovals))),
+            phase: LiveActivityState(
+                rows: rows,
+                approvals: Array(approvals.prefix(maximumApprovals)),
+                totalCount: sessions.count,
+                deviceCount: deviceCount,
+                approvalCount: approvals.count,
+                longestRunningSince: longestRunningSince,
+            ),
             shouldDismiss: false,
         )
     }

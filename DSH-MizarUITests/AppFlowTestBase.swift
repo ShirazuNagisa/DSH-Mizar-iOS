@@ -322,7 +322,8 @@ class AppFlowTestBase: XCTestCase {
             defer { done.signal() }
             guard let data,
                   let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let methods = parsed["methods"] as? [String: Any]
+                  let methods = (parsed["primaryMethods"] as? [String: Any])
+                    ?? (parsed["methods"] as? [String: Any])
             else { return }
             box.methods = methods.compactMapValues { ($0 as? NSNumber)?.intValue }
         }.resume()
@@ -550,7 +551,7 @@ class AppFlowTestBase: XCTestCase {
             guard let data,
                   let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
-            box.value = parsed["connections"] as? Int
+            box.value = (parsed["primaryConnections"] ?? parsed["connections"]) as? Int
         }.resume()
         _ = done.wait(timeout: .now() + 6)
         return box.value

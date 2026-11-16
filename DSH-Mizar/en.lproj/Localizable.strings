@@ -1034,3 +1034,31 @@
 "The pairings on your phone belong to the server they were made through. After saving this switch, pair your computer again for the new server; the account and the old pairings are kept." = "The pairings on your phone belong to the server they were made through. After saving this switch, pair your computer again for the new server; the account and the old pairings are kept.";
 "Server changed. Pair your computer again for this server; the account and the existing pairings are kept." = "Server changed. Pair your computer again for this server; the account and the existing pairings are kept.";
 "Accounts, plans and invite codes belong to the official server. This phone is on a server you run, so there is nothing to sign in to." = "Accounts, plans and invite codes belong to the official server. This phone is on a server you run, so there is nothing to sign in to.";
+
+/* Unified Live Activity destinations and feedback. */
+"Allowed once" = "Allowed once";
+"Approval" = "Approval";
+"Approval request" = "Approval request";
+"Approvals" = "Approvals";
+"Connecting to host…" = "Connecting to host…";
+"Connecting to paired hosts…" = "Connecting to paired hosts…";
+"Could not connect. Try again." = "Could not connect. Try again.";
+"Host" = "Host";
+"Host unavailable" = "Host unavailable";
+"No active sessions or pending requests" = "No active sessions or pending requests";
+"No paired hosts" = "No paired hosts";
+"No reason was supplied." = "No reason was supplied.";
+"Question" = "Question";
+"Reason" = "Reason";
+"Reason not provided" = "Reason not provided";
+"Recent session context" = "Recent session context";
+"Rejected" = "Rejected";
+"Request changed. Open details." = "Request changed. Open details.";
+"Requested" = "Requested";
+"Result unknown. Open details to check." = "Result unknown. Open details to check.";
+"Session context is unavailable while this host is offline." = "Session context is unavailable while this host is offline.";
+"Session status is unavailable while this host is offline." = "Session status is unavailable while this host is offline.";
+"The host did not include command details in this approval record." = "The host did not include command details in this approval record.";
+"This request is no longer pending on this host." = "This request is no longer pending on this host.";
+"Untitled session" = "Untitled session";
+"Waiting for approval" = "Waiting for approval";

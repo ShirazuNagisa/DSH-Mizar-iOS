@@ -45,7 +45,8 @@ final class ScreenshotTour: XCTestCase {
     /// The methods the app has asked the host for since the counters were reset.
     private static func mockMethodCounts() -> [String: Int] {
         guard let json = mockJSON("/loads"),
-              let methods = json["methods"] as? [String: Any] else { return [:] }
+              let methods = (json["primaryMethods"] as? [String: Any])
+                ?? (json["methods"] as? [String: Any]) else { return [:] }
         return methods.compactMapValues { ($0 as? NSNumber)?.intValue }
     }
 
@@ -60,7 +61,8 @@ final class ScreenshotTour: XCTestCase {
             defer { done.signal() }
             guard let data,
                   let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let methods = parsed["methods"] as? [String: Any]
+                  let methods = (parsed["primaryMethods"] as? [String: Any])
+                    ?? (parsed["methods"] as? [String: Any])
             else { return }
             box.methods = methods.compactMapValues { ($0 as? NSNumber)?.intValue }
         }.resume()

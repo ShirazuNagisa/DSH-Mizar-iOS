@@ -1,349 +1,243 @@
-//
-//  DSHMizarLiveActivityWidget.swift
-//  DSH-Mizar-LiveActivity
-//
-//  The island and the lock screen: what the phone shows while the computer works.
-//
-//  Two processes are involved and this is the second one. The app decides what
-//  the activity *is* -- which sessions are running, what to call them, when the
-//  whole thing should come down -- and hands the answer over as a value
-//  (`LiveActivityState`, in MizarKit). This file draws that value and decides
-//  nothing: which of the two phases it is *is* the difference between a clock and
-//  a green check.
-//
-//  Two things about Live Activities are not obvious and shaped everything here:
-//
-//    - **The clock is the system's.** `Text(_:style:.timer)` counts up from an
-//      instant, redrawn by the system on its own schedule -- no `Activity.update`
-//      per second, no push, no waking the app. That is why a row carries
-//      `countingSince` rather than a figure, and why an activity that goes
-//      minutes without an update still tells the time correctly.
-//
-//    - **The island tints what it draws.** There is no colour to pick inside the
-//      Dynamic Island: the system draws the compact and minimal presentations in
-//      its own tint on its own black background, and the lock-screen card is
-//      drawn in the vibrant mode widgets use. An app-icon bitmap dropped in
-//      here would therefore come out as whatever the system does to a bitmap --
-//      and, less obviously, *the app's own asset catalog is not visible from
-//      this process at all*: the extension has its own bundle, so `Image` here
-//      can only find assets in `DSH-Mizar-LiveActivity/Assets.xcassets`. The mark
-//      is a template image in that catalog (`MizarIcon`, white on transparent,
-//      `template-rendering-intent`), derived from the app icon's glyph with the
-//      icon's navy background dropped -- see the note on `Mark`.
-//
-//  Nothing here reads a model, a cache or a network: a Live Activity runs in its
-//  own sandbox with no network access, and everything it may draw arrived in the
-//  content state.
-//
-
 import ActivityKit
+import AppIntents
 import MizarKit
 import SwiftUI
 import WidgetKit
 
-/// The card's two appearances.
-///
-/// Live Activities on the Lock Screen are drawn in the system's vibrant mode,
-/// but their content is still the app's: the light card is the pale blue-white
-/// the in-app icon tile uses, the dark card is the navy the app has always used
-/// behind its mark. The bright cyan is the app's light accent; the dark
-/// appearance's accent is white, exactly as in the app. The expanded island is
-/// always the system's black, so it takes the dark palette regardless of the
-/// phone's appearance.
-private struct LiveActivityPalette {
-    let appearance: LiveActivityAppearance
-
-    var isDark: Bool { appearance == .dark }
-
-    var background: Color {
-        isDark
-            ? Color(red: 19 / 255, green: 31 / 255, blue: 61 / 255)
-            : Color(red: 0.973, green: 0.984, blue: 0.996)
-    }
-
-    var ink: Color {
-        isDark
-            ? .white
-            : Color(red: 8 / 255, green: 17 / 255, blue: 28 / 255)
-    }
-
-    var secondaryInk: Color {
-        isDark ? .white.opacity(0.72) : ink.opacity(0.58)
-    }
-
-    /// The icon's bright cyan in the light appearance; white in the dark one,
-    /// where the app's accent is white.
-    var accent: Color {
-        isDark
-            ? .white
-            : Color(red: 60 / 255, green: 203 / 255, blue: 244 / 255)
-    }
-
-    var surface: Color {
-        isDark ? .white.opacity(0.07) : .black.opacity(0.05)
-    }
-
-    var primaryButtonFill: Color {
-        isDark ? .white.opacity(0.16) : accent
-    }
-
-    var primaryButtonInk: Color {
-        isDark
-            ? .white
-            : Color(red: 3 / 255, green: 20 / 255, blue: 31 / 255)
-    }
-
-    var secondaryButtonFill: Color {
-        isDark ? .white.opacity(0.08) : .black.opacity(0.06)
-    }
-
-    var secondaryButtonInk: Color {
-        isDark ? .white.opacity(0.82) : ink.opacity(0.82)
-    }
-
-    /// The island has no colour choice: its background is the system's black.
-    static let island = LiveActivityPalette(appearance: .dark)
-}
-
-// MARK: - Why every string here is resolved before SwiftUI sees it
-
-/// A string out of this extension's `Localizable.strings`, translated by hand
-/// rather than by `Text("…")`.
-///
-/// **`Text("…")` — the `LocalizedStringKey` initialiser — cannot be used
-/// anywhere in this widget.** Not for a label, not for content. It is the one
-/// API in this file that crashes the extension, and it does it in this process
-/// rather than in the app's, so what the operator sees is the app's Live
-/// Activity failing to draw and what XCTest reports is a failure of whichever
-/// test happened to be running:
-///
-///     <unknown>:0: error: -[DSH_MizarUITests.AppFlowTests test…] :
-///         Critical process DSH-Mizar-LiveActivity crashed in (null)
-///
-/// The mechanism, from the crash report's own `lastExceptionBacktrace`:
-/// a `LocalizedStringKey` text is marked with SwiftUI's
-/// `ResolvableTextSegmentAttribute` — the process-local note that says "this run
-/// of characters is a localisable segment, re-resolve it if the language
-/// changes". A Live Activity is not drawn where it is built: WidgetKit
-/// *archives* the rendered tree to protobuf and hands the bytes across the
-/// process boundary, and `CodableAttributedString.encode(to:)` strips that
-/// attribute first, because a segment resolved in this process means nothing in
-/// the host. Stripping it goes through `removeAttribute(_:range:)` with a range
-/// that was only ever valid for the string that carried it, and that call
-/// **throws** (`NSRangeException`):
-///
-///     CodableAttributedString.encode(to:)
-///       −[NSAttributedString enumerateAttribute:inRange:options:usingBlock:]
-///         ResolvableTextSegmentAttribute.Value.toggleAttributes(in:of:)
-///           ResolvableTextSegmentAttribute.Value.restoreDefault(in:of:)
-///             −[NSMutableAttributedString removeAttribute:range:]   ← throws
-///
-/// The exception is rethrown out of `enumerateAttribute`, reaches
-/// `_objc_terminate`, and aborts the extension with SIGABRT.
-///
-/// `Text(verbatim:)` carries no such attribute, so there is nothing to strip and
-/// nothing to throw. That is not a way of giving up the translation: it means
-/// the lookup has already happened, here, through `Bundle.main` — which in an
-/// app extension is *this* extension's bundle, the one holding `en.lproj` and
-/// `zh-Hans.lproj`. The keys are the same ones `Text("…")` would have looked up,
-/// so the words on the island, on the Lock Screen and in VoiceOver are the ones
-/// `Localizable.strings` holds, unchanged. What is gone is only the promise that
-/// SwiftUI could re-resolve them later in a different process — a promise this
-/// widget can never keep and must not make.
-///
-/// ## `verbatim` alone was not enough: the clock is the second source
-///
-/// A `LocalizedStringKey` is not the only text SwiftUI resolves *while drawing*.
-/// `Text(_:style:)` holds no string at all — it is a date and a style, and the
-/// words are produced when it is drawn, which is exactly what lets the system
-/// tick it without the app sending anything. `Text`'s storage for it is
-/// `TimeDataFormattingStorage`, not `verbatim`, so the string it resolves to
-/// carries the same process-local segment. Drawn as itself that is what a Live
-/// Activity clock is *for*; it becomes the crash above the moment that string is
-/// merged into another string, which is what accessibility does.
-///
-/// So this file keeps two rules, and they are both about the same archive:
-///
-///  1. **Every string is resolved here**, through `Text.translated` or
-///     `Text(verbatim:)`, before SwiftUI sees it. A key is looked up with
-///     `NSLocalizedString` and never handed to `Text("…")`; a sentence is
-///     assembled out of those strings *here*, with no format specifier left in
-///     it for SwiftUI to find.
-///  2. **Nothing SwiftUI resolves while drawing is handed to accessibility.**
-///     No accessibility-element merge anywhere — not the `children:` `.combine`
-///     mode, not any other: an element's
-///     words are put together in this process and attached with
-///     `children: .ignore`. The clock is drawn with `accessibilityHidden(true)`
-///     (see `Clock`) and described in words by whoever draws it. The mark's
-///     asset is found by a `String` name rather than by a
-///     `LocalizedStringKey`, and its label is `verbatim`, so the one label it
-///     has is one this process wrote.
-///
-/// `grep -n 'Text(' DSHMizarLiveActivityWidget.swift` should therefore show
-/// `Text(verbatim:)`, `Text.translated(…)` and the one date-styled `Text` inside
-/// `Clock` — which is hidden from accessibility and never used as a label.
-private extension Text {
-    /// - Parameter key: a key in this extension's `Localizable.strings`.
-    /// - Returns: the same text, already in the operator's language, and free of
-    ///   the localisable segment attribute that cannot cross the process
-    ///   boundary.
-    static func translated(_ key: String) -> Text {
-        Text(verbatim: String.translated(key))
-    }
-}
-
-private extension String {
-    /// The words behind a key in this extension's `Localizable.strings`.
-    ///
-    /// Here as well as on `Text` because one label in this file is a *sentence*
-    /// rather than a single string -- `LiveActivityRow.spokenLabel` -- and a
-    /// sentence has to be assembled before SwiftUI sees it.
-    ///
-    /// - Parameter key: a key in this extension's `Localizable.strings`.
-    /// - Returns: the translation, or the key itself when there is none.
-    static func translated(_ key: String) -> String {
-        NSLocalizedString(key, bundle: .main, comment: "")
-    }
-}
-
-/// One row as VoiceOver reads it.
-private extension LiveActivityRow {
-    /// What the row says, then what the number beside it is.
-    ///
-    /// The row is one element and this is its whole label, so the two parts are
-    /// joined here rather than by the `.combine` mode of
-    /// `accessibilityElement(children:)` --
-    /// see the note on `SessionRows`. The row's left side is the session's title
-    /// when the host has named it and the operator's instruction otherwise; that
-    /// is `displayTitle`, so a listener hears the same name a reader sees. A row
-    /// with neither contributes nothing, and the label is then just the noun: a
-    /// duration announced with no noun is a number about nothing, which is what
-    /// `Localizable.strings` says about this key.
-    var spokenLabel: Text {
-        Text(verbatim: [displayTitle, String.translated("Running time")]
-            .filter { !$0.isEmpty }
-            .joined(separator: ", "))
-    }
-}
-
-/// The one Live Activity this app posts.
 struct DSHMizarLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: DSHMizarActivityAttributes.self) { context in
-            // The Lock Screen presentation, and the banner on a device without
-            // an island. The same card the expanded island draws, because there
-            // is nothing about it that depends on where it is drawn.
+            let presentation = LiveActivityPresentationStore.read()
+            let approvals = orderedApprovals(context.state.approvals)
+            let selected = selectedApproval(from: approvals, id: presentation.selectedApprovalId)
             LiveActivityCard(state: context.state, appearance: context.attributes.appearance)
+                .widgetURL(LiveActivityLinks.card(state: context.state, selected: selected))
         } dynamicIsland: { context in
-            DynamicIsland {
-                // The title row: the mark and the app's name, on the leading
-                // side of the camera. `belowIfTooWide` is not decoration --
-                // "DSH-Mizar" beside a glyph is wider than the space left of
-                // the TrueDepth camera on a compact island, and without it the
-                // label is truncated to something nobody can read.
+            let state = context.state
+            let presentation = LiveActivityPresentationStore.read()
+            let approvals = orderedApprovals(state.approvals)
+            let selected = selectedApproval(from: approvals, id: presentation.selectedApprovalId)
+
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    TitleRow()
-                        .dynamicIsland(verticalPlacement: .belowIfTooWide)
+                    IslandSessionColumn(state: state)
                 }
+                .contentMargins(.top, 16)
+                .contentMargins(.horizontal, 16)
                 DynamicIslandExpandedRegion(.trailing) {
-                    Headline(state: context.state)
+                    IslandSessionColumn(state: state, trailing: true)
                 }
+                .contentMargins(.top, 16)
+                .contentMargins(.horizontal, 16)
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        // A blocked turn comes before the clocks: the operator
-                        // can answer it from here, and a question under two
-                        // counting rows is a question nobody sees. The expanded
-                        // island has one card's height, not a lock screen's;
-                        // one approval is the action it can carry without
-                        // pushing the rows out of the system's frame. The card
-                        // still carries both.
-                        if let approval = context.state.approvals.first {
-                            ApprovalRows(approvals: [approval], palette: .island)
-                        }
-                        // One approval plus two clocks does not fit the
-                        // expanded island's height at type this size; when there
-                        // is something to answer, the longest-running row is
-                        // the context and the card carries the second.
-                        SessionRows(
-                            state: context.state,
-                            palette: .island,
-                            maximumRows: context.state.approvals.isEmpty ? nil : 1,
-                        )
-                    }
-                    .padding(.top, 2)
+                    IslandBottom(state: state, presentation: presentation, approval: selected)
                 }
-            // The compact presentation is content, and only content -- but the
-            // content has to say how wide it is, and a date-styled `Text` will
-            // not: in WidgetKit a timer fills whatever width it is offered
-            // instead of taking the width of the number it draws. On iOS 27 the
-            // compact views are flexible in width in portrait (see the note
-            // below), so what the trailing view is offered can be the whole
-            // trailing edge of a wide capsule; with no finite width of its own
-            // the number had no frame to be drawn in and the right side stayed
-            // black. `Clock` bounds itself with a hidden placeholder of the
-            // widest count it can draw (0:00:00), so the slot has a width and the
-            // digits sit at the capsule's trailing edge. Nothing here adds
-            // padding, spacing, or a `fixedSize` that would ask for width the
-            // content does not need.
-            //
-            // The capsule itself is the system's: in iOS 27 the compact views are
-            // flexible in width in portrait and constrained in landscape
-            // (`isDynamicIslandLimitedInWidth`). There is no environment value or
-            // API with which an app narrows the portrait capsule; the most this
-            // builder can do is make both of its sides exactly as wide as what
-            // they draw, which is what the mark's 14-point frame and the clock's
-            // placeholder do.
+                .contentMargins(.top, 0)
+                .contentMargins(.bottom, 6)
+                .contentMargins(.horizontal, 16)
             } compactLeading: {
-                // Left: the mark, at the smallest size that still reads as the
-                // app. The image's own frame is the whole of its size; a
-                // `fixedSize` beside it would be a second opinion about a frame
-                // that is already exact.
-                Mark(diameter: 16)
+                HStack(spacing: 3) {
+                    IslandMark()
+                    if state.totalCount > 1 { Text(verbatim: "\(state.totalCount)").font(.caption2.weight(.semibold)) }
+                    if state.approvalCount > 0 { Circle().fill(.orange).frame(width: 4, height: 4) }
+                }
             } compactTrailing: {
-                // Right: the clock and nothing else. The clock carries its own
-                // bound (see `Clock`), and `.lineLimit(1)` inside it keeps the
-                // number on one line; a `fixedSize` here cannot bound a timer
-                // text and only repeats what the view already says. The compact
-                // slot is narrow, so this is the one place a caption is right;
-                // it is still a step up from the caption2 the first build used.
-                Headline(state: context.state, font: .caption.monospacedDigit().weight(.semibold))
+                CompactLongestRunning(state: state)
             } minimal: {
-                // One slot, no left and right: the mark only. The check the old
-                // build drew here made a finished activity wider than a mark for
-                // no information a one-glyph slot can carry.
-                Mark(diameter: 18)
+                IslandMark(diameter: 18)
             }
+            .widgetURL(LiveActivityLinks.overview())
+            .contentMargins(.vertical, 0, for: .expanded)
+            .keylineTint(.white.opacity(0.25))
         }
     }
 }
 
-// MARK: - The pieces both presentations draw
+// MARK: - Layout sizing
 
-/// The app's mark.
-///
-/// `MizarIcon` in this extension's asset catalog is a **template** image: white
-/// on transparent, with `template-rendering-intent` set, so the system tints it
-/// for wherever it is drawn instead of pasting a bitmap of an app icon onto the
-/// island's black background. It is derived from `AppIcon-1024.png` -- the
-/// glyph's pixels kept, white; the icon's navy background dropped to alpha; the
-/// glyph's own bounding box cropped square so the mark fills the frame rather
-/// than sitting inside a square of nothing.
-///
-/// It is also **small** on purpose. Apple's rule for a Live Activity asset is
-/// that its resolution must not exceed the presentation it is drawn in, and a
-/// 1024-pixel app icon is larger than every one of them -- at which point the
-/// system may refuse to start the activity at all. The imageset is 32/64/96
-/// pixels, so nothing here can trip that.
-///
-/// The name is a `String`, not a `LocalizedStringKey`: `Image("…")` has both
-/// initialisers and a literal picks the `String` one, which is what this is --
-/// verified with `-dump-ast`, not assumed. SwiftUI still labels an image found
-/// by name with that name, resolved the localisable way, which is the other
-/// reason the label below is `verbatim` and the reason nothing merges this
-/// element into anything (see the note at the top of this file).
-private struct Mark: View {
-    var diameter: CGFloat
+/// Uses the system's preferred sizes to decide how much content fits. Text is
+/// never scaled down to preserve a fixed number of rows.
+private struct LiveActivityTypeScale {
+    let category: UIContentSizeCategory
 
+    private var traits: UITraitCollection {
+        UITraitCollection(preferredContentSizeCategory: category)
+    }
+
+    private func font(_ style: UIFont.TextStyle) -> UIFont {
+        UIFont.preferredFont(forTextStyle: style, compatibleWith: traits)
+    }
+
+    var sessionRowHeight: CGFloat {
+        ceil(font(.footnote).lineHeight + font(.caption2).lineHeight)
+    }
+
+    var expandedIslandSessionRowHeight: CGFloat {
+        max(20, ceil(max(font(.caption1).lineHeight, font(.caption2).lineHeight)))
+    }
+
+    var approvalHeaderHeight: CGFloat {
+        max(44, ceil(font(.caption2).lineHeight + font(.footnote).lineHeight + 2))
+    }
+
+    var decisionHeight: CGFloat {
+        max(44, ceil(font(.footnote).lineHeight + 20))
+    }
+
+    var runningHeaderHeight: CGFloat {
+        max(24, ceil(font(.footnote).lineHeight + 4))
+    }
+
+    var approvalSessionCapacity: Int {
+        let gridHeight = sessionRowHeight * 2
+        let approvalHeight = approvalHeaderHeight + decisionHeight + 2
+        if gridHeight + approvalHeight + 12 <= 160 { return 4 }
+        if sessionRowHeight + approvalHeight + 12 <= 160 { return 2 }
+        return 0
+    }
+
+    var expandedIslandShowsFourSessions: Bool {
+        let approvalHeight = approvalHeaderHeight + decisionHeight
+        let regionInsets: CGFloat = 22
+        let sessionRowsHeight = expandedIslandSessionRowHeight * 2
+        let totalHeight = sessionRowsHeight + approvalHeight + regionInsets
+        return totalHeight <= 160
+    }
+
+    var runningCapacity: Int {
+        let fixedHeight = runningHeaderHeight + 12
+        for count in stride(from: 4, through: 1, by: -1) {
+            if CGFloat(count) * sessionRowHeight + fixedHeight <= 160 { return count }
+        }
+        return 0
+    }
+
+    static func current(_ size: DynamicTypeSize) -> LiveActivityTypeScale {
+        let category: UIContentSizeCategory = switch size {
+        case .xSmall: .extraSmall
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        case .xLarge: .extraLarge
+        case .xxLarge: .extraExtraLarge
+        case .xxxLarge: .extraExtraExtraLarge
+        case .accessibility1: .accessibilityMedium
+        case .accessibility2: .accessibilityLarge
+        case .accessibility3: .accessibilityExtraLarge
+        case .accessibility4: .accessibilityExtraExtraLarge
+        case .accessibility5: .accessibilityExtraExtraExtraLarge
+        @unknown default: .large
+        }
+        return LiveActivityTypeScale(category: category)
+    }
+}
+
+// MARK: - Shared content and presentation helpers
+
+private func orderedApprovals(_ approvals: [LiveActivityApproval]) -> [LiveActivityApproval] {
+    let presentation = LiveActivityPresentationStore.read()
+    return approvals.filter { approval in
+        guard let feedback = presentation.feedback[approval.compositeId],
+              feedback.phase == .accepted || feedback.phase == .rejected else { return true }
+        return Date().timeIntervalSince(feedback.updatedAt) < 0.85
+    }.sorted {
+        let left = $0.requestedAt ?? .distantPast
+        let right = $1.requestedAt ?? .distantPast
+        if left != right { return left < right }
+        return $0.compositeId < $1.compositeId
+    }
+}
+
+private func selectedApproval(
+    from approvals: [LiveActivityApproval],
+    id: String?,
+) -> LiveActivityApproval? {
+    guard !approvals.isEmpty else { return nil }
+    if let id, let match = approvals.first(where: { $0.compositeId == id }) { return match }
+    return approvals.first
+}
+
+private func visibleRows(_ state: LiveActivityState) -> [LiveActivityRow] {
+    state.rows
+}
+
+/// Similar leading titles on the same device switch together to middle
+/// truncation so the distinguishing suffix can remain visible. Identical
+/// titles stay identical; their links still carry the exact session identity.
+private func sessionTitleTruncationMode(
+    for row: LiveActivityRow,
+    among visibleRows: [LiveActivityRow],
+) -> Text.TruncationMode {
+    let title = row.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    guard !title.isEmpty else { return .tail }
+    let titleCharacters = Array(title)
+    let collides = visibleRows.contains { peer in
+        guard peer.hostId == row.hostId, peer.id != row.id else { return false }
+        let peerTitle = peer.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        guard !peerTitle.isEmpty, peerTitle != title else { return false }
+        let sharedPrefix = zip(titleCharacters, Array(peerTitle)).prefix { $0 == $1 }.count
+        return sharedPrefix >= 5
+    }
+    return collides ? .middle : .tail
+}
+
+private enum LiveActivityLinks {
+    static func overview() -> URL { LiveActivityDestination.overview.url }
+
+    static func session(_ row: LiveActivityRow) -> URL {
+        guard !row.hostId.isEmpty, !row.id.isEmpty else { return overview() }
+        return LiveActivityDestination.session(hostId: row.hostId, sessionId: row.id).url
+    }
+
+    static func approval(_ approval: LiveActivityApproval) -> URL {
+        guard !approval.hostId.isEmpty,
+              !approval.sessionId.isEmpty,
+              !approval.requestId.isEmpty
+        else { return overview() }
+        return LiveActivityDestination.approval(
+            hostId: approval.hostId,
+            sessionId: approval.sessionId,
+            requestId: approval.requestId,
+        ).url
+    }
+
+    static func card(state: LiveActivityState, selected: LiveActivityApproval? = nil) -> URL {
+        if let selected { return approval(selected) }
+        return overview()
+    }
+}
+
+private extension Text {
+    static func localized(_ key: String) -> Text {
+        Text(verbatim: NSLocalizedString(key, bundle: .main, comment: ""))
+    }
+}
+
+private extension String {
+    static func localized(_ key: String) -> String {
+        NSLocalizedString(key, bundle: .main, comment: "")
+    }
+}
+
+private struct LiveActivityPalette {
+    let appearance: LiveActivityAppearance
+    var isDark: Bool { appearance == .dark }
+    var background: Color {
+        isDark ? Color(red: 19 / 255, green: 31 / 255, blue: 61 / 255)
+            : Color(red: 0.973, green: 0.984, blue: 0.996)
+    }
+    var ink: Color { isDark ? .white : Color(red: 8 / 255, green: 17 / 255, blue: 28 / 255) }
+    var secondary: Color { isDark ? .white.opacity(0.72) : ink.opacity(0.62) }
+    var accent: Color { isDark ? .white : Color(red: 60 / 255, green: 203 / 255, blue: 244 / 255) }
+    var surface: Color { isDark ? .white.opacity(0.09) : .black.opacity(0.055) }
+    var buttonInk: Color { isDark ? Color(red: 3 / 255, green: 20 / 255, blue: 31 / 255) : ink }
+    static let island = LiveActivityPalette(appearance: .dark)
+}
+
+private struct IslandMark: View {
+    var diameter: CGFloat = 16
     var body: some View {
         Image("MizarIcon")
             .resizable()
@@ -353,393 +247,638 @@ private struct Mark: View {
     }
 }
 
-/// The icon and the app's name, which is what the activity is about.
-///
-/// The name is `verbatim`: it is the app's name on the App Store and on the
-/// computer, not a phrase to be translated. An activity that reads 米扎尔 in one
-/// language and DSH-Mizar in another would be a different app's card.
-///
-/// One element with one set of words, assembled here rather than by the
-/// `.combine` merge of a single accessibility element: see the note at the top
-/// of the file. The mark inside is decorative and says nothing; the words beside
-/// it say everything this row has to say.
-private struct TitleRow: View {
-    var body: some View {
-        HStack(spacing: 7) {
-            Mark(diameter: 18)
-            Text(verbatim: "DSH-Mizar")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: "DSH-Mizar"))
-    }
-}
-
-/// The system's ticking clock: drawn, and never handed to accessibility.
-///
-/// This is the one text in this file that SwiftUI resolves while drawing, so it
-/// is the one text that must not reach an accessibility node — its own or an
-/// element's, because a segment merged into a label is what throws when
-/// WidgetKit strips the attribute (see the note at the top of the file).
-/// `accessibilityHidden(true)` is why the clock is a view of its own instead of
-/// two lines inside `Headline`: it keeps the string the clock resolves to out of
-/// the accessibility tree, and whoever draws the clock says in words what it is
-/// (`Headline`, `SessionRows`), out of strings that are already plain.
-///
-/// ## Why the number is drawn over a hidden one
-///
-/// In WidgetKit a date-styled `Text` **fills the width it is offered** instead of
-/// taking the width of the string it draws. That is deliberate on the system's
-/// part — it lets the host swap the number without asking this process to lay
-/// out again — and it means a timer has no intrinsic width to lay out against.
-/// In the island's trailing slot there is nothing else to give that slot a size,
-/// so it is left with no width of its own and the number is not drawn: on a
-/// real device that is a wide black capsule with the mark on the left and
-/// nothing at all on the right. A `fixedSize` does not help, because the width
-/// the timer wants is the one it is offered rather than one it computes.
-///
-/// So the bound is made out of a text that cannot stretch: the hidden
-/// `Text(verbatim:)` below is the widest count a Live Activity can draw
-/// (`0:00:00`, seven monospaced digits — a Live Activity ends after eight hours),
-/// and the ticking clock is an overlay on it, so the slot has a real width and
-/// the host draws the number into it, right-aligned. The host draws "0:00" in
-/// that width with room to its left and "7:59:59" filling it; nothing is
-/// truncated, and the number is where the trailing side of the capsule is.
-private struct Clock: View {
-    /// The instant the count starts at.
+/// The timer stays isolated from accessibility; combining timer text with a
+/// label can crash WidgetKit while it archives the rendered tree.
+private struct ActivityClock: View {
     let since: Date
-    /// The size it is drawn at. The compact island asks for the smallest one;
-    /// the card asks for a body-sized figure.
     var font: Font = .footnote.monospacedDigit().weight(.semibold)
-
-    /// The widest string this clock can draw, in the same font and therefore at
-    /// the same width.
-    ///
-    /// Seven characters is the format the system uses past the first hour
-    /// ("1:23:45"); the eight-hour limit on a Live Activity means it can never
-    /// need more. "0:00:00" has the same character count as "7:59:59", so the
-    /// placeholder is the true maximum rather than an estimate.
-    private static let widest = "0:00:00"
+    private let widest = "0:00:00"
 
     var body: some View {
-        Text(verbatim: Self.widest)
+        Text(verbatim: widest)
             .font(font)
             .lineLimit(1)
-            // The placeholder exists for its width, not for its words.
             .hidden()
             .overlay(alignment: .trailing) {
                 Text(since, style: .timer)
-                    // Monospaced digits so the text does not jitter sideways as
-                    // the numbers change.
                     .font(font)
                     .lineLimit(1)
             }
-            // The string SwiftUI resolves for this clock never enters the
-            // accessibility tree. Whoever draws it says in words what it is.
             .accessibilityHidden(true)
     }
 }
 
-/// The island's right side: a counting clock, or the check that says nothing is.
-///
-/// One row's worth of information, deliberately. On the compact island it is a
-/// duration and nothing else; the card asks for the same view at a larger size.
-private struct Headline: View {
-    let state: LiveActivityState
-    var font: Font = .footnote.monospacedDigit().weight(.semibold)
+/// Running and waiting sessions keep counting from the turn start. Offline
+/// rows show the last elapsed value as a frozen sample rather than a live timer.
+private struct SessionElapsed: View {
+    let row: LiveActivityRow
+    let font: Font
 
     var body: some View {
-        if let longest = state.rows.first {
-            // The system ticks this. No update from the app, ever, for the
-            // seconds to move.
-            Clock(since: longest.countingSince, font: font)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text.translated("Running time"))
+        if row.status == .offline {
+            Text(verbatim: Self.format(row.elapsed))
+                .font(font.monospacedDigit())
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityHidden(true)
         } else {
-            FinishedCheck()
+            ActivityClock(since: row.countingSince, font: font.monospacedDigit())
         }
     }
-}
 
-/// The green check every finished presentation ends with.
-private struct FinishedCheck: View {
-    var body: some View {
-        Image(systemName: "checkmark.circle.fill")
-            .foregroundStyle(.green)
-            .accessibilityLabel(Text.translated("Every session has finished"))
+    private static func format(_ elapsed: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(elapsed))
+        let seconds = totalSeconds % 60
+        let minutes = totalSeconds / 60
+        if minutes < 60 { return "\(minutes):\(String(format: "%02d", seconds))" }
+        return "\(minutes / 60):\(String(format: "%02d", minutes % 60)):\(String(format: "%02d", seconds))"
     }
 }
 
-/// The rows the decision layer produced: one or two, longest-running first.
-///
-/// Each row's left side is the session's title, falling back to the beginning
-/// of that session's most recent instruction when the host has not named it;
-/// its right side is the time it has been going. The cutting of the fallback is
-/// not done here -- `LiveActivityDecision` decides how much of an instruction
-/// survives, and this file would be a second opinion about it if it cut again.
-///
-/// The card asks for the prominent size: a body-sized title, a body-sized clock,
-/// a 44-point row and a grid, so the two rows line up and the time column is
-/// right-aligned whether the session has been running for nine seconds or nine
-/// hours. The expanded island keeps the compact type: its height is its own cap
-/// and the operator asked for the card to grow, not the island.
-private struct SessionRows: View {
+private struct CompactLongestRunning: View {
     let state: LiveActivityState
-    /// Whether to draw the larger card typography.
-    var prominent = false
-    /// The card's appearance, or the island's always-dark palette.
-    var palette: LiveActivityPalette
-    /// A cap for the expanded island, where the approval block is already tall.
-    var maximumRows: Int? = nil
-
-    private var rows: [LiveActivityRow] {
-        guard let maximumRows else { return state.rows }
-        return Array(state.rows.prefix(maximumRows))
-    }
-
-    private var titleFont: Font {
-        prominent ? .body.weight(.medium) : .subheadline.weight(.medium)
-    }
-    private var clockFont: Font {
-        prominent
-            ? .body.monospacedDigit().weight(.semibold)
-            : .subheadline.monospacedDigit().weight(.semibold)
-    }
-    private var rowHeight: CGFloat? { prominent ? 44 : 30 }
 
     var body: some View {
-        Grid(
-            alignment: .leading,
-            horizontalSpacing: prominent ? 12 : 10,
-            verticalSpacing: prominent ? 4 : 6,
-        ) {
-            ForEach(rows) { row in
-                GridRow(alignment: .center) {
-                    // A row with no title and no instruction is a session the
-                    // app has not read yet. It says only how long, which is
-                    // true; the session id in the operator's place would be the
-                    // app talking.
-                    Text(verbatim: row.displayTitle)
-                        .font(titleFont)
-                        .foregroundStyle(palette.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        // The first column takes the width the card leaves and
-                        // the second keeps its natural width, so the numbers
-                        // form one right-aligned column rather than drifting
-                        // with the title beside them.
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .gridCellAnchor(.leading)
-                    Clock(since: row.countingSince, font: clockFont)
-                        .foregroundStyle(palette.secondaryInk)
-                        .gridCellAnchor(.trailing)
-                }
-                .frame(minHeight: rowHeight)
-                // One element for VoiceOver, but its words are put together here
-                // rather than by SwiftUI. `.combine` is the other way to get one
-                // element, and it is the one thing in this file that must not be
-                // used: it builds the element's label by merging the children's
-                // accessibility text, and the second child above is a `Clock` --
-                // a `Text(_:style:.timer)`, a *resolvable* segment, the same kind
-                // of attribute as the localisable one the note at the top of this
-                // file is about. The merged label then carries a segment range
-                // measured against the timer's own string, WidgetKit's archiver
-                // strips that attribute with `removeAttribute(_:range:)`, and
-                // Foundation throws `NSRangeException` -- out of
-                // `enumerateAttribute:inRange:options:usingBlock:`, past every
-                // catch, and into SIGABRT. A label assembled out of plain strings
-                // has no segment to strip.
-                //
-                // `.ignore` is what makes the label the whole element: the two
-                // `Text`s above stay exactly as they are on screen, and VoiceOver
-                // reads the one sentence below instead of their fragments. The
-                // clock is hidden from accessibility inside `Clock` as well, so
-                // there is no version of this element -- combined, ignored or
-                // read on its own -- that can carry the timer's string.
+        if let since = state.longestRunningSince {
+            ActivityClock(since: since, font: .caption.monospacedDigit().weight(.semibold))
+                .accessibilityLabel(Text.localized("Longest running session"))
+        } else if state.approvalCount > 0 {
+            Image(systemName: "hand.raised.fill")
+                .foregroundStyle(.orange)
+                .accessibilityLabel(Text.localized("Approval waiting"))
+        } else {
+            Text(verbatim: "0")
+                .font(.caption.weight(.semibold))
+                .accessibilityLabel(Text.localized("No running sessions"))
+        }
+    }
+}
+
+private struct SessionSummary: View {
+    let row: LiveActivityRow
+    let palette: LiveActivityPalette
+    var compact = false
+    var linked = false
+    var titleTruncationMode: Text.TruncationMode = .tail
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var statusText: String {
+        switch row.status {
+        case .running: .localized("Running")
+        case .waitingApproval: .localized("Waiting for approval")
+        case .waitingAnswer: .localized("Waiting for a reply")
+        case .offline: .localized("Offline")
+        }
+    }
+
+    private var title: String {
+        let value = row.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? .localized("Untitled session") : value
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if linked {
+            Link(destination: LiveActivityLinks.session(row)) { summary }
+                .buttonStyle(.plain)
+                .accessibilityLabel(accessibilityLabel)
+        } else {
+            summary
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(row.spokenLabel)
+                .accessibilityLabel(accessibilityLabel)
+        }
+    }
+
+    private var summary: some View {
+        Group {
+            if compact {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 4) {
+                        Image(systemName: statusSymbol)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(statusColor)
+                            .accessibilityHidden(true)
+                        Text(verbatim: title)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(palette.ink)
+                            .lineLimit(1)
+                            .truncationMode(titleTruncationMode)
+                    }
+                    HStack(spacing: 3) {
+                        Text(verbatim: row.hostName)
+                            .font(.caption2)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .layoutPriority(1)
+                    }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(verbatim: title)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(palette.ink)
+                            .lineLimit(1)
+                            .truncationMode(titleTruncationMode)
+                        Text(verbatim: [row.hostName, statusText].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if row.status != .offline {
+                        SessionElapsed(row: row, font: .body)
+                            .foregroundStyle(palette.secondary)
+                    } else {
+                        SessionElapsed(row: row, font: .caption2)
+                            .foregroundStyle(palette.secondary)
+                    }
+                }
             }
+        }
+        .padding(.horizontal, compact ? 5 : 6)
+        .frame(maxWidth: .infinity, minHeight: LiveActivityTypeScale.current(dynamicTypeSize).sessionRowHeight, alignment: .leading)
+        .background(compact ? Color.clear : palette.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .contentShape(Rectangle())
+    }
+
+    private var accessibilityLabel: Text {
+        Text(verbatim: [title, row.hostName, statusText, String.localized(row.status == .offline ? "Last known elapsed" : "Elapsed time")]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", "))
+    }
+
+    private var statusSymbol: String {
+        switch row.status {
+        case .running: "circle.fill"
+        case .waitingApproval: "hand.raised.fill"
+        case .waitingAnswer: "questionmark.circle.fill"
+        case .offline: "wifi.slash"
+        }
+    }
+
+    private var statusColor: Color {
+        switch row.status {
+        case .running: .green
+        case .waitingApproval: .orange
+        case .waitingAnswer: .yellow
+        case .offline: palette.secondary
         }
     }
 }
 
-/// The approval block: what is blocked, and the two answers.
-///
-/// The only interactive thing this extension draws. Two rules shape it:
-///
-///   - **The buttons are intents, not taps into the app.**
-///     `Button(intent: AllowOnceIntent(...))` runs in the app's process, which the
-///     system wakes for exactly this, so the operator answers from the Lock
-///     Screen without the app coming up.
-///   - **Every string is resolved here.** `Text.translated` and
-///     `Text(verbatim:)` only -- see the note at the top of this file about the
-///     localisable segment attribute that cannot cross into the host process.
-private struct ApprovalRows: View {
-    let approvals: [LiveActivityApproval]
-    /// Whether to draw the larger card typography.
-    var prominent = false
-    /// The card's appearance, or the island's always-dark palette.
-    var palette: LiveActivityPalette
+private struct IslandSessionSummary: View {
+    let row: LiveActivityRow
+    let state: LiveActivityState
+    let titleTruncationMode: Text.TruncationMode
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var isSelected: Bool {
+        let presentation = LiveActivityPresentationStore.read()
+        let selected = selectedApproval(from: orderedApprovals(state.approvals), id: presentation.selectedApprovalId)
+        return selected?.hostId == row.hostId && selected?.sessionId == row.id
+    }
+    var body: some View {
+        Link(destination: LiveActivityLinks.session(row)) {
+            HStack(spacing: 3) {
+                Image(systemName: statusSymbol)
+                    .font(.system(size: 8))
+                    .foregroundStyle(statusColor)
+                    .accessibilityHidden(true)
+                Text(verbatim: row.displayTitle)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(titleTruncationMode)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(verbatim: row.hostName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: 44, alignment: .trailing)
+                    .layoutPriority(1)
+            }
+            .frame(minHeight: LiveActivityTypeScale.current(dynamicTypeSize).expandedIslandSessionRowHeight, alignment: .leading)
+            .background(isSelected ? Color.white.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: [row.displayTitle, row.hostName, row.status.rawValue].joined(separator: ", ")))
+    }
 
-    private var titleFont: Font {
-        prominent ? .subheadline.weight(.semibold) : .footnote.weight(.semibold)
+    private var statusSymbol: String {
+        switch row.status {
+        case .running: "circle.fill"
+        case .waitingApproval: "hand.raised.fill"
+        case .waitingAnswer: "questionmark.circle.fill"
+        case .offline: "wifi.slash"
+        }
     }
-    private var detailFont: Font { prominent ? .footnote : .caption }
-    private var buttonFont: Font {
-        .footnote.weight(.semibold)
+
+    private var statusColor: Color {
+        switch row.status {
+        case .running: .green
+        case .waitingApproval: .orange
+        case .waitingAnswer: .yellow
+        case .offline: Color.white.opacity(0.68)
+        }
     }
+}
+
+private struct IslandSessionColumn: View {
+    let state: LiveActivityState
+    var trailing = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        ForEach(approvals) { approval in
-            VStack(alignment: .leading, spacing: prominent ? 6 : 5) {
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.caption)
-                        .foregroundStyle(palette.secondaryInk)
-                        .accessibilityHidden(true)
-                    // The tool's name, from the computer. `verbatim`: it is an
-                    // identifier the operator already knows, not a phrase.
-                    Text(verbatim: approval.headline)
-                        .font(titleFont)
-                        .foregroundStyle(palette.ink)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
+        if LiveActivityTypeScale.current(dynamicTypeSize).expandedIslandShowsFourSessions {
+            VStack(alignment: .leading, spacing: 0) {
+                let rows = Array(visibleRows(state).prefix(4))
+                let first = trailing ? 1 : 0
+                if rows.indices.contains(first) {
+                    IslandSessionSummary(
+                        row: rows[first],
+                        state: state,
+                        titleTruncationMode: sessionTitleTruncationMode(for: rows[first], among: rows),
+                    )
                 }
-                // The card has room for the reason; the expanded island does
-                // not. The island keeps the tool name and the two answers --
-                // the action is the point -- and the card below carries the
-                // detail.
-                if prominent && !approval.detail.isEmpty {
-                    Text(verbatim: approval.detail)
-                        .font(detailFont)
-                        .foregroundStyle(palette.secondaryInk)
-                        .lineLimit(2)
-                }
-                HStack(spacing: 8) {
-                    Button(intent: AllowOnceIntent(requestId: approval.requestId)) {
-                        Text.translated("Allow once")
-                            .font(buttonFont)
-                            .foregroundStyle(palette.primaryButtonInk)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, prominent ? 7 : 6)
-                            .background(palette.primaryButtonFill, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    Button(intent: RejectIntent(requestId: approval.requestId)) {
-                        Text.translated("Reject")
-                            .font(buttonFont)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, prominent ? 7 : 6)
-                            .background(palette.secondaryButtonFill, in: Capsule())
-                            .foregroundStyle(palette.secondaryButtonInk)
-                    }
-                    .buttonStyle(.plain)
+                if rows.indices.contains(first + 2) {
+                    IslandSessionSummary(
+                        row: rows[first + 2],
+                        state: state,
+                        titleTruncationMode: sessionTitleTruncationMode(for: rows[first + 2], among: rows),
+                    )
                 }
             }
-            .padding(prominent ? 10 : 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(palette.surface, in: RoundedRectangle(cornerRadius: 12))
+        } else if trailing {
+            IslandCount(state: state)
+        } else {
+            IslandMark(diameter: 14)
         }
     }
 }
 
-/// The card's heading: the mark and the app's name, at reading size.
-///
-/// Larger than the island's title row on purpose. The card is the thing that
-/// has to read as a card on a lock screen full of notifications, and a caption
-/// above body-sized rows reads as a footnote to them.
-private struct CardTitle: View {
+private struct IslandCount: View {
+    let state: LiveActivityState
+    var body: some View {
+        Text(verbatim: "\(state.totalCount)")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.white)
+            .accessibilityLabel(Text.localized("Session count"))
+    }
+}
+
+// MARK: - Approval
+
+private struct ApprovalFeedbackView: View {
+    let approval: LiveActivityApproval
+    let presentation: LiveActivityPresentation
     let palette: LiveActivityPalette
 
-    var body: some View {
-        HStack(spacing: 9) {
-            Mark(diameter: 24)
-                .foregroundStyle(palette.accent)
-            Text(verbatim: "DSH-Mizar")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(palette.ink)
-                .lineLimit(1)
+    private var feedback: LiveActivityApprovalFeedback? {
+        presentation.feedback[approval.compositeId]
+    }
+
+    private var label: String {
+        guard let feedback else { return "" }
+        switch feedback.phase {
+        case .sending: return .localized("Sending approval")
+        case .accepted: return .localized("Approval accepted")
+        case .rejected: return .localized("Approval rejected")
+        case .failed: return .localized("Approval failed")
+        case .unknown: return .localized("Approval result unknown")
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: "DSH-Mizar"))
+    }
+
+    var body: some View {
+        if let feedback, feedback.phase != .accepted && feedback.phase != .rejected {
+            Text(verbatim: [label, feedback.message].filter { !$0.isEmpty }.joined(separator: " · "))
+                .font(.caption2)
+                .foregroundStyle(feedback.phase == .failed ? .red : palette.secondary)
+                .lineLimit(2)
+        } else if let feedback {
+            Text(verbatim: [label, feedback.message].filter { !$0.isEmpty }.joined(separator: " · "))
+                .font(.caption2)
+                .foregroundStyle(palette.secondary)
+                .lineLimit(2)
+        }
     }
 }
 
-/// The whole card: the title row, then the rows.
-///
-/// The height is content, not a frame. With no approval it is a 24-point title,
-/// two 44-point rows and 11 points of padding above and below: about 143 points
-/// before WidgetKit's own margins. That is as tall as the Lock Screen's activity
-/// cap leaves room for -- the system's limit is around 160–200 points. With an
-/// approval it is a title and one approval, and the rows are deliberately left
-/// to the island: an approval plus two 44-point rows measured 205 points and
-/// had its title clipped off the top.
-private struct LiveActivityCard: View {
+private struct ApprovalBlock: View {
+    let approval: LiveActivityApproval
+    let approvals: [LiveActivityApproval]
     let state: LiveActivityState
-    /// The phone's appearance when the card was started. Read from the
-    /// attributes, not the environment: the Lock Screen draws a Live Activity in
-    /// its dark vibrant presentation even in light mode, so the environment says
-    /// "dark" for both appearances.
-    let appearance: LiveActivityAppearance
+    let presentation: LiveActivityPresentation
+    let palette: LiveActivityPalette
+    var compact = false
+    @Environment(\.redactionReasons) private var redactionReasons
 
-    private var palette: LiveActivityPalette {
-        LiveActivityPalette(appearance: appearance)
+    private var selectedIndex: Int {
+        approvals.firstIndex(where: { $0.compositeId == approval.compositeId }) ?? 0
+    }
+
+    private var feedback: LiveActivityApprovalFeedback? {
+        presentation.feedback[approval.compositeId]
+    }
+
+    private var isSending: Bool { feedback?.phase == .sending }
+    private var outcomeUnknown: Bool { feedback?.phase == .unknown }
+    private var alreadyAnswered: Bool { feedback?.phase == .accepted || feedback?.phase == .rejected }
+    private var staleRequest: Bool {
+        guard feedback?.phase == .failed else { return false }
+        let message = feedback?.message.lowercased() ?? ""
+        return message.contains("changed") || message.contains("details") || message.contains("详情") || message.contains("已变")
+    }
+    private var mustViewDetails: Bool {
+        approval.hostId.isEmpty || approval.sessionId.isEmpty || approval.requestId.isEmpty
+            || approval.requiresDetail || staleRequest || session?.status == .offline || session == nil
+            || approval.tool.isEmpty || approval.detail.isEmpty || redactionReasons.contains(.privacy)
+    }
+    private var canDecide: Bool {
+        !mustViewDetails && !isSending && !outcomeUnknown && !alreadyAnswered
+    }
+
+    private var session: LiveActivityRow? {
+        state.rows.first { $0.hostId == approval.hostId && $0.id == approval.sessionId }
+    }
+
+    private var contextText: String {
+        [approval.tool, approval.detail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            CardTitle(palette: palette)
-            // A blocked turn first, for the same reason as on the island: this is
-            // the row the operator can act on. The card carries one approval and
-            // no clocks; the expanded island carries the oldest approval plus
-            // one running row.
-            if !state.approvals.isEmpty {
-                // One question on the card, and no clocks beside it. A card with
-                // an approval and two 44-point rows is taller than the Lock
-                // Screen's activity cap -- measured at 205 points against a cap
-                // of about 160 -- and the system clips the title off the top
-                // rather than shrinking anything. The approval is the action;
-                // the island still carries the longest-running row, and the
-                // next state brings the second approval once this one is
-                // answered.
-                ApprovalRows(
-                    approvals: Array(state.approvals.prefix(1)),
-                    prominent: true,
-                    palette: palette,
-                )
-            }
-            if state.rows.isEmpty && state.approvals.isEmpty {
-                // Nothing is running. The decision layer has no rows to give and
-                // the card says so in words rather than by being blank, because
-                // an activity is only ever *started* running: no rows here
-                // means work that has just stopped, not an empty start.
-                HStack(spacing: 6) {
-                    FinishedCheck()
-                    Text.translated("Every session has finished")
-                        .font(.body)
-                    Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+            content(showDetails: mustViewDetails || outcomeUnknown, fitContext: !mustViewDetails && !outcomeUnknown)
+            content(showDetails: true, fitContext: false)
+        }
+    }
+
+    private func content(showDetails: Bool, fitContext: Bool) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 0 : 2) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: statusLabel)
+                        .font(.caption2)
+                        .foregroundStyle(feedback?.phase == .failed ? .red : palette.secondary)
+                        .lineLimit(1)
+                    Text(verbatim: feedback?.message ?? contextText)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: fitContext, vertical: false)
+                        .privacySensitive()
                 }
-            } else if state.approvals.isEmpty {
-                SessionRows(state: state, prominent: true, palette: palette)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if state.approvalCount > state.approvals.count {
+                    Link(destination: LiveActivityLinks.overview()) {
+                        Text.localized("All approvals").font(.caption2.weight(.semibold))
+                            .frame(width: 64, height: 44).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                } else if approvals.count > 1 {
+                    Button(intent: NextApprovalIntent()) {
+                        HStack(spacing: 3) {
+                            Text.localized("Next")
+                            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .frame(width: 64, height: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text.localized("Next approval"))
+                }
+            }
+            .frame(minHeight: 44)
+            if showDetails {
+                Link(destination: LiveActivityLinks.approval(approval)) {
+                    decisionLabel("View approval", palette: palette, primary: true)
+                }.buttonStyle(.plain)
+            } else {
+                HStack(spacing: 8) {
+                    Button(intent: RejectIntent(requestId: approval.requestId, hostId: approval.hostId, sessionId: approval.sessionId)) {
+                        decisionLabel("Reject", palette: palette, primary: false)
+                    }.buttonStyle(.plain).disabled(!canDecide)
+                    Button(intent: AllowOnceIntent(requestId: approval.requestId, hostId: approval.hostId, sessionId: approval.sessionId)) {
+                        decisionLabel(isSending ? "Sending" : "Allow once", palette: palette, primary: true)
+                    }.buttonStyle(.plain).disabled(!canDecide)
+                }
             }
         }
-        // The system leaves only a few points between a Live Activity's content
-        // and its rounded edge, so a leading-aligned card ends up with its title
-        // against the glass -- a real device screenshot showed exactly that. This
-        // is the inset that makes it read as a card rather than as text that
-        // overflowed it; 10 vertical against 16 horizontal keeps the optical
-        // balance at these type sizes.
-        .padding(.vertical, 11)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var statusLabel: String {
+        if let feedback {
+            switch feedback.phase {
+            case .sending: return String.localized("Sending approval")
+            case .accepted: return String.localized("Approval accepted")
+            case .rejected: return String.localized("Approval rejected")
+            case .failed: return String.localized("Approval failed")
+            case .unknown: return String.localized("Approval result unknown")
+            }
+        }
+        var label = "\(String.localized("Approval")) \(selectedIndex + 1)/\(max(state.approvalCount, approvals.count))"
+        if state.totalCount > state.rows.count { label += " · +\(state.totalCount - state.rows.count)" }
+        return label
+    }
+
+    private func decisionLabel(_ key: String, palette: LiveActivityPalette, primary: Bool) -> some View {
+        Text.localized(key)
+            .font(.footnote.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(primary ? palette.accent : palette.surface, in: Capsule())
+            .foregroundStyle(primary ? palette.buttonInk : palette.ink)
+            .contentShape(Capsule())
+    }
+}
+
+// MARK: - Lock Screen card
+
+private struct LiveActivityCard: View {
+    let state: LiveActivityState
+    let appearance: LiveActivityAppearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var palette: LiveActivityPalette { LiveActivityPalette(appearance: appearance) }
+    private var type: LiveActivityTypeScale { .current(dynamicTypeSize) }
+    private var rows: [LiveActivityRow] { visibleRows(state) }
+    private var approvals: [LiveActivityApproval] { orderedApprovals(state.approvals) }
+    private var presentation: LiveActivityPresentation { LiveActivityPresentationStore.read() }
+    private var approval: LiveActivityApproval? { selectedApproval(from: approvals, id: presentation.selectedApprovalId) }
+
+    var body: some View {
+        Group {
+            if let approval {
+                approvalSurface(approval)
+            } else {
+                runningSurface
+            }
+        }
         .foregroundStyle(palette.ink)
-        // The light card is the icon tile's pale blue-white; the dark card is
-        // the app's navy. The tint is set here rather than left to the system,
-        // because the card has two appearances of its own and a wallpaper-tinted
-        // ground would leave dark text on a dark card (or white on a pale one).
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .activityBackgroundTint(palette.background)
         .activitySystemActionForegroundColor(palette.ink)
+    }
+
+    @ViewBuilder
+    private func approvalSurface(_ approval: LiveActivityApproval) -> some View {
+        let capacity = type.approvalSessionCapacity
+        let gridRows = Array(rows.prefix(4))
+        VStack(alignment: .leading, spacing: 0) {
+            if capacity == 4 {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 0) {
+                    ForEach(gridRows, id: \.compositeId) { row in
+                        SessionSummary(
+                            row: row,
+                            palette: palette,
+                            compact: true,
+                            titleTruncationMode: sessionTitleTruncationMode(for: row, among: gridRows),
+                        )
+                            .background(row.compositeId == sessionCompositeId(for: approval) ? palette.accent.opacity(0.18) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
+                ApprovalBlock(approval: approval, approvals: approvals, state: state, presentation: presentation, palette: palette)
+                    .padding(.top, 0)
+            } else if capacity == 2 {
+                HStack(spacing: 4) {
+                    let selectedRows = state.approvalSurfaceRows(capacity: capacity, selectedApproval: approval)
+                    ForEach(selectedRows, id: \.compositeId) { row in
+                        SessionSummary(row: row, palette: palette, compact: true,
+                                       titleTruncationMode: sessionTitleTruncationMode(for: row, among: selectedRows))
+                            .background(row.compositeId == sessionCompositeId(for: approval) ? palette.accent.opacity(0.18) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
+                ApprovalBlock(approval: approval, approvals: approvals, state: state, presentation: presentation, palette: palette)
+                    .padding(.top, 0)
+            } else {
+                Text(verbatim: "\(String.localized("Approval waiting")) · \(state.approvalCount)")
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(2)
+                    .padding(.horizontal, 6)
+                detailLink(approval)
+            }
+        }
+    }
+
+    private var runningSurface: some View {
+        let capacity = state.totalCount > type.runningCapacity ? max(0, type.runningCapacity - 2) : type.runningCapacity
+        return VStack(alignment: .leading, spacing: 0) {
+            if capacity == 0 {
+                Text(verbatim: "\(state.totalCount) \(String.localized("Sessions"))")
+                    .font(.caption2.weight(.semibold)).lineLimit(1)
+                Link(destination: LiveActivityLinks.overview()) {
+                    Text.localized("View overview")
+                        .font(.footnote.weight(.semibold)).lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }.buttonStyle(.plain)
+            } else {
+            HStack(spacing: 6) {
+                Image("MizarIcon")
+                    .resizable().scaledToFit().frame(width: 16, height: 16)
+                    .accessibilityHidden(true)
+                Text(verbatim: "\(state.totalCount) \(String.localized("Sessions"))")
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Text(verbatim: "\(state.deviceCount) \(String.localized("Devices"))")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
+            }
+            .frame(minHeight: type.runningHeaderHeight)
+
+            if capacity > 0 {
+                let displayRows = Array(rows.prefix(capacity))
+                ForEach(displayRows, id: \.compositeId) { row in
+                    SessionSummary(row: row, palette: palette,
+                                  titleTruncationMode: sessionTitleTruncationMode(for: row, among: displayRows))
+                        .frame(minHeight: type.sessionRowHeight, alignment: .leading)
+                }
+            }
+            let hiddenCount = max(0, state.totalCount - min(rows.count, capacity))
+            if hiddenCount > 0 {
+                Link(destination: LiveActivityLinks.overview()) {
+                    Text(verbatim: capacity == 0
+                         ? "\(state.totalCount) \(String.localized("Sessions")) · \(String.localized("View overview"))"
+                         : "+\(hiddenCount) \(String.localized("More sessions")) · \(String.localized("View overview"))")
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            }
+        }
+    }
+
+    private func detailLink(_ approval: LiveActivityApproval) -> some View {
+        Link(destination: LiveActivityLinks.approval(approval)) {
+            Text.localized("View approval")
+                .font(.footnote.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(palette.accent, in: Capsule())
+                .foregroundStyle(palette.buttonInk)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sessionCompositeId(for approval: LiveActivityApproval) -> String? {
+        rows.first { $0.hostId == approval.hostId && $0.id == approval.sessionId }?.compositeId
+    }
+}
+
+// MARK: - Expanded island
+
+private struct IslandBottom: View {
+    let state: LiveActivityState
+    let presentation: LiveActivityPresentation
+    let approval: LiveActivityApproval?
+    private var palette: LiveActivityPalette { .island }
+    private var rows: [LiveActivityRow] { visibleRows(state) }
+    private var approvals: [LiveActivityApproval] { orderedApprovals(state.approvals) }
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var type: LiveActivityTypeScale { .current(dynamicTypeSize) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if type.expandedIslandShowsFourSessions {
+                if let approval {
+                    ApprovalBlock(approval: approval, approvals: approvals, state: state, presentation: presentation, palette: palette, compact: true)
+                } else if state.totalCount > rows.prefix(4).count {
+                    overviewLink
+                }
+            } else {
+                if let approval, type.sessionRowHeight < 65,
+                   let selected = rows.first(where: { $0.hostId == approval.hostId && $0.id == approval.sessionId }) {
+                    SessionSummary(row: selected, palette: palette, compact: true, linked: true,
+                                   titleTruncationMode: sessionTitleTruncationMode(for: selected, among: rows))
+                } else {
+                    Text(verbatim: "\(state.totalCount) \(String.localized("Sessions")) · \(state.approvalCount) \(String.localized("Approval"))")
+                        .font(.caption2.weight(.semibold)).lineLimit(1)
+                }
+                Link(destination: approval.map(LiveActivityLinks.approval) ?? LiveActivityLinks.overview()) {
+                    Text.localized(approval == nil ? "View overview" : "View approval")
+                        .font(.footnote.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+        }
+        .foregroundStyle(.white)
+    }
+    private var overviewLink: some View {
+        Link(destination: LiveActivityLinks.overview()) {
+            Text(verbatim: "+\(max(0, state.totalCount - rows.count)) \(String.localized("More sessions"))")
+                .font(.caption2.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        }.buttonStyle(.plain)
     }
 }

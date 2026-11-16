@@ -320,7 +320,8 @@ final class ConversationImagesUITests: XCTestCase {
     private static func methodCount(_ method: String) -> Int {
         guard let data = get("/loads"),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let methods = json["methods"] as? [String: Any]
+              let methods = (json["primaryMethods"] as? [String: Any])
+                ?? (json["methods"] as? [String: Any])
         else {
             return -1
         }

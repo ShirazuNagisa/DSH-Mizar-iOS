@@ -41,6 +41,13 @@ final class AppModel {
     }
 
     private(set) var phase: Phase = .launching
+    var liveActivityDestination: LiveActivityDestination?
+    var liveActivityRelayHeaders: [String: String] {
+        guard !isSelfHosted else { return pairingHeaders }
+        var headers = pairingHeaders
+        headers.merge(account.identity.sessionHeaders) { _, new in new }
+        return headers
+    }
     /// The host this device is paired with, once known.
     private(set) var host: PairedHost?
     /// Every machine this phone is paired with, oldest pairing first.
@@ -1093,6 +1100,127 @@ final class AppModel {
     @ObservationIgnored private var liveActivityTokenObserver: (any NSObjectProtocol)?
     /// Ends the card when the phone's own link is still gone after the grace.
     @ObservationIgnored private var liveActivityDisconnectTask: Task<Void, Never>?
+    @ObservationIgnored private let multiHostLiveActivity = MultiHostLiveActivityMonitor()
+    @ObservationIgnored private var multiHostLiveActivityTask: Task<Void, Never>?
+    @ObservationIgnored private var aggregateLiveActivityState: LiveActivityState?
+    @ObservationIgnored private var isUnpairing = false
+    @ObservationIgnored private var liveActivityAuthorizationRevision: UInt64 = 0
+    @ObservationIgnored private var liveActivityUnpairRevision: UInt64 = 0
+    @ObservationIgnored private var forgottenLiveActivityHosts: Set<String> = []
+    @ObservationIgnored private var liveActivityHostAuthorizationRevisions: [String: UInt64] = [:]
+    @ObservationIgnored private var directPushRegistrations: [String: Int] = [:]
+    @ObservationIgnored private var pushRegistrationDrainWaiters: [(
+        hostIds: Set<String>?,
+        continuation: CheckedContinuation<Void, Never>
+    )] = []
+
+    private func revokeLiveActivityAuthorization(for hostIds: [String]) {
+        liveActivityAuthorizationRevision &+= 1
+        for hostId in hostIds {
+            forgottenLiveActivityHosts.insert(hostId)
+            liveActivityHostAuthorizationRevisions[hostId] = liveActivityAuthorizationRevision
+        }
+    }
+
+    private func authorizeLiveActivityHost(_ hostId: String) {
+        liveActivityAuthorizationRevision &+= 1
+        forgottenLiveActivityHosts.remove(hostId)
+        liveActivityHostAuthorizationRevisions[hostId] = liveActivityAuthorizationRevision
+    }
+
+    private func liveActivityHostsAuthorized(_ candidates: [PairedHost]) -> [PairedHost] {
+        candidates.filter { !forgottenLiveActivityHosts.contains($0.hostId) }
+    }
+
+    private func pairingStillAuthorized(
+        hostId: String,
+        authorizationAtStart: UInt64,
+        unpairAtStart: UInt64,
+    ) -> Bool {
+        guard !isUnpairing, liveActivityUnpairRevision == unpairAtStart else { return false }
+        return (liveActivityHostAuthorizationRevisions[hostId] ?? 0) <= authorizationAtStart
+    }
+
+    private func waitForDirectPushRegistrations(hostIds: Set<String>? = nil) async {
+        let hasPending = directPushRegistrations.contains { hostId, count in
+            count > 0 && (hostIds.map { $0.contains(hostId) } ?? true)
+        }
+        guard hasPending else { return }
+        await withCheckedContinuation { continuation in
+            pushRegistrationDrainWaiters.append((hostIds, continuation))
+        }
+    }
+
+    private func finishDirectPushRegistration(hostId: String) {
+        if let count = directPushRegistrations[hostId], count > 1 {
+            directPushRegistrations[hostId] = count - 1
+        } else {
+            directPushRegistrations.removeValue(forKey: hostId)
+        }
+        var waiting: [(hostIds: Set<String>?, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in pushRegistrationDrainWaiters {
+            let stillPending = directPushRegistrations.contains { hostId, count in
+                count > 0 && (waiter.hostIds.map { $0.contains(hostId) } ?? true)
+            }
+            if stillPending {
+                waiting.append(waiter)
+            } else {
+                waiter.continuation.resume()
+            }
+        }
+        pushRegistrationDrainWaiters = waiting
+    }
+
+    private func updateMultiHostLiveActivityPoll() {
+        guard appIsActive, !isUnpairing else {
+            multiHostLiveActivityTask?.cancel()
+            multiHostLiveActivityTask = nil
+            return
+        }
+        guard multiHostLiveActivityTask == nil else { return }
+        multiHostLiveActivityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshMultiHostLiveActivity()
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
+        }
+    }
+
+    private func refreshMultiHostLiveActivity() async {
+        guard !isUnpairing else { return }
+        #if DEBUG
+        if DebugLiveActivityValidation.enabled {
+            await liveActivity.refresh(state: DebugLiveActivityValidation.state(hosts: hosts))
+            return
+        }
+        #endif
+        let authorizationAtStart = liveActivityAuthorizationRevision
+        let authorizedHosts = liveActivityHostsAuthorized(hosts)
+        guard !authorizedHosts.isEmpty else {
+            if phase != .launching {
+                aggregateLiveActivityState = .init()
+                await liveActivity.refresh(state: .init())
+            }
+            return
+        }
+        guard settings.values.liveActivitiesEnabled else {
+            await liveActivity.refresh(state: .init())
+            return
+        }
+        if let state = await multiHostLiveActivity.refresh(
+            hosts: authorizedHosts, relayHeaders: liveActivityRelayHeaders,
+            accountId: isSelfHosted ? nil : account.session?.profile.id,
+            routeSettings: .init(
+                localNetworkFirst: settings.localNetworkFirst,
+                directConnection: settings.directConnection,
+            ),
+        ), !Task.isCancelled, !isUnpairing,
+           authorizationAtStart == liveActivityAuthorizationRevision {
+            aggregateLiveActivityState = state
+            await liveActivity.refresh(state: state)
+        }
+    }
 
     /// The observer on the push-to-start token.
     ///
@@ -1300,11 +1428,7 @@ final class AppModel {
                 // socket: this process was launched in the background, not
                 // opened. Connect once so the new end address can be published
                 // before the session finishes.
-                if self.connection == nil {
-                    await self.registerPushInBackground()
-                } else {
-                    await self.syncPushRegistration()
-                }
+                await self.registerPushInBackground()
             }
         }
         // The other token the registration carries, and the one that arrives
@@ -1316,7 +1440,7 @@ final class AppModel {
             object: nil,
             queue: .main,
         ) { [weak self] _ in
-            Task { await self?.syncPushRegistration() }
+            Task { await self?.registerPushInBackground() }
         }
         // The account owns nothing about the connection, and the connection owns
         // nothing about the account -- these two closures are the whole contract
@@ -1361,7 +1485,7 @@ final class AppModel {
     /// disconnect has outlived a network handover.
     func endLiveActivitiesForDisconnect() async {
         cancelLiveActivityDisconnectSweep()
-        await liveActivity.endForDisconnect()
+        await refreshLiveActivity()
     }
 
     /// The link is gone; give a handover three seconds, then take the card down.
@@ -1377,7 +1501,7 @@ final class AppModel {
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled, let self else { return }
             guard !self.isConnected else { return }
-            await self.liveActivity.endForDisconnect()
+            await self.refreshLiveActivity()
         }
     }
 
@@ -1387,27 +1511,12 @@ final class AppModel {
     }
 
     func refreshLiveActivity() async {
-        // The island belongs to a computer: it is fed by that computer's pushes
-        // and by background refreshes that can reach it. The on-device agent has
-        // neither, so there is nothing to keep true and a card left over is
-        // taken down instead.
-        if isLocalAgentMode {
-            await liveActivity.endForLocalAgent()
-            return
+        if !settings.values.liveActivitiesEnabled {
+            await liveActivity.refresh(state: .init())
+        } else if let state = aggregateLiveActivityState {
+            await liveActivity.refresh(state: state)
         }
-        await liveActivity.refresh(            sessions: sessions,
-            conversations: conversations,
-            sessionsAreKnown: sessionsAreKnown,
-            titles: titles,
-            approvals: (pending?.approvals ?? []).map { approval in
-                LiveActivityApproval(
-                    requestId: approval.requestId,
-                    sessionId: approval.sessionId ?? "",
-                    tool: approval.toolName,
-                    detail: approval.reasonText(preferring: Locale.preferredLanguages.first ?? "en") ?? "",
-                )
-            },
-        )
+        updateMultiHostLiveActivityPoll()
     }
 
     // MARK: - Off screen
@@ -1508,7 +1617,11 @@ final class AppModel {
             // controller would send is about to be replaced.
             return "background sync (\(reason)): out of time after \(refreshed) of \(targets.count) session(s); the island was left as it was"
         }
-        await refreshLiveActivity()
+        if expiresAt.timeIntervalSinceNow >= 20 {
+            await refreshMultiHostLiveActivity()
+        } else {
+            await refreshLiveActivity()
+        }
         let took = Date().timeIntervalSince(started)
         return String(
             format: "background sync (%@): %d of %d session(s) refreshed in %.0f ms",
@@ -1977,27 +2090,41 @@ final class AppModel {
     private var backgroundRegistrationStarted = false
 
     func registerPushInBackground() async {
-        guard !backgroundRegistrationStarted, !isLocalAgentMode else { return }
+        guard !isUnpairing else { return }
+        guard !backgroundRegistrationStarted else { return }
+        let authorizationAtStart = liveActivityAuthorizationRevision
+        let unpairAtStart = liveActivityUnpairRevision
         backgroundRegistrationStarted = true
-        if connection == nil {
-            do {
-                if host == nil {
-                    hosts = try await credentials.loadAll().sorted { $0.pairedAt < $1.pairedAt }
-                    guard let stored = HostSelection.preferred(
-                        in: hosts,
-                        lastOpenedId: LastOpenedHostStore.stored(),
-                    ) else { return }
-                    host = stored
-                }
-                guard let host else { return }
-                try await connect(using: host)
-            } catch {
-                backgroundRegistrationStarted = false
-                log.add(.connection, "background activity registration could not connect: \(Self.describe(error))")
-                return
+        defer { backgroundRegistrationStarted = false }
+        do {
+            let storedHosts = try await credentials.loadAll()
+            guard !isUnpairing,
+                  unpairAtStart == liveActivityUnpairRevision,
+                  authorizationAtStart == liveActivityAuthorizationRevision else { return }
+            let authorized = liveActivityHostsAuthorized(storedHosts)
+            guard !authorized.isEmpty else { return }
+            let cached = KeychainAccountStore().load()
+            let identity = isSelfHosted
+                ? RelayIdentity.guest(clientId: account.installId)
+                : RelayIdentity(clientId: account.installId, accountToken: cached?.token)
+            var headers = identity.headers
+            headers.merge(identity.sessionHeaders) { _, new in new }
+            if let state = await multiHostLiveActivity.refresh(
+                hosts: authorized, relayHeaders: headers,
+                accountId: isSelfHosted ? nil : cached?.profile.id,
+                routeSettings: .init(
+                    localNetworkFirst: settings.localNetworkFirst,
+                    directConnection: settings.directConnection,
+                ),
+            ), !isUnpairing,
+               unpairAtStart == liveActivityUnpairRevision,
+               authorizationAtStart == liveActivityAuthorizationRevision {
+                aggregateLiveActivityState = state
+                await liveActivity.refresh(state: state)
             }
+        } catch {
+            log.add(.connection, "background activity registration could not load paired hosts")
         }
-        await syncPushRegistration()
     }
 
     func start() async {
@@ -2230,12 +2357,30 @@ final class AppModel {
     /// Forget one machine, leaving the others paired.
     /// - Parameter hostId: the machine to forget.
     func forget(hostId: String) async {
+        guard let forgottenHost = hosts.first(where: { $0.hostId == hostId }) else { return }
+        revokeLiveActivityAuthorization(for: [hostId])
+        hosts.removeAll { $0.hostId == hostId }
+        let state = multiHostLiveActivity.forget(hostId: hostId)
+        aggregateLiveActivityState = state
         try? await credentials.remove(hostId: hostId)
+        if !isLocalAgentMode, settings.values.liveActivitiesEnabled {
+            await liveActivity.refresh(state: state)
+        }
+        await multiHostLiveActivity.waitForRefreshCompletion()
+        await waitForDirectPushRegistrations(hostIds: [hostId])
+        await MultiHostLiveActivityMonitor.unregisterPushRegistration(
+            from: forgottenHost,
+            relayHeaders: liveActivityRelayHeaders,
+            accountId: isSelfHosted ? nil : account.session?.profile.id,
+            routeSettings: .init(
+                localNetworkFirst: settings.localNetworkFirst,
+                directConnection: settings.directConnection,
+            ),
+        )
         // The machine is gone, so what this phone remembers of it is gone too.
         // Leaving it would show one computer's sessions under another's name the next
         // time somebody paired a machine that reused the id.
         await indexStore.remove(hostId: hostId)
-        hosts.removeAll { $0.hostId == hostId }
         guard host?.hostId == hostId else { return }
         disconnectCurrent()
         if let next = hosts.last {
@@ -2355,6 +2500,9 @@ final class AppModel {
         at origin: URL,
         engine: AgentEngine? = nil,
     ) async {
+        guard !isUnpairing else { return }
+        let authorizationAtStart = liveActivityAuthorizationRevision
+        let unpairAtStart = liveActivityUnpairRevision
         // Set before the socket opens: the first list read must already be
         // filtered, or the phone shows every agent's sessions for one frame.
         engineScope = engine
@@ -2379,6 +2527,17 @@ final class AppModel {
             engine: engine?.rawValue,
         )
         try? await credentials.save(paired)
+        guard pairingStillAuthorized(
+            hostId: paired.hostId,
+            authorizationAtStart: authorizationAtStart,
+            unpairAtStart: unpairAtStart,
+        ) else {
+            if forgottenLiveActivityHosts.contains(paired.hostId) {
+                try? await credentials.remove(hostId: paired.hostId)
+            }
+            return
+        }
+        authorizeLiveActivityHost(paired.hostId)
         if let index = hosts.firstIndex(where: { $0.hostId == paired.hostId }) {
             hosts[index] = paired
         } else {
@@ -2540,6 +2699,7 @@ final class AppModel {
     func setAppActive(_ active: Bool) {
         guard active != appIsActive else { return }
         appIsActive = active
+        updateMultiHostLiveActivityPoll()
         updateRunningPoll()
         updateLanWatch()
         if active {
@@ -4627,9 +4787,51 @@ final class AppModel {
     /// Distinct from forgetting one machine: this is "start over", which is what
     /// a reinstall or a shared phone needs.
     func unpair() async {
-        // Before the socket goes: this is the last chance to tell the host that
-        // this phone should stop being woken for a machine it is leaving.
-        await forgetPushRegistration()
+        isUnpairing = true
+        defer { isUnpairing = false }
+        let isRunningLocalAgent = isLocalAgentMode
+        let forgettingHosts = hosts
+        revokeLiveActivityAuthorization(for: forgettingHosts.map(\.hostId))
+        liveActivityUnpairRevision &+= 1
+        let relayHeaders = liveActivityRelayHeaders
+        let accountId = isSelfHosted ? nil : account.session?.profile.id
+        let routeSettings = LiveActivityHostConnection.RouteSettings(
+            localNetworkFirst: settings.localNetworkFirst,
+            directConnection: settings.directConnection,
+        )
+        multiHostLiveActivityTask?.cancel()
+        multiHostLiveActivityTask = nil
+        _ = multiHostLiveActivity.forgetAll()
+        let forgetting = forgettingHosts.map(\.hostId)
+        // Clear the visible pairing state before socket closes, keychain writes,
+        // or best-effort unregister requests can suspend this action.
+        host = nil
+        hosts = []
+        aggregateLiveActivityState = nil
+        LastOpenedHostStore.store(nil)
+        phase = .unpaired
+        if !isRunningLocalAgent && settings.values.liveActivitiesEnabled {
+            await liveActivity.refresh(state: .init())
+        }
+        await multiHostLiveActivity.waitForRefreshCompletion()
+        await waitForDirectPushRegistrations()
+        // The paired values contain the credentials needed for these requests.
+        // Run cleanup after the UI transition so an offline desktop cannot hold
+        // the unpair screen open.
+        Task.detached(priority: .utility) {
+            await withTaskGroup(of: Void.self) { group in
+                for pairedHost in forgettingHosts {
+                    group.addTask {
+                        await MultiHostLiveActivityMonitor.unregisterPushRegistration(
+                            from: pairedHost,
+                            relayHeaders: relayHeaders,
+                            accountId: accountId,
+                            routeSettings: routeSettings,
+                        )
+                    }
+                }
+            }
+        }
         interactionPoll?.cancel()
         eventListener?.cancel()
         await connection?.disconnect()
@@ -4639,10 +4841,6 @@ final class AppModel {
         selectedSessionId = nil
         // Captured first. Iterating `hosts` after `hosts = []` walked an empty
         // array, so "start over" left every stored session list on disk.
-        let forgetting = hosts.map(\.hostId)
-        host = nil
-        hosts = []
-        LastOpenedHostStore.store(nil)
         try? await credentials.clear()
         for forgotten in forgetting { await indexStore.remove(hostId: forgotten) }
         titles = [:]
@@ -4657,7 +4855,6 @@ final class AppModel {
         permissionCatalogState.clear()
         pendingState.clear()
         recentHostEventState.clear()
-        phase = .unpaired
         log.add(.connection, "unpaired: every stored credential and index removed")
     }
 
@@ -5039,7 +5236,7 @@ final class AppModel {
         // than waiting for another grace period.
         if connection == nil {
             cancelLiveActivityDisconnectSweep()
-            await liveActivity.endForDisconnect()
+            await refreshLiveActivity()
         } else {
             cancelLiveActivityDisconnectSweep()
         }
@@ -6997,7 +7194,9 @@ final class AppModel {
     /// push-to-start card may not have an activity token yet. No session read is
     /// needed; the host already made the decision, and the card is the app's.
     func endLiveActivitiesFromPush() async {
-        await liveActivity.endForRemoteFinish()
+        // An end from an older desktop describes only that desktop. Confirm
+        // the aggregate rather than dismissing another computer's work.
+        await refreshMultiHostLiveActivity()
     }
 
     /// Tell the host where to reach this phone, and whether it is on screen.
@@ -7022,11 +7221,19 @@ final class AppModel {
         // The kernel answers `push.register` with `{registered: false}` -- it has
         // no push channel -- so registering is a round trip that can only say
         // no. Skipped here rather than left to the kernel's polite refusal.
+        guard !isUnpairing,
+              let host,
+              !forgottenLiveActivityHosts.contains(host.hostId) else { return }
         guard !isLocalAgentMode else { return }
         guard !isSelfHosted else { return }
         guard let connection, let token = PushRegistration.storedToken else { return }
+        let registrationHostId = host.hostId
+        directPushRegistrations[registrationHostId, default: 0] += 1
+        defer { finishDirectPushRegistration(hostId: registrationHostId) }
         var fields: [String: JSONValue] = [
             "token": .string(token),
+            "liveActivityVersion": .number(2),
+            "liveActivityTokenObservedAt": .number(LiveActivityPushTokenStore.observedAt),
             "environment": .string(PushRegistration.environment),
             "locale": .string(PushRegistration.locale),
         ]
@@ -7083,12 +7290,8 @@ final class AppModel {
     func setPresence(foreground: Bool) async {
         self.foreground = foreground
         if foreground {
-            await liveActivity.appOpened(
-                sessions: sessions,
-                conversations: conversations,
-                sessionsAreKnown: sessionsAreKnown,
-                titles: titles,
-            )
+            liveActivity.appOpened()
+            await refreshLiveActivity()
         }
         await sendPresence()
     }
@@ -7226,6 +7429,9 @@ final class AppModel {
     ///   self-hosted guide, whose page keeps the operator on the code field).
     @discardableResult
     func pair(with target: PairingTarget, deviceName: String) async -> PairedHost? {
+        guard !isUnpairing else { return nil }
+        let authorizationAtStart = liveActivityAuthorizationRevision
+        let unpairAtStart = liveActivityUnpairRevision
         phase = .connecting
         // A naming prompt for a *previous* machine must not survive into this
         // pairing. It is presented over the main screen, and when the machine
@@ -7259,14 +7465,32 @@ final class AppModel {
                 deviceModel: Self.deviceModel,
             )
             let paired = outcome.host
+            guard pairingStillAuthorized(
+                hostId: paired.hostId,
+                authorizationAtStart: authorizationAtStart,
+                unpairAtStart: unpairAtStart,
+            ) else { return nil }
             try await credentials.save(paired)
+            guard pairingStillAuthorized(
+                hostId: paired.hostId,
+                authorizationAtStart: authorizationAtStart,
+                unpairAtStart: unpairAtStart,
+            ) else {
+                try? await credentials.remove(hostId: paired.hostId)
+                return nil
+            }
+            authorizeLiveActivityHost(paired.hostId)
             log.add(
                 .connection,
                 "paired with \(paired.hostName) (\(paired.hostId)) over "
                     + Self.routeName(outcome.route.endpoint),
             )
             log.add(.connection, "pairing saved: token \(paired.deviceToken.count) chars")
-            hosts = try await credentials.loadAll().sorted { $0.pairedAt < $1.pairedAt }
+            let storedHosts = try await credentials.loadAll()
+            guard !isUnpairing,
+                  liveActivityUnpairRevision == unpairAtStart,
+                  !forgottenLiveActivityHosts.contains(paired.hostId) else { return nil }
+            hosts = storedHosts.sorted { $0.pairedAt < $1.pairedAt }
             // A pairing is the operator saying "this is my computer, on this
             // network". Both transport switches default to off, and the route
             // planner gates a direct endpoint on `localNetworkFirst` -- so the

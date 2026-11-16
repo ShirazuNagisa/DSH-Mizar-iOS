@@ -385,7 +385,7 @@ final class LANFailoverUITests: XCTestCase {
     /// - Returns: the count, or `nil` when that listener is not answering.
     private static func mockConnections(_ baseURL: String) -> Int? {
         guard let json = mockJSON(baseURL, "/connections") else { return nil }
-        return json["connections"] as? Int
+        return (json["primaryConnections"] ?? json["connections"]) as? Int
     }
 
     /// How many pairing requests the main listener has answered since the last
@@ -419,7 +419,8 @@ final class LANFailoverUITests: XCTestCase {
     /// - Returns: method name to count.
     private static func mockMethodCounts() -> [String: Int] {
         guard let json = mockJSON(Self.mockBaseURL, "/loads"),
-              let methods = json["methods"] as? [String: Any] else { return [:] }
+              let methods = (json["primaryMethods"] as? [String: Any])
+                ?? (json["methods"] as? [String: Any]) else { return [:] }
         return methods.compactMapValues { ($0 as? NSNumber)?.intValue }
     }
 

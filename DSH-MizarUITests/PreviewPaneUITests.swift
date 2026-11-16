@@ -318,7 +318,8 @@ final class PreviewPaneUITests: XCTestCase {
     private static func methodCount(_ method: String) -> Int {
         guard let data = get("/loads"),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let counts = json["methods"] as? [String: Any] else {
+              let counts = (json["primaryMethods"] as? [String: Any])
+                ?? (json["methods"] as? [String: Any]) else {
             return -1
         }
         return counts[method] as? Int ?? 0

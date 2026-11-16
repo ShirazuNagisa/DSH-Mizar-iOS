@@ -628,7 +628,8 @@ final class LanPriorityUITests: XCTestCase {
     /// - Returns: method name to count.
     private static func mockMethodCounts() -> [String: Int] {
         guard let json = mockJSON(Self.mockBaseURL, "/loads"),
-              let methods = json["methods"] as? [String: Any] else { return [:] }
+              let methods = (json["primaryMethods"] as? [String: Any])
+                ?? (json["methods"] as? [String: Any]) else { return [:] }
         return methods.compactMapValues { ($0 as? NSNumber)?.intValue }
     }
 

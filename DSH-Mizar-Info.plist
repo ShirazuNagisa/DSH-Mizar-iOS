@@ -55,6 +55,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>mizar</string>
+                <string>dshmizar</string>
 			</array>
 		</dict>
 	</array>

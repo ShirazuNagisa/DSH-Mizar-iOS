@@ -30,5 +30,6 @@ enum LiveActivityIntentLink {
     static let types: [any AppIntent.Type] = [
         AllowOnceIntent.self,
         RejectIntent.self,
+        NextApprovalIntent.self,
     ]
 }

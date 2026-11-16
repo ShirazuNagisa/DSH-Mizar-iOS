@@ -9,8 +9,37 @@
    —— 每秒念一遍的数字不是信息 —— 所以听的人只拿得到这个名词，
    而一个没有名词的时长念出来就是一个没有来由的数字。 */
 "Running time" = "运行时间";
+"Elapsed time" = "已用时间";
+"Last known elapsed" = "最后已知用时";
 
 /* 被阻塞的那一轮卡片上的两个按钮，灵动岛和锁屏都有。“Allow once” 就是协议真正
    授予的东西 —— 一次调用，而不是常驻权限；另一个按钮是同一个选择的另一半。 */
 "Allow once" = "允许一次";
 "Reject" = "拒绝";
+
+/* 实时活动总览与审批队列。 */
+"Approval" = "审批";
+"More sessions" = "个其他会话";
+"Approval waiting" = "等待审批";
+"Sessions" = "个会话";
+"Devices" = "台设备";
+"View overview" = "查看总览";
+"Running" = "执行中";
+"Waiting for approval" = "等待审批";
+"Waiting for a reply" = "等待回复";
+"Offline" = "离线";
+"Untitled session" = "未命名会话";
+"Longest running session" = "最长运行会话用时";
+"No running sessions" = "当前没有执行中的会话";
+"Session count" = "会话数量";
+"Sending approval" = "正在发送审批";
+"Approval accepted" = "已允许一次";
+"Approval rejected" = "已拒绝";
+"Approval failed" = "审批发送失败";
+"Approval result unknown" = "审批结果未知";
+"Next" = "下一项";
+"Next approval" = "下一项审批";
+"View approval" = "查看审批详情";
+"Sending" = "发送中…";
+
+"All approvals" = "全部审批";

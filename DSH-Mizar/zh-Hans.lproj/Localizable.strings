@@ -1035,3 +1035,32 @@
 "The pairings on your phone belong to the server they were made through. After saving this switch, pair your computer again for the new server; the account and the old pairings are kept." = "手机上的配对记录属于当初配对时所用的服务器。保存切换后，请重新为新服务器配对电脑；账户与旧的配对记录都会保留。";
 "Server changed. Pair your computer again for this server; the account and the existing pairings are kept." = "服务器已更改。请重新为该服务器配对电脑；账户与现有配对记录都会保留。";
 "Accounts, plans and invite codes belong to the official server. This phone is on a server you run, so there is nothing to sign in to." = "账户、计划与邀请码属于官方服务器；这台手机使用的是你自建的服务器，因此无需登录。";
+
+/* Unified Live Activity destinations. */
+"Connecting to paired hosts…" = "正在连接已配对电脑…";
+"No active sessions or pending requests" = "暂无执行或等待中的会话";
+"No paired hosts" = "尚未配对电脑";
+"Host" = "电脑";
+"Approvals" = "审批";
+"Question" = "待回答";
+"Approval" = "待审批";
+"Untitled session" = "未命名会话";
+"Waiting for approval" = "等待审批";
+"Approval request" = "审批请求";
+"Reason" = "原因";
+"Requested" = "请求时间";
+"Recent session context" = "最近会话上下文";
+"Reason not provided" = "未提供原因";
+"No reason was supplied." = "未提供原因。";
+"Host unavailable" = "电脑不可用";
+"Connecting to host…" = "正在连接电脑…";
+"This request is no longer pending on this host." = "此请求已不在这台电脑的待审批列表中。";
+"The host did not include command details in this approval record." = "请结合下方会话上下文核对操作；此请求未提供额外的命令参数。";
+
+"Allowed once" = "已允许一次";
+"Rejected" = "已拒绝";
+"Could not connect. Try again." = "未连接到电脑，可重试。";
+"Request changed. Open details." = "请求已变化，请打开详情。";
+"Result unknown. Open details to check." = "结果未确认，请打开详情核验。";
+"Session status is unavailable while this host is offline." = "电脑离线，暂时无法确认此会话的状态。";
+"Session context is unavailable while this host is offline." = "电脑离线，暂时无法读取会话上下文。";
