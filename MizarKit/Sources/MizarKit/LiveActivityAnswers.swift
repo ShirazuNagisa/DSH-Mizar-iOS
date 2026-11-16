@@ -32,9 +32,12 @@ public enum LiveActivityAnswers {
     }
 
     /// Legacy cards are actionable only when their device identity is unambiguous.
-    public static func target(hostId: String, hosts: [PairedHost]) -> PairedHost? {
-        if hostId.isEmpty { return hosts.count == 1 ? hosts.first : nil }
-        return hosts.first { $0.hostId == hostId }
+    public static func target(hostId: String, hosts: [PairedHost], canonicalHostIds: [String: String] = [:]) -> PairedHost? {
+        LiveActivityHostIdentity.resolvePairedHost(
+            hostId: hostId,
+            hosts: hosts,
+            canonicalHostIds: canonicalHostIds,
+        )
     }
 
     public static func answer(requestId: String, hostId: String = "", sessionId: String = "", outcome: ApprovalOutcome) async -> Bool {
@@ -43,8 +46,9 @@ public enum LiveActivityAnswers {
 
     public static func send(requestId: String, hostId: String, sessionId: String, outcome: ApprovalOutcome) async -> Result {
         liveActivityAnswerLog.notice("answer intent started")
-        guard !requestId.isEmpty, let hosts = try? await KeychainCredentialStore().loadAll(),
-              let host = target(hostId: hostId, hosts: hosts) else { return .unavailable }
+        guard !requestId.isEmpty, let hosts = try? await KeychainCredentialStore().loadAll() else { return .unavailable }
+        let canonicalHostIds = LiveActivityHostIdentityStore.shared.canonicalHostIds(for: hosts)
+        guard let host = target(hostId: hostId, hosts: hosts, canonicalHostIds: canonicalHostIds) else { return .unavailable }
         let clock = ContinuousClock()
         let started = clock.now
         let account = KeychainAccountStore()

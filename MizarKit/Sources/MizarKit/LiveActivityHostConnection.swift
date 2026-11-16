@@ -1,5 +1,19 @@
 import Foundation
 
+#if DEBUG
+private actor LiveActivityConnectionDiagnosticLog {
+    static let shared = LiveActivityConnectionDiagnosticLog()
+    private var lastLogged: [String: Date] = [:]
+
+    func write(_ message: String, key: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastLogged[key] ?? .distantPast) >= 10 else { return }
+        lastLogged[key] = now
+        print("[live-activity-connection] \(message)")
+    }
+}
+#endif
+
 /// Small independent connections keep activity reads away from navigation state.
 public enum LiveActivityHostConnection {
     /// The route switches captured by the caller that is opening this socket.
@@ -48,10 +62,11 @@ public enum LiveActivityHostConnection {
                 return .init(authority: authority, token: host.deviceToken, appVersion: appVersion, accountId: accountId, subscribeToStateChanges: false, requestTimeout: .seconds(5), handshakeTimeout: .seconds(4))
             case .relay(let baseURL):
                 var headers = relayHeaders
-                // The official paid relay verifies the account session during
-                // its WebSocket upgrade. Other relays must never receive that
-                // bearer token; they only need the install/account identity.
-                if !AccountClient.isAccountHost(baseURL) {
+                // The official account relay verifies the session during its
+                // WebSocket upgrade. Other relays, arbitrary ports, and URLs
+                // with userinfo/query/fragment must never receive that bearer
+                // token; they only need the install/account identity.
+                if !LiveActivityHostIdentity.isOfficialAccountRelay(baseURL) {
                     headers.removeValue(forKey: RelayIdentity.sessionHeader)
                 }
                 return .init(authority: nil, token: host.deviceToken, appVersion: appVersion, accountId: accountId, subscribeToStateChanges: false, requestTimeout: .seconds(5), baseURL: baseURL, handshakeTimeout: .seconds(5), relayHeaders: headers)
@@ -65,6 +80,7 @@ public enum LiveActivityHostConnection {
         relayHeaders: [String: String] = [:],
         accountId: String? = nil,
         routeSettings: RouteSettings = .persisted,
+        identityStore: LiveActivityHostIdentityStore = .shared,
         makeConnection: @escaping @Sendable (MizarConnection.Configuration) -> MizarConnection = { MizarConnection(configuration: $0) },
     ) async -> MizarConnection? {
         let configurations = configurations(
@@ -80,6 +96,12 @@ public enum LiveActivityHostConnection {
             }
         return await withTaskGroup(of: MizarConnection?.self) { group in
             for configuration in configurations {
+                let routeKind: String = switch configuration.endpoint {
+                case .direct: "direct"
+                case .relay: "relay"
+                case .p2p: "p2p"
+                case nil: "unknown"
+                }
                 group.addTask {
                     if localRouteGetsHeadStart, case .relay = configuration.endpoint {
                         do {
@@ -99,11 +121,38 @@ public enum LiveActivityHostConnection {
                         let welcome = try await withTaskCancellationHandler {
                             try await connection.connect()
                         } onCancel: { Task { await connection.disconnect() } }
-                        guard !Task.isCancelled, welcome.hostId == host.hostId else {
+                        let binding = identityStore.binding(for: host)
+                        let expectedHostId = LiveActivityHostIdentity.resolvedHostId(for: host, binding: binding)
+                        var identityMatches = welcome.hostId == expectedHostId
+                        if !identityMatches, binding == nil,
+                           LiveActivityHostIdentity.canBootstrap(
+                               host: host,
+                               endpoint: configuration.endpoint,
+                               accountId: accountId,
+                               relayHeaders: configuration.relayHeaders,
+                           ) {
+                            identityMatches = await identityStore.bind(welcome.hostId, to: host)
+                        }
+                        #if DEBUG
+                        await LiveActivityConnectionDiagnosticLog.shared.write(
+                            "welcome route=\(routeKind) identityMatches=\(identityMatches)",
+                            key: "welcome-\(routeKind)-\(identityMatches)",
+                        )
+                        #endif
+                        guard !Task.isCancelled, identityMatches else {
                             await connection.disconnect(); return nil
                         }
                         return connection
                     } catch {
+                        #if DEBUG
+                        if !Task.isCancelled {
+                            let error = error as NSError
+                            await LiveActivityConnectionDiagnosticLog.shared.write(
+                                "connect failed route=\(routeKind) domain=\(error.domain) code=\(error.code)",
+                                key: "error-\(routeKind)-\(error.domain)-\(error.code)",
+                            )
+                        }
+                        #endif
                         await connection.disconnect(); return nil
                     }
                 }

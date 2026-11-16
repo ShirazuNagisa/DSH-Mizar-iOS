@@ -43,6 +43,21 @@ struct LiveActivityDetailView: View {
         )
     }
 
+    /// Canonical host IDs are public metadata; the internal snapshot cache stays
+    /// keyed by the pairing alias.
+    private var canonicalHostIds: [String: String] {
+        LiveActivityHostIdentityStore.shared.canonicalHostIds(for: hosts)
+    }
+
+    /// Resolves a card's host ID only through an existing, authorized pairing.
+    private func resolvedHost(for requestedHostId: String) -> PairedHost? {
+        LiveActivityHostIdentity.resolvePairedHost(
+            hostId: requestedHostId,
+            hosts: hosts,
+            canonicalHostIds: canonicalHostIds,
+        )
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             page(for: destination)
@@ -101,7 +116,9 @@ struct LiveActivityDetailView: View {
                 ProgressView("Connecting to paired hosts…")
             }
 
-            let active = hosts.flatMap { activityRows(for: $0, snapshot: snapshots[$0.hostId]) }.sorted { left, right in
+            let active = deduplicatedActivityRows(
+                hosts.flatMap { activityRows(for: $0, snapshot: snapshots[$0.hostId]) },
+            ).sorted { left, right in
                 let a = left.approvals.isEmpty ? (left.questions.isEmpty ? 2 : 1) : 0
                 let b = right.approvals.isEmpty ? (right.questions.isEmpty ? 2 : 1) : 0
                 if a != b { return a < b }
@@ -116,7 +133,7 @@ struct LiveActivityDetailView: View {
                 Text("No active sessions or pending requests")
                     .foregroundStyle(.secondary)
             }
-            ForEach(hosts.filter { snapshots[$0.hostId]?.sessions == nil }) { host in
+            ForEach(deduplicatedOfflineHosts()) { host in
                 Label(host.displayName, systemImage: "wifi.slash")
                     .foregroundStyle(.secondary)
             }
@@ -134,14 +151,25 @@ struct LiveActivityDetailView: View {
     }
 
     private func sessionPage(hostId: String, sessionId: String) -> some View {
-        let host = hosts.first { $0.hostId == hostId }
-        let snapshot = snapshots[hostId]
+        let host = resolvedHost(for: hostId)
+        let internalHostId = host?.hostId
+        let snapshot = internalHostId.flatMap { snapshots[$0] }
         let row = snapshot?.sessions?.first { $0.sessionId == sessionId }
-        let pendingApprovals = snapshot?.pending?.approvals.filter { $0.sessionId == sessionId } ?? []
+        let resolvedApprovalIds = snapshot?.resolvedApprovalIds ?? []
+        let pendingApprovals = snapshot?.pending?.approvals.filter {
+            $0.sessionId == sessionId && !resolvedApprovalIds.contains($0.requestId)
+        } ?? []
         let pendingQuestions = snapshot?.pending?.questions.filter { $0.sessionId == sessionId } ?? []
         let context = snapshot?.messages[sessionId]?.conversationItems() ?? []
 
         return List {
+            if snapshot?.isStale == true {
+                Section {
+                    Label("Could not refresh", systemImage: "wifi.exclamationmark")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Host") {
                 Text(host.map(displayName(for:)) ?? "Host unavailable")
             }
@@ -235,22 +263,32 @@ struct LiveActivityDetailView: View {
     }
 
     private func approvalPage(hostId: String, sessionId: String, requestId: String) -> some View {
-        let host = hosts.first { $0.hostId == hostId }
-        let snapshot = snapshots[hostId]
-        let approval = snapshot?.pending?.approvals.first {
-            $0.requestId == requestId && $0.sessionId == sessionId
-        }
+        let host = resolvedHost(for: hostId)
+        let internalHostId = host?.hostId
+        let snapshot = internalHostId.flatMap { snapshots[$0] }
+        let approval: PendingApproval? = snapshot?.resolvedApprovalIds.contains(requestId) == true
+            ? nil
+            : snapshot?.pending?.approvals.first {
+                $0.requestId == requestId && $0.sessionId == sessionId
+            }
         let session = snapshot?.sessions?.first { $0.sessionId == sessionId }
         let context = Array((snapshot?.messages[sessionId]?.conversationItems() ?? []).suffix(12))
-        let state = approvalStates[approvalKey(hostId: hostId, sessionId: sessionId, requestId: requestId)] ?? .ready
+        let state = internalHostId.flatMap {
+            approvalStates[approvalKey(hostId: $0, sessionId: sessionId, requestId: requestId)]
+        } ?? .ready
 
         return List {
+            if snapshot?.isStale == true {
+                Section {
+                    Label("Could not refresh", systemImage: "wifi.exclamationmark")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if isLoading && snapshot == nil {
                 ProgressView("Connecting to host…")
             } else if host == nil {
                 unavailableSection("This approval’s host is not available in the paired host list.")
-            } else if snapshot?.connection == nil {
-                unavailableSection("Host unavailable. This exact approval has not been redirected to another host.")
             } else if snapshot?.pending == nil {
                 unavailableSection("Could not verify this approval with the host.")
             } else if approval == nil {
@@ -389,7 +427,9 @@ struct LiveActivityDetailView: View {
 
     private func activityRows(for host: PairedHost, snapshot: HostSnapshot?) -> [ActivityRow] {
         guard let snapshot, let sessions = snapshot.sessions else { return [] }
-        let approvals = snapshot.pending?.approvals ?? []
+        let approvals = snapshot.pending?.approvals.filter {
+            !snapshot.resolvedApprovalIds.contains($0.requestId)
+        } ?? []
         let questions = snapshot.pending?.questions ?? []
         return sessions
             .filter { row in
@@ -421,6 +461,55 @@ struct LiveActivityDetailView: View {
     private func displayName(for host: PairedHost) -> String {
         let label = host.label?.trimmingCharacters(in: .whitespacesAndNewlines)
         return label?.isEmpty == false ? label! : host.hostName
+    }
+
+    private func canonicalHostId(for host: PairedHost) -> String {
+        canonicalHostIds[host.hostId] ?? host.hostId
+    }
+
+    /// An account pairing and a QR pairing can name the same physical host.
+    /// Deduplicate overview rows by canonical host ID + session so the same
+    /// turn is not listed twice; the exact canonical pairing wins a tie.
+    private func deduplicatedActivityRows(_ rows: [ActivityRow]) -> [ActivityRow] {
+        var selected: [String: (row: ActivityRow, isOnline: Bool, exact: Bool)] = [:]
+        for row in rows {
+            let canonical = canonicalHostId(for: row.host)
+            let key = identityKey(hostId: canonical, itemId: row.session.sessionId)
+            let isOnline = snapshots[row.host.hostId]?.sessions != nil
+            let exact = row.host.hostId == canonical
+            if let current = selected[key] {
+                if (isOnline && !current.isOnline) || (isOnline == current.isOnline && exact && !current.exact) {
+                    selected[key] = (row, isOnline, exact)
+                }
+            } else {
+                selected[key] = (row, isOnline, exact)
+            }
+        }
+        return selected.keys.sorted().compactMap { selected[$0]?.row }
+    }
+
+    /// The offline labels are host-level, not session-level, but two pairings
+    /// for one computer still must not produce two labels. Keep the label even
+    /// when another pairing for the same canonical host is online: the online
+    /// account session may cover only DSH, while the offline QR cache can still
+    /// name Codex or Claude work.
+    private func deduplicatedOfflineHosts() -> [PairedHost] {
+        var selected: [String: PairedHost] = [:]
+        for host in hosts where snapshots[host.hostId]?.sessions == nil {
+            let canonical = canonicalHostId(for: host)
+            if let current = selected[canonical] {
+                if host.hostId == canonical && current.hostId != canonical {
+                    selected[canonical] = host
+                }
+            } else {
+                selected[canonical] = host
+            }
+        }
+        return selected.keys.sorted().compactMap { selected[$0] }
+    }
+
+    private func identityKey(hostId: String, itemId: String) -> String {
+        "\(hostId.utf8.count):\(hostId)\(itemId.utf8.count):\(itemId)"
     }
 
     private func loadHosts() async {
@@ -500,7 +589,7 @@ struct LiveActivityDetailView: View {
             accountId: accountId,
             routeSettings: routeSettings,
         ) else {
-            return HostSnapshot(host: host, connection: nil, sessions: nil, pending: nil, messages: [:])
+            return staleSnapshot(host: host, previous: previous, connection: nil)
         }
 
         return await withTaskCancellationHandler {
@@ -509,13 +598,16 @@ struct LiveActivityDetailView: View {
             let (sessionResult, pendingResult) = await (sessions, pending)
             guard !Task.isCancelled else {
                 await connection.disconnect()
-                return HostSnapshot(host: host, connection: nil, sessions: nil, pending: nil, messages: [:])
+                return staleSnapshot(host: host, previous: previous, connection: nil)
+            }
+            guard let sessionResult, let pendingResult else {
+                return staleSnapshot(host: host, previous: previous, connection: connection)
             }
 
             return await snapshot(
                 host: host,
                 connection: connection,
-                sessions: sessionResult?.items,
+                sessions: sessionResult.items,
                 pending: pendingResult,
                 existingMessages: existingMessages,
                 previousSessions: previous?.sessions,
@@ -525,6 +617,27 @@ struct LiveActivityDetailView: View {
         } onCancel: {
             Task { await connection.disconnect() }
         }
+    }
+
+    /// Keep the last confirmed read visible while a poll times out.
+    ///
+    /// A failed refresh must not replace valid sessions, pending approvals or
+    /// message context with nil; the caller only marks the screen as not
+    /// refreshed and leaves decisions to independent connections.
+    private static func staleSnapshot(
+        host: PairedHost,
+        previous: HostSnapshot?,
+        connection: MizarConnection?,
+    ) -> HostSnapshot {
+        HostSnapshot(
+            host: previous?.host ?? host,
+            connection: connection,
+            sessions: previous?.sessions,
+            pending: previous?.pending,
+            messages: previous?.messages ?? [:],
+            isStale: true,
+            resolvedApprovalIds: previous?.resolvedApprovalIds ?? [],
+        )
     }
 
     private static func refreshHost(
@@ -542,13 +655,7 @@ struct LiveActivityDetailView: View {
             let (sessionResult, pendingResult) = await (sessions, pending)
             guard !Task.isCancelled else { return previous }
             guard let sessionResult, let pendingResult else {
-                return HostSnapshot(
-                    host: host,
-                    connection: connection,
-                    sessions: nil,
-                    pending: nil,
-                    messages: previous.messages,
-                )
+                return staleSnapshot(host: host, previous: previous, connection: connection)
             }
             return await snapshot(
                 host: host,
@@ -626,84 +733,124 @@ struct LiveActivityDetailView: View {
     }
 
     private func answer(
-        hostId: String,
+        hostId requestedHostId: String,
         sessionId: String,
         requestId: String,
         outcome: ApprovalOutcome,
     ) async {
-        let key = approvalKey(hostId: hostId, sessionId: sessionId, requestId: requestId)
-        guard !activeHostOperations.contains(hostId) else { return }
-        guard let connection = snapshots[hostId]?.connection else {
+        guard let host = resolvedHost(for: requestedHostId) else {
+            let key = approvalKey(hostId: requestedHostId, sessionId: sessionId, requestId: requestId)
             approvalStates[key] = .checkUnavailable
-            await recordAnswerPresentation(hostId: hostId, requestId: requestId, outcome: outcome, result: .unavailable)
+            await recordAnswerPresentation(
+                hostId: requestedHostId,
+                requestId: requestId,
+                outcome: outcome,
+                result: .unavailable,
+            )
             return
         }
-        activeHostOperations.insert(hostId)
-        defer { finishHostOperation(hostId) }
+        let internalHostId = host.hostId
+        let presentationHostId = canonicalHostIds[internalHostId] ?? requestedHostId
+        let key = approvalKey(hostId: internalHostId, sessionId: sessionId, requestId: requestId)
+        guard !activeHostOperations.contains(internalHostId) else { return }
+        activeHostOperations.insert(internalHostId)
+        defer { finishHostOperation(internalHostId) }
 
         approvalStates[key] = .sending
-        let fresh: PendingInteractions
-        do {
-            fresh = try await connection.call("interactions.pending", as: PendingInteractions.self)
-        } catch {
-            approvalStates[key] = .checkUnavailable
-            await recordAnswerPresentation(hostId: hostId, requestId: requestId, outcome: outcome, result: .unavailable)
-            return
-        }
-        guard fresh.approvals.contains(where: { $0.requestId == requestId && $0.sessionId == sessionId }) else {
-            approvalStates[key] = .handled
-            updatePending(fresh, for: hostId)
-            await recordAnswerPresentation(hostId: hostId, requestId: requestId, outcome: outcome, result: .rejected)
-            return
-        }
-        updatePending(fresh, for: hostId)
-
-        do {
-            let result = try await connection.call(
-                "approval.answer",
-                payload: .object([
-                    "requestId": .string(requestId),
-                    "outcome": .string(outcome.rawValue),
-                ]),
-                as: AcceptanceResult.self,
-            )
-            guard result.accepted else {
-                approvalStates[key] = .notAccepted
-                await recordAnswerPresentation(hostId: hostId, requestId: requestId, outcome: outcome, result: .rejected)
-                return
-            }
+        // The decision gets its own exact connection and preflight inside
+        // LiveActivityAnswers; it must not queue behind this screen's
+        // session.list / session.messages reads.
+        let result = await LiveActivityAnswers.send(
+            requestId: requestId,
+            hostId: requestedHostId,
+            sessionId: sessionId,
+            outcome: outcome,
+        )
+        switch result {
+        case .accepted:
             approvalStates[key] = outcome == .allowedOnce ? .accepted : .rejected
-            await recordAnswerPresentation(hostId: hostId, requestId: requestId, outcome: outcome, result: .accepted)
-            if let refreshed = try? await connection.call("interactions.pending", as: PendingInteractions.self) {
-                updatePending(refreshed, for: hostId)
-                if !refreshed.approvals.contains(where: { $0.requestId == requestId && $0.sessionId == sessionId }) {
-                    approvalStates[key] = .handled
-                }
-            }
-        } catch {
+            markApprovalResolved(requestId, for: internalHostId)
+            await recordAnswerPresentation(
+                hostId: presentationHostId,
+                requestId: requestId,
+                outcome: outcome,
+                result: .accepted,
+            )
+        case .rejected:
+            approvalStates[key] = .notAccepted
+            await recordAnswerPresentation(
+                hostId: presentationHostId,
+                requestId: requestId,
+                outcome: outcome,
+                result: .rejected,
+            )
+        case .unavailable:
+            approvalStates[key] = .checkUnavailable
+            await recordAnswerPresentation(
+                hostId: presentationHostId,
+                requestId: requestId,
+                outcome: outcome,
+                result: .unavailable,
+            )
+        case .unknown:
             approvalStates[key] = .unknownNeedsCheck
-            await recordAnswerPresentation(hostId: hostId, requestId: requestId, outcome: outcome, result: .unknown)
+            await recordAnswerPresentation(
+                hostId: presentationHostId,
+                requestId: requestId,
+                outcome: outcome,
+                result: .unknown,
+            )
         }
     }
 
-    private func recheck(hostId: String, sessionId: String, requestId: String) async {
-        let key = approvalKey(hostId: hostId, sessionId: sessionId, requestId: requestId)
-        guard !activeHostOperations.contains(hostId) else { return }
-        guard let connection = snapshots[hostId]?.connection else {
+    private func recheck(hostId requestedHostId: String, sessionId: String, requestId: String) async {
+        guard let host = resolvedHost(for: requestedHostId) else {
+            let key = approvalKey(hostId: requestedHostId, sessionId: sessionId, requestId: requestId)
             approvalStates[key] = .checkUnavailable
             return
         }
-        activeHostOperations.insert(hostId)
-        defer { finishHostOperation(hostId) }
-        do {
-            let fresh = try await connection.call("interactions.pending", as: PendingInteractions.self)
-            updatePending(fresh, for: hostId)
-            approvalStates[key] = fresh.approvals.contains(where: {
-                $0.requestId == requestId && $0.sessionId == sessionId
-            }) ? .confirmedPending : .handled
-        } catch {
+        let internalHostId = host.hostId
+        let key = approvalKey(hostId: internalHostId, sessionId: sessionId, requestId: requestId)
+        guard !activeHostOperations.contains(internalHostId) else { return }
+        activeHostOperations.insert(internalHostId)
+        defer { finishHostOperation(internalHostId) }
+
+        guard let fresh = await Self.readPending(
+            host,
+            relayHeaders: relayHeaders,
+            accountId: accountId,
+            routeSettings: routeSettings,
+        ) else {
             approvalStates[key] = .checkUnavailable
+            return
         }
+        updatePending(fresh, for: internalHostId)
+        approvalStates[key] = fresh.approvals.contains(where: {
+            $0.requestId == requestId && $0.sessionId == sessionId
+        }) ? .confirmedPending : .handled
+    }
+
+    private static func readPending(
+        _ host: PairedHost,
+        relayHeaders: [String: String],
+        accountId: String?,
+        routeSettings: LiveActivityHostConnection.RouteSettings,
+    ) async -> PendingInteractions? {
+        guard let connection = await LiveActivityHostConnection.open(
+            host: host,
+            relayHeaders: relayHeaders,
+            accountId: accountId,
+            routeSettings: routeSettings,
+        ) else { return nil }
+        let pending = try? await connection.call("interactions.pending", as: PendingInteractions.self)
+        await connection.disconnect()
+        return pending
+    }
+
+    private func markApprovalResolved(_ requestId: String, for hostId: String) {
+        guard var snapshot = snapshots[hostId] else { return }
+        snapshot.resolvedApprovalIds.insert(requestId)
+        snapshots[hostId] = snapshot
     }
 
     private func updatePending(_ pending: PendingInteractions, for hostId: String) {
@@ -793,6 +940,8 @@ private struct HostSnapshot {
     var sessions: [SessionRow]?
     var pending: PendingInteractions?
     var messages: [String: SessionMessagesResult]
+    var isStale: Bool = false
+    var resolvedApprovalIds: Set<String> = []
 }
 
 private struct ActivityRow: Identifiable {

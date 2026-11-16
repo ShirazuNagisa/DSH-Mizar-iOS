@@ -11,6 +11,7 @@ final class MultiHostLiveActivityMonitor {
         var rows: [LiveActivityRow]
         var approvals: [LiveActivityApproval]
         var turnStarts: [String: Date]
+        var isOnline: Bool
     }
 
     private struct HostRefreshResult: Sendable {
@@ -243,6 +244,11 @@ final class MultiHostLiveActivityMonitor {
         ) else {
             return HostRefreshResult(hostId: host.hostId, snapshot: nil, registeredPayload: nil, registeredAt: nil)
         }
+        guard let canonicalHostId = (await connection.currentState).welcome?.hostId,
+              !canonicalHostId.isEmpty else {
+            await connection.disconnect()
+            return HostRefreshResult(hostId: host.hostId, snapshot: nil, registeredPayload: nil, registeredAt: nil)
+        }
 
         do {
             async let sessionResult = connection.call("session.list", as: MonitorSessionList.self)
@@ -258,6 +264,7 @@ final class MultiHostLiveActivityMonitor {
             await connection.disconnect()
             let snapshot = makeSnapshot(
                 host: host,
+                canonicalHostId: canonicalHostId,
                 sessions: sessionList.items,
                 pending: pending,
                 previous: previous,
@@ -277,6 +284,7 @@ final class MultiHostLiveActivityMonitor {
 
     private static func makeSnapshot(
         host: PairedHost,
+        canonicalHostId: String,
         sessions: [MonitorSessionRow],
         pending: PendingInteractions,
         previous: HostSnapshot?,
@@ -334,7 +342,7 @@ final class MultiHostLiveActivityMonitor {
                 title: safeTitle,
                 elapsed: max(0, now.timeIntervalSince(safeSince)),
                 countingSince: safeSince,
-                hostId: host.hostId,
+                hostId: canonicalHostId,
                 hostName: host.displayName,
                 status: status,
                 waitingSince: waitingSince,
@@ -348,14 +356,19 @@ final class MultiHostLiveActivityMonitor {
                 sessionId: approval.sessionId ?? "",
                 tool: approval.toolName,
                 detail: detail,
-                hostId: host.hostId,
+                hostId: canonicalHostId,
                 hostName: host.displayName,
                 requestedAt: Date(timeIntervalSince1970: approval.requestedAt / 1_000),
                 requiresDetail: detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             )
         }.sorted(by: Self.oldestApprovalFirst)
 
-        return HostSnapshot(rows: rows, approvals: approvals, turnStarts: turnStarts)
+        return HostSnapshot(
+            rows: rows,
+            approvals: approvals,
+            turnStarts: turnStarts,
+            isOnline: true,
+        )
     }
 
     private static func offline(_ snapshot: HostSnapshot, asOf now: Date) -> HostSnapshot {
@@ -372,12 +385,32 @@ final class MultiHostLiveActivityMonitor {
                 waitingSince: row.waitingSince,
             )
         }
-        return HostSnapshot(rows: rows, approvals: snapshot.approvals, turnStarts: snapshot.turnStarts)
+        // A cached approval may share the canonical host with a live row from
+        // a narrower account scope. Keep it, but never let the mixed snapshot
+        // present it as directly actionable without opening details.
+        let approvals = snapshot.approvals.map { approval in
+            LiveActivityApproval(
+                requestId: approval.requestId,
+                sessionId: approval.sessionId,
+                tool: approval.tool,
+                detail: approval.detail,
+                hostId: approval.hostId,
+                hostName: approval.hostName,
+                requestedAt: approval.requestedAt,
+                requiresDetail: true,
+            )
+        }
+        return HostSnapshot(
+            rows: rows,
+            approvals: approvals,
+            turnStarts: snapshot.turnStarts,
+            isOnline: false,
+        )
     }
 
     private func aggregate(hostCount: Int) -> LiveActivityState {
-        let rows = Self.displayOrderedRows(snapshots.values.flatMap(\.rows))
-        let approvals = snapshots.values.flatMap(\.approvals).sorted(by: Self.oldestApprovalFirst)
+        let rows = Self.displayOrderedRows(Self.uniqueRows(in: snapshots))
+        let approvals = Self.uniqueApprovals(in: snapshots).sorted(by: Self.oldestApprovalFirst)
         return LiveActivityState(
             rows: rows,
             approvals: approvals,
@@ -387,6 +420,54 @@ final class MultiHostLiveActivityMonitor {
             longestRunningSince: rows.filter { $0.status == .running }.map(\.countingSince).min(),
             revision: revision,
         )
+    }
+
+    /// One physical host can have an account pairing and a QR pairing at the
+    /// same time. Their rows share the canonical host ID, so deduplicate by
+    /// canonical ID + session; a live snapshot wins over an offline cache.
+    /// Non-overlapping cached rows from a narrower scope are deliberately kept.
+    private static func uniqueRows(in snapshots: [String: HostSnapshot]) -> [LiveActivityRow] {
+        var selected: [String: (row: LiveActivityRow, isOnline: Bool)] = [:]
+        for alias in snapshots.keys.sorted() {
+            guard let snapshot = snapshots[alias] else { continue }
+            for row in snapshot.rows {
+                let key = identityKey(hostId: row.hostId, itemId: row.id)
+                if let current = selected[key] {
+                    if snapshot.isOnline && !current.isOnline {
+                        selected[key] = (row, true)
+                    }
+                } else {
+                    selected[key] = (row, snapshot.isOnline)
+                }
+            }
+        }
+        return selected.keys.sorted().compactMap { selected[$0]?.row }
+    }
+
+    /// Approvals are keyed by canonical host ID + request ID. Keeping the
+    /// online copy is what keeps a stale offline cache from doubling the
+    /// approval count; an offline-only request remains visible with
+    /// `requiresDetail` set by ``offline``.
+    private static func uniqueApprovals(in snapshots: [String: HostSnapshot]) -> [LiveActivityApproval] {
+        var selected: [String: (approval: LiveActivityApproval, isOnline: Bool)] = [:]
+        for alias in snapshots.keys.sorted() {
+            guard let snapshot = snapshots[alias] else { continue }
+            for approval in snapshot.approvals {
+                let key = identityKey(hostId: approval.hostId, itemId: approval.requestId)
+                if let current = selected[key] {
+                    if snapshot.isOnline && !current.isOnline {
+                        selected[key] = (approval, true)
+                    }
+                } else {
+                    selected[key] = (approval, snapshot.isOnline)
+                }
+            }
+        }
+        return selected.keys.sorted().compactMap { selected[$0]?.approval }
+    }
+
+    private static func identityKey(hostId: String, itemId: String) -> String {
+        "\(hostId.utf8.count):\(hostId)\(itemId.utf8.count):\(itemId)"
     }
 
     private func stateIfAnyOffline() -> LiveActivityState? {
