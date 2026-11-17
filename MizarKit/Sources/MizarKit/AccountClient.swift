@@ -26,7 +26,12 @@ public struct AccountClient: Sendable {
     /// One host on purpose: the account backend runs on 主力1 only, and the
     /// other relay forwards account traffic nowhere. A build that pointed at a
     /// random relay would have a settings screen that never loads.
-    public static let productionBaseURL = URL(string: "https://dshmizar-1.shirazu-nagisa.com:8443/account/v1")!
+    ///
+    /// 443 since 2026-11-18. It used to be the legacy `:8443` process, which is
+    /// what made retiring 8443 break "refresh devices" for every build that
+    /// pinned that origin. Both origins are the same host, and ``isAccountHost``
+    /// compares host only, so an origin stored by an older build still counts.
+    public static let productionBaseURL = URL(string: "https://dshmizar-1.shirazu-nagisa.com/account/v1")!
 
     /// Whether a relay is the host that owns the account store.
     ///
