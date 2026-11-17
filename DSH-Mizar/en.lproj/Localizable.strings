@@ -1034,3 +1034,15 @@
 "The pairings on your phone belong to the server they were made through. After saving this switch, pair your computer again for the new server; the account and the old pairings are kept." = "The pairings on your phone belong to the server they were made through. After saving this switch, pair your computer again for the new server; the account and the old pairings are kept.";
 "Server changed. Pair your computer again for this server; the account and the existing pairings are kept." = "Server changed. Pair your computer again for this server; the account and the existing pairings are kept.";
 "Accounts, plans and invite codes belong to the official server. This phone is on a server you run, so there is nothing to sign in to." = "Accounts, plans and invite codes belong to the official server. This phone is on a server you run, so there is nothing to sign in to.";
+
+/* Commands and skills */
+"Open commands and skills" = "Open commands and skills";
+"Commands & Skills" = "Commands & Skills";
+"Search commands and skills" = "Search commands and skills";
+"Skills" = "Skills";
+"Agree what this session is for" = "Agree what this session is for";
+"Work out the steps before acting" = "Work out the steps before acting";
+"No commands or skills match." = "No commands or skills match.";
+"This computer's AGI Mizar doesn't sync skills yet. Update the desktop app and they'll appear here." = "This computer's AGI Mizar doesn't sync skills yet. Update the desktop app and they'll appear here.";
+"The on-device agent has no skills. Connect a computer to browse them." = "The on-device agent has no skills. Connect a computer to browse them.";
+"No skills have been synced yet." = "No skills have been synced yet.";

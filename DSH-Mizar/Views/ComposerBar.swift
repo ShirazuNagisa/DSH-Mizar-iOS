@@ -26,13 +26,6 @@ struct ComposerBar: View {
     let sessionId: String
     /// The session's usage frame, when it has been read.
     let stats: SessionStatsFrame?
-    /// What has been typed. The command button writes into this directly.
-    ///
-    /// It was a callback that ran `draft = command` on the screen that owns the
-    /// field, and the write never landed: the sheet closed, the field stayed
-    /// empty. A closure handed down into an overlay is the kind of indirection
-    /// that fails silently, so the button owns the write instead.
-    @Binding var draft: String
     /// Whether the field holds the keyboard, so a command can focus it -- and so
     /// the row can make room for the text while it is being typed.
     @Binding var focused: Bool
@@ -59,16 +52,10 @@ struct ComposerBar: View {
     /// Called after a compaction, so the screen that owns `stats` can re-read
     /// the frame behind the figure above the composer.
     var onContextChanged: () async -> Void = {}
-
-    /// DSH's own commands. The slash forms are what the host parses; the titles
-    /// are what the operator is choosing between. They are catalogue keys
-    /// rather than strings resolved at construction, so `Text` localises them
-    /// wherever the list is drawn -- in the interface's language on screen, and
-    /// in the snapshot suite's chosen locale in the references.
-    static let commands: [(slash: String, title: LocalizedStringKey, symbol: String)] = [
-        ("/goal", "Goal", "target"),
-        ("/plan", "Plan", "list.bullet.rectangle"),
-    ]
+    /// Open the command and skill palette. The `+` window closes first; the
+    /// screen owns both flags because a popover's content is rebuilt while it
+    /// is up, and a panel whose openness lives inside it closes itself.
+    var onBrowseCommands: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 6) {
@@ -192,13 +179,14 @@ struct ComposerBar: View {
                     case .file: showingFileImporter = true
                     }
                 },
-            ) { command in
-                // Written first, then closed. The other order dismissed the
-                // window and the write went with it.
-                draft = command
-                focused = true
-                showingCommands = false
-            }
+                onBrowse: {
+                    // Closed first, then the palette opens. The other order
+                    // left a popover behind the sheet, over the field the
+                    // palette is about to write into.
+                    showingCommands = false
+                    onBrowseCommands()
+                },
+            )
         }
         .accessibilityLabel(Text("Commands and attachments"))
         .accessibilityIdentifier("composer.commands")
@@ -211,27 +199,32 @@ enum AttachmentPickerKind {
     case file
 }
 
-/// The host's commands, and the two attachment buttons above them.
+/// The attachment buttons, and the door to the command palette.
 ///
 /// Internal rather than private so the snapshot suite can render both gate
 /// states from fixtures (`AttachmentGateSnapshotTests`); it takes the gate as
 /// a `Bool` and owns no environment, so the render is the app's own view.
 ///
-/// The attachments row is deliberately above the commands rather than beside the
-/// field: the field's leading edge is where the operator's thumb already is for
-/// text, and a row of two labelled buttons is discoverable in a way that two
+/// The attachments row is deliberately above the palette door rather than beside
+/// the field: the field's leading edge is where the operator's thumb already is
+/// for text, and a row of two labelled buttons is discoverable in a way that two
 /// unlabelled glyphs are not. The gate is drawn, not just enforced: a lock and a
 /// footer that says why, so the refusal explains itself. The footer's wording is
 /// the paid plan's, because that is the plan this feature is sold with, and the
 /// same buttons are open on a LAN link as well.
+///
+/// The commands used to be `/goal` and `/plan` inline. They moved to the
+/// palette (`CommandSkillPalette`) when skills joined them: this popover is
+/// about what to put in the message, and the palette is a page where two
+/// commands and a machine's whole skill list can be searched in one field.
 struct CommandList: View {
     /// Whether the advanced feature set is available, so attachments may be
     /// added. True for a paid account and on a LAN link.
     let canAttach: Bool
     /// Pick a photo or a file, or ask for the account screen when locked.
     let onAttachment: (AttachmentPickerKind) -> Void
-    /// Fill the field with a command.
-    let onPick: (String) -> Void
+    /// Open the command and skill palette.
+    let onBrowse: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -276,29 +269,35 @@ struct CommandList: View {
             // called. Plain rows have no such opinion, and every one of them is
             // a button whose whole width is tappable.
             VStack(spacing: 0) {
-                ForEach(ComposerBar.commands, id: \.slash) { command in
-                    Button {
-                        onPick(command.slash + " ")
-                    } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: command.symbol)
-                                .font(.body.weight(.medium))
-                                .frame(width: 30, height: 30)
-                                .foregroundStyle(Theme.accentText)
-                                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            Text(command.title)
-                            Spacer(minLength: 12)
-                            Text(command.slash)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.horizontal, 20)
-                        .frame(height: 50)
-                        .contentShape(.rect)
+                // The palette's door.
+                //
+                // A whole row, not a chevron on the header: the popover now
+                // holds a page, and a page needs an entry that reads as one.
+                Button(action: onBrowse) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "text.magnifyingglass")
+                            .font(.body.weight(.medium))
+                            .frame(width: 30, height: 30)
+                            .foregroundStyle(Theme.accentText)
+                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        Text("Open commands and skills")
+                            // One line, scaled down if the popover is narrow:
+                            // this row is the popover's door, and a door that
+                            // wraps to two lines at 300 pt reads as a paragraph.
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Spacer(minLength: 12)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.pressable(scale: 0.98, dims: true))
-                    .accessibilityIdentifier("command.\(command.slash.dropFirst())")
+                    .padding(.horizontal, 20)
+                    .frame(height: 50)
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.pressable(scale: 0.98, dims: true))
+                .accessibilityIdentifier("composer.browseCommands")
             }
             .padding(.bottom, 8)
         }

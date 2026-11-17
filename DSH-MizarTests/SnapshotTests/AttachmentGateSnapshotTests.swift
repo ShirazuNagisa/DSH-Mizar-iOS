@@ -55,7 +55,7 @@ struct AttachmentGateSnapshotTests {
             of: CommandList(
                 canAttach: state == .unlocked,
                 onAttachment: { _ in },
-                onPick: { _ in },
+                onBrowse: {},
             ),
             named: "AttachmentGate-\(state.rawValue)",
             size: CGSize(width: 300, height: 380),

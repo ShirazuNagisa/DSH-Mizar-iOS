@@ -131,7 +131,14 @@ struct SidebarView: View {
                 // putting it away -- the one tap that used to do nothing at all.
                 showingSync = true
                 guard !model.isSyncing else { return }
-                Task { await model.syncAllConversations() }
+                Task {
+                    await model.syncAllConversations()
+                    // The same tap is a manual refresh for the command palette.
+                    // Forced, because a manual update is the operator saying
+                    // "now"; the first load has its own call and is not
+                    // duplicated here.
+                    await model.syncAgentSkills(force: true)
+                }
             } label: {
                 GlassCircleLabel(size: 38) {
                     RefreshGlyph.live(

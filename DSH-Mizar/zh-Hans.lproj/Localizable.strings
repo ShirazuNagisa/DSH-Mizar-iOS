@@ -1035,3 +1035,15 @@
 "The pairings on your phone belong to the server they were made through. After saving this switch, pair your computer again for the new server; the account and the old pairings are kept." = "手机上的配对记录属于当初配对时所用的服务器。保存切换后，请重新为新服务器配对电脑；账户与旧的配对记录都会保留。";
 "Server changed. Pair your computer again for this server; the account and the existing pairings are kept." = "服务器已更改。请重新为该服务器配对电脑；账户与现有配对记录都会保留。";
 "Accounts, plans and invite codes belong to the official server. This phone is on a server you run, so there is nothing to sign in to." = "账户、计划与邀请码属于官方服务器；这台手机使用的是你自建的服务器，因此无需登录。";
+
+/* 指令与 skill */
+"Open commands and skills" = "打开指令与skill检索";
+"Commands & Skills" = "指令与skill检索";
+"Search commands and skills" = "搜索指令或 skill";
+"Skills" = "skill";
+"Agree what this session is for" = "先明确这次会话要达成什么";
+"Work out the steps before acting" = "先给出步骤计划再动手";
+"No commands or skills match." = "没有匹配的指令或 skill。";
+"This computer's AGI Mizar doesn't sync skills yet. Update the desktop app and they'll appear here." = "这台电脑的 AGI Mizar 还不支持 skill 同步，更新电脑端后自动出现。";
+"The on-device agent has no skills. Connect a computer to browse them." = "本机模式没有 skill 表，连接电脑后可检索。";
+"No skills have been synced yet." = "还没有同步到 skill。";

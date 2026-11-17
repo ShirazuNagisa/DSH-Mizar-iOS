@@ -913,7 +913,7 @@ function answer(frame) {
           // still DSH on macOS; only the name distinguishes the two.
           desktop: { os: 'macOS', client: 'DSH' },
           ...(balanceVariant === 'missing' ? {} : {
-            plugin: { id: balanceVariant === 'nonplugin' ? 'other-plugin' : 'dsh-mizar', capabilities: balanceVariant === 'old' ? [] : ['deepseek.balance.v1'] },
+            plugin: { id: balanceVariant === 'nonplugin' ? 'other-plugin' : 'dsh-mizar', capabilities: balanceVariant === 'old' ? [] : ['deepseek.balance.v1', 'agent.skills.v1'] },
           }),
         },
       }
@@ -924,6 +924,32 @@ function answer(frame) {
           status: 'ready', wallets: [{ currency: 'CNY', balance: balanceVariant === 'long' ? '12345678901234567890.000000000001' : '123.456789' }, { currency: 'USD', balance: '0' }],
           bonusWallets: balanceVariant === 'long' ? [{ currency: 'CNY', balance: '98765432109876543210.123456789012' }, { currency: 'USD', balance: '1.234567890123456789e-20' }] : [{ currency: 'CNY', balance: '2.5' }], topUpURL: 'https://platform.deepseek.com/top_up',
         } : { status: balanceVariant === 'signed-out' ? 'signed-out' : balanceVariant === 'nonofficial' ? 'unsupported' : 'unavailable' },
+      }
+    case 'skill.catalog':
+      // The real host scans one skills directory per agent engine, deduplicates
+      // by name, folds whitespace and truncates. The phone only merges the
+      // delta, so the mock answers with a stable three-entry catalogue: two
+      // ordinary names and a hyphenated one, which is what the composer's pill
+      // tokenisation and the palette's search need to exercise. `known` is
+      // deliberately ignored -- re-sending the same catalog is idempotent in
+      // `AgentSkillMerge`, and a fixture that grew state would make tests
+      // order-dependent.
+      return {
+        v: 1,
+        type: 'ok',
+        id,
+        result: {
+          skills: [
+            { id: 'grilling', name: 'grilling', description: 'Stress-test a plan or a decision before committing to it.', fingerprint: 'mock-grilling-v1', engine: 'dsh' },
+            { id: 'handoff', name: 'handoff', description: 'Hand the current work to another agent with the context it needs.', fingerprint: 'mock-handoff-v1', engine: 'dsh' },
+            { id: 'icon-draw', name: 'icon-draw', description: 'Draw a minimalist app icon as a master SVG.', fingerprint: 'mock-icon-draw-v1', engine: 'dsh' },
+          ],
+          removed: [],
+          complete: true,
+          scannedAt: Date.now(),
+          engines: [{ id: 'dsh', count: 3 }],
+          truncated: false,
+        },
       }
     case 'session.fork':
       forkRequests.push({ ...frame.payload })

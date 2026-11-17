@@ -135,6 +135,18 @@ struct SessionDetailView: View {
     /// Whether the field has the keyboard. Owned here so a tap on the
     /// conversation can put it away.
     @State private var composerFocused = false
+    /// Whether the field is sitting on a lone `/`, which offers the palette.
+    ///
+    /// Reported by the editor rather than derived here: only the field knows
+    /// where the caret is, and the hint is about what is being typed, not about
+    /// what the draft contains.
+    @State private var slashTokenActive = false
+    /// A token the palette put down, handed to the field once and cleared.
+    @State private var composerInsertion: ComposerInsertion?
+    /// Whether the command palette is open.
+    @State private var showingSkillPalette = false
+    /// Whether the palette was opened from a lone `/`, which the pick replaces.
+    @State private var paletteReplacesSlash = false
     /// How tall the floating composer is, measured rather than guessed, so the
     /// scroll content reserves exactly the room it covers.
     @State private var composerHeight: CGFloat = 130
@@ -438,6 +450,12 @@ struct SessionDetailView: View {
                     Task {
                         refreshing = true
                         await reload()
+                        // The manual refresh is also the way to re-read the
+                        // palette's skills: the host's skill list changes when
+                        // the operator adds one on the computer, and the
+                        // palette's own onAppear throttle would otherwise hold
+                        // that change back for twenty seconds.
+                        await model.syncAgentSkills(force: true)
                         refreshing = false
                     }
                 } label: {
@@ -562,6 +580,51 @@ struct SessionDetailView: View {
             // own dismissal; it changes nothing when nothing changed.
             guard !showing else { return }
             Task { await refreshStatsFromCache() }
+        }
+        // The command and skill palette, from the `+` window or from the lone
+        // `/` hint. Its content is a property rather than an inline closure:
+        // this body's modifier chain is long enough that inlining the sheet
+        // pushed the type checker past its budget.
+        .sheet(
+            isPresented: $showingSkillPalette,
+            onDismiss: { paletteReplacesSlash = false },
+        ) { skillPaletteSheet }
+    }
+
+    /// The palette sheet, as presented from this screen.
+    ///
+    /// A sheet rather than a popover because the skill list is a page: search
+    /// at the top, the list under it, and Done when the operator is finished
+    /// reading. The leaf it draws owns no environment, so the same page renders
+    /// from fixtures in the snapshot suite.
+    private var skillPaletteSheet: some View {
+        CommandSkillPaletteSheet(
+            support: skillPaletteSupport,
+            skills: model.agentSkills,
+            onDone: { showingSkillPalette = false },
+            onPick: { literal in
+                // Closed first, then written: the sheet's dismissal is
+                // animated, and a field written underneath it is a write that
+                // can be lost with the presentation. The insertion is consumed
+                // once by the editor; `replacesSlashToken` is only true when a
+                // lone `/` opened the palette.
+                showingSkillPalette = false
+                composerInsertion = ComposerInsertion(
+                    literal: literal,
+                    replacesSlashToken: paletteReplacesSlash,
+                )
+                paletteReplacesSlash = false
+                composerFocused = true
+                slashTokenActive = false
+            },
+        )
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .onAppear {
+            // The list may be stale from the last connection, and this is the
+            // one screen where the operator is looking for a skill: read the
+            // delta again. A cached list stays on screen while it fails.
+            Task { await model.syncAgentSkills(force: false) }
         }
     }
 
@@ -958,6 +1021,29 @@ struct SessionDetailView: View {
         )
     }
 
+    /// The tokens the field may draw as pills.
+    ///
+    /// The two commands are the phone's own; the skills are the computer's,
+    /// synced per machine and already deduplicated by the host. The field only
+    /// needs the names: what a token means is the host's problem.
+    private var composerTokenNames: [String] {
+        ComposerCommand.all.map(\.name) + model.agentSkills.map(\.name)
+    }
+
+    /// How the palette's skills half should read on this connection.
+    ///
+    /// Local mode is checked first: the on-device agent never advertises the
+    /// capability, so asking "does the host support it" would draw the
+    /// "update your desktop app" sentence for what is really "this agent has no
+    /// skills". A host that has not been asked yet reads as ready, because the
+    /// palette triggers its own read and an "unsupported" flash before the
+    /// first answer would be a guess.
+    private var skillPaletteSupport: CommandSkillPalette.Support {
+        if model.isLocalAgentMode { return .localMode }
+        if model.agentSkillSupport == .unsupported { return .unsupported }
+        return .ready
+    }
+
     /// The dock, the way back to the newest message, and the composer.
     private func bottomStack(proxy: ScrollViewProxy) -> some View {
         GeometryReader { container in
@@ -1004,6 +1090,21 @@ struct SessionDetailView: View {
                         .padding(.horizontal, 18)
                         .transition(.fromBelow)
                     }
+                    // The palette's door while typing. A lone `/` is not yet a
+                    // command, and the operator who typed it is asking for the
+                    // list rather than for a prompt that says slash. It sits
+                    // directly above the field, where the confirmation capsule
+                    // lands after an approval -- the same thumb, the same
+                    // height -- and it leaves the moment the token stops being
+                    // a lone slash.
+                    if !composerExpanded, slashTokenActive, !showingSkillPalette {
+                        CommandPaletteHint {
+                            paletteReplacesSlash = true
+                            showingSkillPalette = true
+                        }
+                        .padding(.horizontal, 18)
+                        .transition(.fromBelow)
+                    }
                     ComposerView(
                         sessionId: sessionId,
                         stats: shownStats,
@@ -1028,6 +1129,21 @@ struct SessionDetailView: View {
                                 statsSessionId = sessionId
                             }
                         },
+                        knownTokenNames: composerTokenNames,
+                        insertion: composerInsertion,
+                        onInsertionApplied: { composerInsertion = nil },
+                        onSlashTokenChanged: { active in
+                            // Off while the palette is open: the hint under a
+                            // modal is a control nothing can tap.
+                            slashTokenActive = active && !showingSkillPalette
+                        },
+                        onBrowseCommands: {
+                            // Not a replacement for a `/`: the field was empty
+                            // when the `+` window opened, so the chosen literal
+                            // goes in as ordinary text.
+                            paletteReplacesSlash = false
+                            showingSkillPalette = true
+                        },
                     )
                     // Expanded, the composer fills the overlay up to just under
                     // the title; at rest it wraps its content.
@@ -1038,6 +1154,9 @@ struct SessionDetailView: View {
                 // stack, so the room it takes and the room handed back move with
                 // the same spring as the surface itself.
                 .animation(Motion.pick(.mizarSmooth), value: model.pendingPrompt(for: sessionId)?.id)
+                // The hint arrives and leaves through the field's top edge,
+                // like the held-prompt bar above it.
+                .animation(Motion.pick(.mizarSmooth), value: slashTokenActive)
                 .overlayPreferenceValue(ComposerShellBoundsKey.self) { shellBounds in
                     GeometryReader { stack in
                         Color.clear

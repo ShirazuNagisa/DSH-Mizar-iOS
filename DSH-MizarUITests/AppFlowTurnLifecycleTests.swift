@@ -266,25 +266,25 @@ final class AppFlowTurnLifecycleTests: AppFlowTestBase {
     }
 
     /// The command button puts a command in the field rather than sending it.
+    ///
+    /// The `+` window no longer carries the two commands: it carries the door to
+    /// the command and skill palette (`composer.browseCommands`), and the
+    /// palette carries `/goal` and `/plan`. The assertion is the same one --
+    /// the field ends up with the literal, not a sent message -- through the
+    /// new path.
     func testTheCommandButtonDraftsACommand() {
         let app = launch()
         let commands = app.buttons["composer.commands"]
         expect(commands, "the command button is missing")
         commands.tap()
 
-        let goal = app.buttons["command.goal"]
-        expect(goal, "the command list did not open")
-        goal.tap()
+        let browse = app.buttons["composer.browseCommands"]
+        expect(browse, "the command list did not open")
+        browse.tap()
 
-        // Did the action run at all? The list closes only from inside the
-        // button, so a list still on screen means the tap never reached it --
-        // which is a different fault from a command that ran and was lost.
-        let closed = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in !goal.exists },
-            object: nil,
-        )
-        let outcome = XCTWaiter().wait(for: [closed], timeout: 5)
-        XCTAssertEqual(outcome, .completed, "the tap did not reach the command row")
+        let goal = app.buttons["palette.command.goal"]
+        expect(goal, "the command palette did not open")
+        goal.tap()
 
         // Drafted, not sent: a goal needs text after the slash, and firing it
         // blank would send the agent an empty instruction.
@@ -299,6 +299,39 @@ final class AppFlowTurnLifecycleTests: AppFlowTestBase {
         )
         _ = XCTWaiter().wait(for: [drafted], timeout: 10)
         XCTAssertEqual(field.value as? String, "/goal ", "the command was not drafted into the field")
+    }
+
+    /// A lone `/` offers the palette, and choosing a command replaces the slash
+    /// rather than leaving it in front of the inserted literal.
+    ///
+    /// This is the typing path: the hint is drawn from the editor's caret, the
+    /// sheet replaces the `/` the operator typed, and the field ends with
+    /// exactly one literal and its trailing space.
+    func testTypingASlashOpensTheCommandPalette() {
+        let app = launch()
+        let field = app.textViews["composer.field"]
+        expect(field, "the composer is missing")
+        field.tap()
+        field.typeText("/")
+
+        let hint = app.buttons["composer.paletteHint"]
+        expect(hint, "a lone slash did not offer the palette")
+        hint.tap()
+
+        let plan = app.buttons["palette.command.plan"]
+        expect(plan, "the palette did not open from the slash hint")
+        plan.tap()
+
+        let drafted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in (field.value as? String) == "/plan " },
+            object: nil,
+        )
+        _ = XCTWaiter().wait(for: [drafted], timeout: 10)
+        XCTAssertEqual(
+            field.value as? String,
+            "/plan ",
+            "the chosen command did not replace the lone slash",
+        )
     }
 
     // MARK: - Interactions

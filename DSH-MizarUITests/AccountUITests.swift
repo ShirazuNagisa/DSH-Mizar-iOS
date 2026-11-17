@@ -460,7 +460,7 @@ final class AccountUITests: XCTestCase {
         )
         for _ in 0..<2 {
             commands.tap()
-            if app.buttons["command.goal"].waitForExistence(timeout: 5) { return }
+            if app.buttons["composer.browseCommands"].waitForExistence(timeout: 5) { return }
         }
         XCTFail("the command popover did not open")
     }

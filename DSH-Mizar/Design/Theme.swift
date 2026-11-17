@@ -16,6 +16,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum Theme {
     /// Corner radii, smallest to largest. Nest them concentrically: a surface
@@ -81,6 +82,25 @@ enum Theme {
             ? .white
             : UIColor(red: 10 / 255, green: 120 / 255, blue: 174 / 255, alpha: 1)
     })
+
+    /// The accent as UIKit, for the composer's pill images.
+    ///
+    /// An attachment is drawn into a bitmap outside SwiftUI's environment, so it
+    /// cannot read `Color.accentColor` for itself. This is the same asset,
+    /// resolved against the traits of the field that draws it.
+    static let accentUI = UIColor(named: "AccentColor") ?? .systemBlue
+
+    /// ``onAccent`` as UIKit, for the same reason.
+    ///
+    /// Kept beside the SwiftUI pair rather than derived from it: `UIColor(_:)`
+    /// flattens a dynamic `Color` against whatever trait environment happens to
+    /// be current, which is exactly the ambiguity a pill drawn for one
+    /// appearance and cached for another would trip over.
+    static let onAccentUI = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 3 / 255, green: 20 / 255, blue: 31 / 255, alpha: 1)
+            : .white
+    }
 
     /// The states the app has always coloured, kept to the system's hues so
     /// they follow the appearance and the accessibility contrast setting.

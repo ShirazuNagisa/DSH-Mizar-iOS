@@ -637,11 +637,15 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         // Message content is data from the session, not interface copy.
         let prompt = chinese.staticTexts["Refactor the parser and run the tests."]
         XCTAssertTrue(reveal(prompt, in: chinese), "message content was translated")
-        // The command sheet's names are the app's words; the slash forms beside
-        // them are what the host parses and stay exactly as they are.
+        // The command palette's names are the app's words; the slash forms
+        // beside them are what the host parses and stay exactly as they are.
+        // The `+` window only holds the door to the palette now.
         chinese.buttons["composer.commands"].tap()
-        let chineseGoal = chinese.buttons["command.goal"]
-        expect(chineseGoal, "the command list did not open")
+        let chineseBrowse = chinese.buttons["composer.browseCommands"]
+        expect(chineseBrowse, "the command list did not open")
+        chineseBrowse.tap()
+        let chineseGoal = chinese.buttons["palette.command.goal"]
+        expect(chineseGoal, "the command palette did not open")
         XCTAssertTrue(
             chineseGoal.label.contains("目标"),
             "the command name did not translate: \(chineseGoal.label)",
@@ -657,8 +661,11 @@ final class AppFlowNavigationTests: AppFlowTestBase {
             "the interface did not follow English",
         )
         english.buttons["composer.commands"].tap()
-        let englishGoal = english.buttons["command.goal"]
-        expect(englishGoal, "the command list did not open in English")
+        let englishBrowse = english.buttons["composer.browseCommands"]
+        expect(englishBrowse, "the command list did not open in English")
+        englishBrowse.tap()
+        let englishGoal = english.buttons["palette.command.goal"]
+        expect(englishGoal, "the command palette did not open in English")
         XCTAssertTrue(
             englishGoal.label.contains("Goal"),
             "the command name is not English: \(englishGoal.label)",

@@ -15,9 +15,11 @@
 //
 //  Two renders:
 //  - `CommandList`, the app's own view -- it takes the gate as a `Bool` and
-//    owns no environment (`AttachmentGateSnapshotTests` already renders it),
-//    and since `ComposerBar.commands`' titles are catalogue keys its rows
-//    follow the locale too;
+//    owns no environment (`AttachmentGateSnapshotTests` already renders it).
+//    Its header and the palette door follow the locale; the commands themselves
+//    moved to `ComposerCommand`'s catalogue keys and are drawn by
+//    `CommandSkillPalette`, whose language reference is
+//    `CommandSkillPaletteSnapshotTests`;
 //  - `FailureCard`, the app's own view, internal for exactly this
 //    (`ConversationView`). Its message is hard-coded English on purpose: the
 //    turn's content never translates with the interface, and the pixels prove
@@ -452,18 +454,29 @@ struct ComposerLanguageSnapshotTests {
         )
         try AppSourceContract.expectFragments(
             [
-                #""/goal", "Goal", "target""#,
-                #""command.\(command.slash.dropFirst())""#,
+                "text.magnifyingglass",
+                #".accessibilityIdentifier("composer.browseCommands")"#,
+                #""Open commands and skills""#,
             ],
             in: "DSH-Mizar/Views/ComposerBar.swift",
-            describing: "the goal command's title key and wire identifier",
+            describing: "the palette door in the command popover",
+        )
+        // The commands themselves live in the catalogue now; both rows are
+        // catalogue keys so `Text` localises whichever page draws them.
+        try AppSourceContract.expectFragments(
+            [
+                #"titleKey: "Goal""#,
+                #"summaryKey: "Agree what this session is for""#,
+            ],
+            in: "DSH-Mizar/Views/Commands/ComposerCommand.swift",
+            describing: "the goal command's catalogue keys",
         )
 
         let snapshot = try SnapshotHarness.assertSnapshot(
             of: CommandList(
                 canAttach: true,
                 onAttachment: { _ in },
-                onPick: { _ in },
+                onBrowse: {},
             ),
             named: "ComposerCommands-\(language.rawValue)",
             size: CGSize(width: 300, height: 380),

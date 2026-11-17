@@ -68,6 +68,19 @@ struct ComposerView: View {
     var onCollapsedHeightChanged: ((CGFloat) -> Void)? = nil
     /// Re-read the usage frame after the context page compacts it.
     var onContextChanged: () async -> Void = {}
+    /// The token names the field may draw as pills: the two commands plus the
+    /// connected computer's skills. Owned by the screen, which reads the synced
+    /// list, because a view that fetched here would fetch once per rebuild.
+    var knownTokenNames: [String] = []
+    /// A token the palette asked the field to put down, consumed once.
+    var insertion: ComposerInsertion?
+    /// Called after the field placed ``insertion``, so the screen clears it.
+    var onInsertionApplied: () -> Void = {}
+    /// Whether the field is sitting on a lone `/`, which shows the palette's
+    /// hint above the composer.
+    var onSlashTokenChanged: (Bool) -> Void = { _ in }
+    /// Open the command and skill palette from the `+` window.
+    var onBrowseCommands: () -> Void = {}
 
     @Environment(AppModel.self) private var model
     @State private var sending = false
@@ -120,6 +133,10 @@ struct ComposerView: View {
                 text: $text,
                 expanded: expanded,
                 wantsFocus: focused,
+                knownTokenNames: knownTokenNames,
+                insertion: insertion,
+                onInsertionApplied: onInsertionApplied,
+                onSlashTokenChanged: onSlashTokenChanged,
                 onFocusChanged: { value in focused = value },
                 onMeasuredHeight: { height in fieldHeight = height },
             )
@@ -162,7 +179,6 @@ struct ComposerView: View {
                     ComposerBar(
                         sessionId: sessionId,
                         stats: stats,
-                        draft: $text,
                         focused: $focused,
                         showingModel: $showingModel,
                         showingContext: $showingContext,
@@ -171,6 +187,7 @@ struct ComposerView: View {
                         showingFileImporter: $showingFileImporter,
                         onLockedAttachment: { showingPaywall = true },
                         onContextChanged: onContextChanged,
+                        onBrowseCommands: onBrowseCommands,
                     )
                     Spacer(minLength: 4)
                     // Put the keyboard away. Only there while the keyboard is up:
@@ -724,6 +741,14 @@ struct ComposerTextInput: UIViewRepresentable {
     var expanded: Bool
     /// Whether the field should hold the keyboard.
     var wantsFocus: Bool
+    /// The token names the field may draw as pills. See ``ComposerView``.
+    var knownTokenNames: [String] = []
+    /// A token the palette asked for, placed once and reported back.
+    var insertion: ComposerInsertion?
+    /// Reported after ``insertion`` landed, so the screen clears it.
+    var onInsertionApplied: () -> Void = {}
+    /// Reported when the field starts or stops sitting on a lone `/`.
+    var onSlashTokenChanged: (Bool) -> Void = { _ in }
     /// Called when the editor takes or gives up the keyboard on its own -- a
     /// tap into the field, a tap out of it.
     var onFocusChanged: (Bool) -> Void
@@ -740,6 +765,18 @@ struct ComposerTextInput: UIViewRepresentable {
         let editor = ComposerEditorView()
         editor.delegate = context.coordinator
         context.coordinator.editor = editor
+        editor.knownTokenNames = knownTokenNames
+        editor.onSlashTokenChanged = onSlashTokenChanged
+        // The pill's bitmap is drawn for one appearance and one type size.
+        // Both can change while the field is alive -- a system appearance
+        // switch, a Dynamic Type slider -- and neither is a text change.
+        editor.registerForTraitChanges([
+            UITraitUserInterfaceStyle.self,
+            UITraitPreferredContentSizeCategory.self,
+            UITraitDisplayScale.self,
+        ]) { (view: ComposerEditorView, _) in
+            view.refreshTokenRendering(force: true)
+        }
         editor.onNaturalHeight = { [weak coordinator = context.coordinator] height in
             coordinator?.reportMeasuredHeight(height)
         }
@@ -791,6 +828,7 @@ struct ComposerTextInput: UIViewRepresentable {
         // The draft the screen already holds -- a restored one, or one a
         // command just wrote -- is in the field from the first layout.
         editor.text = text
+        editor.refreshTokenRendering(force: true)
         return editor
     }
 
@@ -801,6 +839,18 @@ struct ComposerTextInput: UIViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.onFocusChanged = onFocusChanged
         context.coordinator.onMeasuredHeight = onMeasuredHeight
+        context.coordinator.onInsertionApplied = onInsertionApplied
+        context.coordinator.onSlashTokenChanged = onSlashTokenChanged
+        context.coordinator.knownTokenNames = knownTokenNames
+        context.coordinator.insertion = insertion
+        editor.knownTokenNames = knownTokenNames
+        editor.onSlashTokenChanged = onSlashTokenChanged
+
+        // A pick from the palette lands before an external write is considered:
+        // it replaces a slash or a selection, writes the binding itself, and the
+        // binding is still the old value for the rest of this update. Treating
+        // that as an external write would undo the insert immediately.
+        let inserted = context.coordinator.applyPendingInsertion()
 
         // The text, only when it has actually changed from outside. Assigning
         // on every SwiftUI update resets the selection, empties the undo
@@ -809,17 +859,19 @@ struct ComposerTextInput: UIViewRepresentable {
         // The placeholder is a UILabel, not the text view's own text, so
         // XCUITest (and VoiceOver) see an empty value for an empty field. Say
         // the placeholder as the value while it is empty; once there is text,
-        // the text is the value. This is also the string the localisation test
-        // asks for.
-        editor.accessibilityValue = text.isEmpty
+        // the plain draft is the value -- `textView.text` would expose the
+        // attachment characters the pills are drawn with, and every assertion
+        // that reads the field would see `\u{FFFC}` instead of `/goal`.
+        let draft = editor.plainText
+        editor.accessibilityValue = draft.isEmpty
             ? String(localized: "Ask your agent…")
-            : nil
-        if editor.text != text, editor.markedTextRange == nil {
+            : draft
+        if !inserted, draft != text, editor.markedTextRange == nil {
             // A composition in progress is the operator's: the marked text is
             // a candidate being chosen between, and a replacement now takes
             // it away. The write waits for the commit, which comes through
             // `textViewDidChange`.
-            editor.text = text
+            editor.setPlainText(text, caret: nil)
             // The caret follows the write -- a command's insert lands where
             // the command put it -- and is scrolled to visible if the write
             // left it below the fold. Reading a long draft by scrolling up is
@@ -828,6 +880,11 @@ struct ComposerTextInput: UIViewRepresentable {
                 editor.scrollRectToVisible(editor.caretRect(for: caret), animated: false)
             }
         }
+
+        // A synced skill list that arrived while the field was open is new
+        // tokens to draw. The call is a no-op when nothing a pill depends on
+        // changed, so it can run on every update.
+        editor.refreshTokenRendering()
 
         // The keyboard follows the binding, and only on a change: calling
         // `becomeFirstResponder` on every update re-opens a keyboard the
@@ -851,12 +908,18 @@ struct ComposerTextInput: UIViewRepresentable {
 }
 
 /// The editor itself: a plain `UITextView` that reports the height its text
-/// needs at whatever width it has been given.
+/// needs at whatever width it has been given, and draws the tokens it is told
+/// about as capsules.
 ///
 /// Measured in `layoutSubviews` rather than on the text delegate alone: the
 /// natural height depends on the width, and the width changes with a
 /// rotation, an iPad split and a Dynamic Type change -- none of which is a
 /// text change. `measureAndReportNaturalHeight()` covers the text changes.
+///
+/// The draft is still a plain string. The attributed text this view holds is a
+/// *rendering* of that string: every token is one `U+FFFC` carrying an image,
+/// and ``plainText`` turns the field back into exactly what was typed. That is
+/// what keeps the send path, the draft store and the host's parser unchanged.
 @MainActor
 final class ComposerEditorView: UITextView {
     /// The placeholder label, shown while the field is empty.
@@ -870,7 +933,24 @@ final class ComposerEditorView: UITextView {
     /// the layout produces a different one.
     var onNaturalHeight: ((CGFloat) -> Void)?
 
+    /// The token names the field may draw as pills.
+    var knownTokenNames: [String] = []
+
+    /// Reported when the field starts or stops sitting on a lone `/`.
+    var onSlashTokenChanged: ((Bool) -> Void)?
+
     private var lastReportedHeight: CGFloat = 0
+    /// The literals last rendered, in order. Positions are deliberately absent:
+    /// typing in front of a pill shifts every range and must not force a
+    /// rebuild, while adding, removing or renaming a token must.
+    private var lastTokenLiterals = ""
+    private var lastKnownTokenNames: [String] = []
+    private var lastBuildWidth: CGFloat = 0
+    private var lastBuildStyle: UIUserInterfaceStyle = .unspecified
+    /// Guards the one recursion this class could create: assigning
+    /// `attributedText` moves the selection, and a selection change reports the
+    /// slash state.
+    private var isRendering = false
 
     /// Eight lines at the current font: the resting composer's ceiling. Past
     /// it the editor scrolls instead of growing, which is the whole point --
@@ -882,6 +962,13 @@ final class ComposerEditorView: UITextView {
     override func layoutSubviews() {
         super.layoutSubviews()
         measureAndReportNaturalHeight()
+        // The pill's truncation is a question about the width. A rotation or a
+        // split changes it without a text change; the refresh is deferred one
+        // turn because replacing `attributedText` inside layout would ask for
+        // another layout from inside this one.
+        if bounds.width > 0, abs(bounds.width - lastBuildWidth) > 0.5 {
+            scheduleRenderRefresh()
+        }
     }
 
     /// Measure the text at its actual width, clamp to the resting viewport,
@@ -902,6 +989,234 @@ final class ComposerEditorView: UITextView {
         lastReportedHeight = reported
         onNaturalHeight?(reported)
     }
+
+    // MARK: - The plain draft
+
+    /// Exactly what was typed, with every token spelled back out.
+    ///
+    /// The field's own `text` is not this: it contains one `U+FFFC` per pill.
+    /// This is the value the binding, the draft store and the send path see.
+    var plainText: String {
+        let source = renderedText
+        guard source.length > 0 else { return "" }
+        let text = source.string as NSString
+        var plain = ""
+        plain.reserveCapacity(source.length)
+        source.enumerateAttributes(
+            in: NSRange(location: 0, length: source.length),
+            options: [],
+        ) { attributes, range, _ in
+            if let literal = attributes[ComposerPill.literalKey] as? String {
+                plain += literal
+            } else {
+                plain += text.substring(with: range)
+            }
+        }
+        return plain
+    }
+
+    /// The selection, in plain-text offsets.
+    var plainSelectionRange: NSRange {
+        let selection = selectedRange
+        let rendered = renderedText
+        let start = plainOffset(for: selection.location, in: rendered)
+        let end = plainOffset(for: NSMaxRange(selection), in: rendered)
+        return NSRange(location: start, length: max(0, end - start))
+    }
+
+    /// The attributed text, never nil: `UITextView.attributedText` is optional
+    /// only because it predates attributed strings being its normal state.
+    private var renderedText: NSAttributedString {
+        attributedText ?? NSAttributedString()
+    }
+
+    /// Put a plain draft in the field and rebuild its pills.
+    ///
+    /// - Parameters:
+    ///   - plain: the whole draft, as typed.
+    ///   - caret: where the insertion point goes, in plain offsets. `nil` puts
+    ///     it at the end, which is where an external write such as restoring a
+    ///     draft or a command's insert lands.
+    func setPlainText(_ plain: String, caret: Int?) {
+        text = plain
+        // `text` replaced the attributed string, so whatever was on screen is
+        // gone; the next render must rebuild even if the literals happen to
+        // compare equal.
+        lastTokenLiterals = "\u{0}"
+        refreshTokenRendering(force: true)
+        let target = caret ?? (plain as NSString).length
+        let rendered = renderedText
+        let location = attributedOffset(forPlain: target, in: rendered)
+        selectedRange = NSRange(location: min(location, rendered.length), length: 0)
+        reportSlashState()
+    }
+
+    // MARK: - Rendering
+
+    /// Rebuild the attributed text when what a pill looks like has changed.
+    ///
+    /// Called on every keystroke and every SwiftUI update; it is a no-op unless
+    /// the token list, the known names, the width or the appearance changed.
+    /// A composition in progress is never interrupted.
+    func refreshTokenRendering(force: Bool = false) {
+        guard !isRendering, markedTextRange == nil else { return }
+        let plain = plainText
+        let tokens = ComposerTokens.scan(plain, names: knownTokenNames)
+        let literals = tokens.map(\.literal).joined(separator: "\u{1F}")
+        let width = bounds.width
+        let style = traitCollection.userInterfaceStyle
+        let hasAttachment = containsAttachments
+        let drawn = hasAttachment || !tokens.isEmpty
+        let needs = force
+            || literals != lastTokenLiterals
+            || knownTokenNames != lastKnownTokenNames
+            || (drawn && (style != lastBuildStyle || abs(width - lastBuildWidth) > 0.5))
+        guard needs else {
+            // The bookkeeping still moves: a width that is irrelevant while the
+            // field holds no pills is today's baseline for tomorrow's.
+            lastBuildWidth = width
+            lastBuildStyle = style
+            return
+        }
+
+        let caret = plainOffset(for: selectedRange.location, in: renderedText)
+        isRendering = true
+        let built = makeAttributedText(plain, tokens: tokens, width: width)
+        attributedText = built
+        let restored = attributedOffset(forPlain: caret, in: built)
+        selectedRange = NSRange(location: min(restored, built.length), length: 0)
+        typingAttributes = baseAttributes
+        isRendering = false
+
+        lastTokenLiterals = literals
+        lastKnownTokenNames = knownTokenNames
+        lastBuildWidth = width
+        lastBuildStyle = style
+        reportSlashState()
+    }
+
+    /// Tell the screen whether the caret is on a lone `/`.
+    func reportSlashState() {
+        guard !isRendering else { return }
+        let caret = plainOffset(for: selectedRange.location, in: renderedText)
+        onSlashTokenChanged?(ComposerTokens.isLoneSlashToken(plainText, caret: caret))
+    }
+
+    /// The attributes every ordinary character is drawn with.
+    private var baseAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: font ?? UIFont.preferredFont(forTextStyle: .body),
+            .foregroundColor: textColor ?? UIColor.label,
+        ]
+    }
+
+    /// The draft, with one attachment where each token is.
+    private func makeAttributedText(
+        _ plain: String,
+        tokens: [ComposerToken],
+        width: CGFloat,
+    ) -> NSAttributedString {
+        let built = NSMutableAttributedString()
+        let source = plain as NSString
+        var cursor = 0
+        for token in tokens {
+            if token.range.location > cursor {
+                let run = NSRange(
+                    location: cursor,
+                    length: token.range.location - cursor,
+                )
+                built.append(NSAttributedString(string: source.substring(with: run), attributes: baseAttributes))
+            }
+            let attachment = ComposerPill.attachment(
+                literal: token.literal,
+                // A pill may take the whole line and no more; the image
+                // truncates its own text when that is not enough.
+                maxWidth: max(1, width),
+                traits: traitCollection,
+            )
+            let run = NSMutableAttributedString(attachment: attachment)
+            run.addAttribute(
+                ComposerPill.literalKey,
+                value: token.literal,
+                range: NSRange(location: 0, length: run.length),
+            )
+            built.append(run)
+            cursor = NSMaxRange(token.range)
+        }
+        if cursor < source.length {
+            built.append(NSAttributedString(
+                string: source.substring(from: cursor),
+                attributes: baseAttributes,
+            ))
+        }
+        return built
+    }
+
+    // MARK: - Offsets
+
+    /// A position in the attributed text as a position in the plain draft.
+    private func plainOffset(for attributedOffset: Int, in attributed: NSAttributedString) -> Int {
+        guard attributedOffset > 0, attributed.length > 0 else { return 0 }
+        let limit = min(attributedOffset, attributed.length)
+        var plain = 0
+        var index = 0
+        while index < limit {
+            let attributes = attributed.attributes(at: index, effectiveRange: nil)
+            if let literal = attributes[ComposerPill.literalKey] as? String {
+                plain += (literal as NSString).length
+            } else {
+                plain += 1
+            }
+            index += 1
+        }
+        // A caret past the last character (the normal end-of-text position)
+        // keeps the characters it passed; there are none left to add.
+        return plain
+    }
+
+    /// A position in the plain draft as a position in the attributed text.
+    ///
+    /// A plain position inside a token resolves to the token's own start: the
+    /// caret can sit before or after a pill, never in the middle of one.
+    private func attributedOffset(forPlain plain: Int, in attributed: NSAttributedString) -> Int {
+        guard plain > 0 else { return 0 }
+        var counted = 0
+        var index = 0
+        while index < attributed.length {
+            let attributes = attributed.attributes(at: index, effectiveRange: nil)
+            let span = (attributes[ComposerPill.literalKey] as? String)
+                .map { ($0 as NSString).length } ?? 1
+            if counted + span > plain { return index }
+            counted += span
+            index += 1
+        }
+        return attributed.length
+    }
+
+    /// Whether any run is a pill.
+    private var containsAttachments: Bool {
+        let rendered = renderedText
+        guard rendered.length > 0 else { return false }
+        var found = false
+        rendered.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: rendered.length),
+            options: [],
+        ) { value, _, stop in
+            if value != nil {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    /// Re-render next turn, outside the layout that discovered the change.
+    private func scheduleRenderRefresh() {
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshTokenRendering()
+        }
+    }
 }
 
 /// The bridge between the editor and the screen's state.
@@ -915,6 +1230,14 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
     var text: Binding<String>
     var onFocusChanged: (Bool) -> Void
     var onMeasuredHeight: (CGFloat) -> Void
+    var onInsertionApplied: () -> Void = {}
+    var onSlashTokenChanged: (Bool) -> Void = { _ in }
+    var knownTokenNames: [String] = []
+    /// A token the palette asked for, waiting for the next update.
+    var insertion: ComposerInsertion?
+    /// The last request this bridge placed. Identity, not equality: picking the
+    /// same command twice is two inserts.
+    private var lastInsertionId: UUID?
 
     /// The editor this coordinator belongs to. Weak: the editor holds the
     /// coordinator as its delegate, and the measurement has to reach the
@@ -955,18 +1278,92 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
         // the only path that writes on an ordinary keystroke, and the
         // `updateUIView` guard above is what keeps that write from coming
         // straight back as a replacement.
-        text.wrappedValue = textView.text ?? ""
+        //
+        // `plainText`, not `textView.text`: the field's own text holds one
+        // replacement character per pill, and the draft is what was typed.
+        guard let editor else { return }
+        text.wrappedValue = editor.plainText
         // The text changed, so the height it needs may have: a paragraph
-        // that just wrapped is a line taller.
-        editor?.measureAndReportNaturalHeight()
+        // that just wrapped is a line taller. The render is a no-op unless a
+        // token completed or disappeared; a composition in progress is left
+        // alone until it commits.
+        editor.refreshTokenRendering()
+        editor.measureAndReportNaturalHeight()
+        editor.reportSlashState()
+    }
+
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        // The hint follows the caret, not the text: typing `/`, walking the
+        // caret off it and walking back are the same token and three states.
+        editor?.reportSlashState()
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) {
         setFocus(true)
+        editor?.reportSlashState()
     }
 
     func textViewDidEndEditing(_ textView: UITextView) {
         setFocus(false)
+        // A hint that stayed up after the keyboard went away would be a control
+        // about typing with nothing to type into.
+        onSlashTokenChanged(false)
+    }
+
+    // MARK: - The palette's pick
+
+    /// Place a token the palette asked for, once.
+    ///
+    /// The editor's own selection decides where it lands. When the request came
+    /// from the hint, the lone `/` before the caret is the trigger and is
+    /// replaced; otherwise the pick replaces the selection, or inserts at the
+    /// caret. A space follows every pill so the next word starts a word.
+    ///
+    /// - Returns: whether something was placed. The caller must not treat the
+    ///   still-old binding as an external write in that same update.
+    @discardableResult
+    func applyPendingInsertion() -> Bool {
+        guard let editor, let insertion,
+              insertion.id != lastInsertionId,
+              editor.markedTextRange == nil
+        else { return false }
+        lastInsertionId = insertion.id
+
+        let plain = editor.plainText as NSString
+        var range = editor.plainSelectionRange
+        // With no keyboard there is no caret the operator can see. A pick made
+        // from the `+` window then goes at the end of what is already there,
+        // rather than in front of a draft the field was never opened on.
+        if !editor.isFirstResponder,
+           range.length == 0,
+           range.location == 0,
+           plain.length > 0,
+           !insertion.replacesSlashToken
+        {
+            range = NSRange(location: plain.length, length: 0)
+        }
+        if insertion.replacesSlashToken, range.length == 0, range.location > 0 {
+            let index = range.location - 1
+            if plain.character(at: index) == 0x2F,
+               index == 0 || ComposerTokens.isWhitespace(plain.character(at: index - 1))
+            {
+                range = NSRange(location: index, length: 1)
+            }
+        }
+        let literal = insertion.literal + " "
+        let updated = plain.replacingCharacters(in: range, with: literal)
+        editor.setPlainText(updated, caret: range.location + (literal as NSString).length)
+        // The binding and the screen's "consumed" state are written next turn:
+        // this bridge is inside SwiftUI's own update, and mutating observable
+        // state from there is how a view update turns into a cycle. The editor
+        // already holds the new draft, so the delayed write lands on a field
+        // that agrees with it.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.text.wrappedValue = updated
+            self.onInsertionApplied()
+        }
+        return true
     }
 
     private func setFocus(_ value: Bool) {

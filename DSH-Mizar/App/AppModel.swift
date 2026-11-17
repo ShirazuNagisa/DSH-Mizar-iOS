@@ -42,7 +42,20 @@ final class AppModel {
 
     private(set) var phase: Phase = .launching
     /// The host this device is paired with, once known.
-    private(set) var host: PairedHost?
+    private(set) var host: PairedHost? {
+        didSet {
+            guard host?.hostId != oldValue?.hostId else { return }
+            // The skills belong to the machine, and the palette switches with
+            // it. Read here rather than after the socket opens: a launch that
+            // cannot connect still has the last list this machine sent, and a
+            // switch never draws the previous machine's list for a moment.
+            if let hostId = host?.hostId {
+                loadCachedAgentSkills(for: hostId)
+            } else {
+                clearAgentSkills()
+            }
+        }
+    }
     /// Every machine this phone is paired with, oldest pairing first.
     ///
     /// A list rather than one, because "one phone, one computer" was an assumption
@@ -62,6 +75,24 @@ final class AppModel {
     }
 
     private(set) var mode: HostMode = .remote
+
+    /// Whether the connected computer can answer `skill.catalog`.
+    ///
+    /// A separate axis from "did the read succeed": an old computer and a
+    /// network that is down both leave the phone with no fresh skills, but only
+    /// the first is a reason to stop asking until the next connection. The
+    /// palette draws a different sentence for each, and for the on-device agent,
+    /// which has no skill directories at all.
+    enum AgentSkillSupport: Equatable {
+        /// Nothing has been read on this connection yet.
+        case unknown
+        /// `host.info` advertises `agent.skills.v1`.
+        case supported
+        /// The computer is older than the method, or answered `NOT_IMPLEMENTED`.
+        case unsupported
+        /// The on-device agent; it has no agents' skill directories to read.
+        case localMode
+    }
 
     /// The on-device agent, and the kernel behind it.
     ///
@@ -901,6 +932,59 @@ final class AppModel {
     private var permissionCatalogState = HostScoped<PermissionCatalog>()
     /// See ``permissionCatalogState``.
     var permissionCatalog: PermissionCatalog? { permissionCatalogState.value(for: currentTag) }
+
+    // MARK: - Skills the computer's agents have
+
+    /// Every skill the connected computer's agents offer, deduplicated by the host.
+    ///
+    /// Kept as the plain array the palette draws rather than as a
+    /// ``AgentSkillCatalog``: the host id and scan time are separate facts (see
+    /// below), and a view has no use for either.
+    private(set) var agentSkills: [AgentSkill] = []
+    /// When the host last scanned its skill directories, for the palette's footer.
+    private(set) var agentSkillsScannedAt: Date?
+    /// Whether this connection can answer `skill.catalog`; see ``syncAgentSkills(force:)``.
+    private(set) var agentSkillSupport: AgentSkillSupport = .unknown
+    /// The machine ``agentSkills`` belong to.
+    ///
+    /// Held so a cache read for the computer that was open a moment ago can
+    /// never be published as the new one's list. Cleared and set again by
+    /// ``loadCachedAgentSkills(for:)``; nothing else writes it.
+    private var agentSkillHostId: String?
+    /// `host.info`'s plugin report, read at most once per connection.
+    ///
+    /// The capability question is about the *host*, not the request, so a
+    /// supported computer is not asked again on every refresh and an old one is
+    /// not asked again at all until the socket is replaced.
+    private var agentSkillPlugin: HostPlugin?
+    /// The connection ``agentSkillPlugin`` was read over.
+    ///
+    /// A reconnect to the same machine is a new conversation with it, and the
+    /// desktop may have been updated in between; the tag is what makes the
+    /// cached answer expire.
+    private var agentSkillPluginTag: HostTag?
+    /// When the last catalog read was started, for the twenty-second throttle.
+    ///
+    /// Stamped before the network call rather than after it: a call that times
+    /// out must not be repeated by the next screen that appears.
+    private var agentSkillSyncStartedAt: Date?
+    /// Whether what is in memory is also on disk.
+    ///
+    /// The merge's `changed` answer is "the fingerprints differed"; an answer
+    /// that differs in nothing but its scan time is not a reason to rewrite the
+    /// file. This is what distinguishes "the host said the same thing" from
+    /// "nothing has ever been written".
+    private var agentSkillsAreStored = false
+    /// The per-machine cache: `Application Support/MizarSkills/<hostId>.json`.
+    private let agentSkillStore = FileAgentSkillStore()
+    /// How often an automatic skill read may run.
+    ///
+    /// Twenty seconds, because the triggers are screen-local -- a return to the
+    /// foreground, the sidebar's refresh, the palette opening -- and several of
+    /// them can fire inside one second. A manual refresh passes `force: true`
+    /// and is not throttled.
+    static let agentSkillSyncInterval: TimeInterval = 20
+
     /// The poll that watches for pending interactions.
     private var interactionPoll: Task<Void, Never>?
     /// The poll that follows a session while something is running.
@@ -1221,9 +1305,15 @@ final class AppModel {
             // long has this been up" cannot disagree with the socket in use.
             if connection == nil {
                 connectedSince = nil
+                // The capability was a fact about this socket's host.info
+                // answer. What is on screen stays -- a cache read is still the
+                // last thing the computer said -- but the socket-scoped half of
+                // the skill state does not survive it.
+                forgetAgentSkillConnection()
             } else if connection !== oldValue {
                 connectedSince = Date()
                 latencySamples = []
+                forgetAgentSkillConnection()
             }
         }
     }
@@ -1951,6 +2041,7 @@ final class AppModel {
             }
             try? await credentials.remove(hostId: host.hostId)
             await indexStore.remove(hostId: host.hostId)
+            agentSkillStore.delete(hostId: host.hostId)
             UserDefaults.standard.removeObject(forKey: "lastSession.\(host.hostId)")
             UserDefaults.standard.removeObject(forKey: Self.usageCacheKey(host.hostId))
         }
@@ -2235,6 +2326,7 @@ final class AppModel {
         // Leaving it would show one computer's sessions under another's name the next
         // time somebody paired a machine that reused the id.
         await indexStore.remove(hostId: hostId)
+        agentSkillStore.delete(hostId: hostId)
         hosts.removeAll { $0.hostId == hostId }
         guard host?.hostId == hostId else { return }
         disconnectCurrent()
@@ -2438,6 +2530,10 @@ final class AppModel {
         permissionCatalogState.clear()
         pendingState.clear()
         recentHostEventState.clear()
+        // Skills are that computer's too. The file stays on disk -- the next
+        // launch or the next reconnect reads it back -- but this process does
+        // not carry one machine's palette into another's session.
+        clearAgentSkills()
         // A held prompt belongs to a session on the machine being left. It
         // cannot be sent anywhere else, and carrying it over would put a bar
         // over a conversation on the next computer with words typed about this
@@ -3163,6 +3259,211 @@ final class AppModel {
         await loadCatalogs()
     }
 
+    // MARK: - Skills
+
+    /// Read the computer's skill list, incrementally, and put it on screen.
+    ///
+    /// The phone sends the ids and fingerprints it already holds; the host
+    /// answers only the differences. That makes an ordinary refresh a few bytes
+    /// rather than the whole list, and it is why the merge -- not the read -- is
+    /// what keeps the palette correct when a directory could not be read.
+    ///
+    /// The contract, in order:
+    /// - the on-device agent has no skill directories: `.localMode`, no request;
+    /// - with no socket the cache on screen stays and nothing is shown as an
+    ///   error, because a phone in a tunnel has not learned anything new;
+    /// - a computer that does not advertise `agent.skills.v1` is not asked at
+    ///   all, and is not asked again on this connection;
+    /// - a read that fails leaves the cache in place: this is a background
+    ///   convenience, never a banner;
+    /// - `NOT_IMPLEMENTED` from a host whose capability bit was wrong is the
+    ///   second line of defence and lands in the same `.unsupported` branch.
+    ///
+    /// - Parameter force: bypass the twenty-second throttle. The sidebar's
+    ///   refresh button is the caller that means "now".
+    func syncAgentSkills(force: Bool = false) async {
+        guard !isLocalAgentMode else {
+            agentSkillSupport = .localMode
+            return
+        }
+        guard let hostId = host?.hostId else {
+            // No pairing and no socket: there is no machine to ask.
+            return
+        }
+        guard let connection, let tag = currentTag else {
+            // No socket. What the cache put on screen is still the last thing
+            // this computer said, and replacing it with nothing would make an
+            // offline palette look like an empty one.
+            if agentSkillHostId != hostId { loadCachedAgentSkills(for: hostId) }
+            return
+        }
+        // Another machine's list is not this machine's starting point. This
+        // normally already happened when the host was opened; it is repeated
+        // here because a path that skipped that load must not merge into the
+        // wrong catalog.
+        if agentSkillHostId != hostId { loadCachedAgentSkills(for: hostId) }
+
+        // A computer that has said it cannot is not asked again on this
+        // connection. A reconnect changes the tag, and gets one more try.
+        if agentSkillSupport == .unsupported, agentSkillPluginTag == tag { return }
+
+        let now = Date()
+        if !force,
+           let last = agentSkillSyncStartedAt,
+           now.timeIntervalSince(last) < Self.agentSkillSyncInterval
+        {
+            return
+        }
+        agentSkillSyncStartedAt = now
+
+        // The capability, once per connection. Read through the same facade as
+        // every other call so the request log has its method and duration; the
+        // answer is a plugin report, not a balance, so it is kept here rather
+        // than in `syncRelayTier`.
+        if agentSkillPluginTag != tag {
+            agentSkillPlugin = nil
+            agentSkillPluginTag = nil
+            do {
+                let info = try await loggedCall("host.info", on: connection, as: HostInfo.self)
+                // The operator may have switched computers during the round
+                // trip; that answer belongs to a socket this app no longer has.
+                guard tag == currentTag else { return }
+                agentSkillPlugin = info.plugin
+                agentSkillPluginTag = tag
+            } catch {
+                // Leave `.unknown`: a host.info that timed out says nothing
+                // about whether the host supports skills, and the next refresh
+                // should ask again. Silent by design.
+                log.add(.sync, "skills: host.info did not answer, support stays unknown")
+                return
+            }
+        }
+        guard agentSkillPlugin?.supportsAgentSkills == true else {
+            agentSkillSupport = .unsupported
+            log.add(.sync, "skills: this computer does not advertise agent.skills.v1")
+            return
+        }
+        agentSkillSupport = .supported
+
+        // What this phone holds, in the shape the host diffs against. Empty is
+        // a legitimate value: a reinstalled phone asks for everything.
+        let known = agentSkills.map { skill in
+            JSONValue.object([
+                "id": .string(skill.id),
+                "fingerprint": .string(skill.fingerprint),
+            ])
+        }
+        do {
+            let delta = try await loggedCall(
+                "skill.catalog",
+                payload: .object(["known": .array(known)]),
+                on: connection,
+                as: AgentSkillDelta.self,
+            )
+            // Both checks matter: the socket may have been replaced, and the
+            // host may have been switched, while the answer was in flight.
+            guard tag == currentTag, agentSkillHostId == hostId else { return }
+            let held = AgentSkillCatalog(
+                hostId: hostId,
+                scannedAt: agentSkillsScannedAt.map(Self.skillMilliseconds) ?? 0,
+                complete: true,
+                skills: agentSkills,
+            )
+            let (merged, changed) = AgentSkillMerge.merge(held, delta: delta)
+            agentSkills = merged.skills
+            agentSkillsScannedAt = Self.skillDate(fromMilliseconds: merged.scannedAt)
+            agentSkillHostId = merged.hostId
+            // An answer whose fingerprints all match is not a reason to rewrite
+            // the file; the first answer for a machine is, even when it is empty.
+            if changed || !agentSkillsAreStored {
+                do {
+                    try agentSkillStore.save(merged)
+                    agentSkillsAreStored = true
+                } catch {
+                    // A cache that cannot be written is a cache that does not
+                    // exist, not a failure worth showing. The network works.
+                    log.add(.cache, "skills: could not write this machine's cache")
+                }
+            }
+            log.add(
+                .sync,
+                "skills: \(merged.skills.count) held, \(changed ? "changed" : "unchanged")",
+            )
+        } catch {
+            // The old-computer case the capability bit could not catch. It is
+            // not a network failure and retrying it on this socket is pointless.
+            if let mizar = error as? MizarError, mizar.known == .notImplemented {
+                agentSkillSupport = .unsupported
+                log.add(.sync, "skills: the computer answered NOT_IMPLEMENTED")
+            } else {
+                // Timeout, closed socket, bad shape: keep the cache, say
+                // nothing on screen, try again on the next trigger.
+                log.add(.sync, "skills: catalog read failed, keeping the cache")
+            }
+        }
+    }
+
+    /// Put the stored skills for one machine on screen.
+    ///
+    /// Synchronous on purpose: the read is a small JSON file and the app is the
+    /// main actor, so there is no suspension under which the operator could
+    /// switch machines. A read for another machine still starts from an empty
+    /// state -- the two caches are never combined.
+    ///
+    /// - Parameter hostId: the machine being opened, which must already be `host`.
+    private func loadCachedAgentSkills(for hostId: String) {
+        guard !isLocalAgentMode else { return }
+        guard agentSkillHostId != hostId else { return }
+        clearAgentSkills()
+        agentSkillHostId = hostId
+        guard let stored = try? agentSkillStore.load(hostId: hostId) else {
+            log.add(.cache, "skills: nothing stored for this machine")
+            return
+        }
+        agentSkills = stored.skills
+        agentSkillsScannedAt = Self.skillDate(fromMilliseconds: stored.scannedAt)
+        agentSkillsAreStored = true
+        log.add(.cache, "skills: read \(stored.skills.count) from this machine's cache")
+    }
+
+    /// Drop the in-memory skill state.
+    ///
+    /// The stored file is deliberately untouched: a cache that is deleted on
+    /// every reconnect would be empty exactly when the next launch needs it.
+    /// Unpairing deletes the file through ``agentSkillStore``.
+    private func clearAgentSkills() {
+        agentSkills = []
+        agentSkillsScannedAt = nil
+        agentSkillSupport = .unknown
+        agentSkillHostId = nil
+        agentSkillsAreStored = false
+        agentSkillPlugin = nil
+        agentSkillPluginTag = nil
+        agentSkillSyncStartedAt = nil
+    }
+
+    /// Forget the half of the skill state that belonged to one socket.
+    ///
+    /// Called from the one place every connection passes through. The skills
+    /// themselves stay: an operator who walks into a lift keeps the list they
+    /// can no longer refresh.
+    private func forgetAgentSkillConnection() {
+        agentSkillPlugin = nil
+        agentSkillPluginTag = nil
+        agentSkillSyncStartedAt = nil
+        if !isLocalAgentMode { agentSkillSupport = .unknown }
+    }
+
+    /// The wire's scan time, in milliseconds, as a date for the footer.
+    private static func skillDate(fromMilliseconds milliseconds: Int64) -> Date {
+        Date(timeIntervalSince1970: Double(milliseconds) / 1000)
+    }
+
+    /// A date as the wire's milliseconds, for the next merge.
+    private static func skillMilliseconds(from date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1000).rounded())
+    }
+
     /// Send a prompt to a session.
     ///
     /// - Parameters:
@@ -3650,7 +3951,18 @@ final class AppModel {
         // it, not because a plan moved. There is no other tier to move to.
         guard !isSelfHosted else { return }
         guard let connection, phase == .ready else { return }
+        // Captured before the round trip: the operator can switch computers
+        // while it is in flight, and this answer is only about this socket.
+        let tag = currentTag
         guard let info = try? await connection.call("host.info", as: HostInfo.self) else { return }
+        // The skills sync needs the same plugin report, and this is already the
+        // once-per-connection read of it. Caching it here keeps a refresh from
+        // paying a second `host.info`; `syncAgentSkills` still reads one itself
+        // when this path is skipped (a self-hosted relay).
+        if let tag, tag == currentTag {
+            agentSkillPlugin = info.plugin
+            agentSkillPluginTag = tag
+        }
         // The direct-path line is what a cable-attached test reads when the
         // punched route is planned and never attempted: "nil" here is the whole
         // answer, and it is otherwise invisible from the outside.
@@ -4644,7 +4956,13 @@ final class AppModel {
         hosts = []
         LastOpenedHostStore.store(nil)
         try? await credentials.clear()
-        for forgotten in forgetting { await indexStore.remove(hostId: forgotten) }
+        for forgotten in forgetting {
+            await indexStore.remove(hostId: forgotten)
+            // The pairing is gone, so the skills read through it are gone too.
+            // An id paired again later must start from the host's answer, not
+            // from this phone's memory of a previous pairing.
+            agentSkillStore.delete(hostId: forgotten)
+        }
         titles = [:]
         workspaces = nil
         hasStoredIndex = false
@@ -4657,6 +4975,7 @@ final class AppModel {
         permissionCatalogState.clear()
         pendingState.clear()
         recentHostEventState.clear()
+        clearAgentSkills()
         phase = .unpaired
         log.add(.connection, "unpaired: every stored credential and index removed")
     }
@@ -5046,6 +5365,11 @@ final class AppModel {
         // A return is a new link to the computer, so the home page's figures
         // are read again; in the background, so the screen is usable first.
         Task { await loadUsageOverview() }
+        // The same kind of pass for the skills: the desktop may have installed
+        // one while the phone was in a pocket, and the palette is one tap away.
+        // Throttled and silent; a return that failed to get a socket keeps the
+        // cache instead.
+        Task { await syncAgentSkills(force: false) }
     }
 
     /// Mark an automatic pass as running, for the refresh button to draw.
@@ -7203,6 +7527,14 @@ final class AppModel {
     private func runFirstLoad() async {
         firstLoad = true
         defer { firstLoad = false }
+        // The cache first, so the palette has content from the first frame; the
+        // delta is a background read and a computer that cannot answer it must
+        // not delay or fail the download. `finishAdopting` has already done the
+        // same load for its own reasons, and this one is a no-op then.
+        if let hostId = host?.hostId {
+            loadCachedAgentSkills(for: hostId)
+        }
+        Task { await syncAgentSkills(force: false) }
         await syncAllConversations()
     }
 
@@ -7799,6 +8131,12 @@ final class AppModel {
         linkFailure = nil
         cancelLiveActivityDisconnectSweep()
         phase = .ready
+        // What this machine last said about its skills, before the session list
+        // is read: the palette can open on the cache while the network is still
+        // working. Host-scoped, so a switch never draws the old machine's list.
+        if let hostId = currentTag?.hostId {
+            loadCachedAgentSkills(for: hostId)
+        }
         // A launch's first read, and a reconnect's -- both automatic. The button
         // that a person would have tapped instead shows itself working; see
         // ``autoRefreshing``.
@@ -7821,6 +8159,11 @@ final class AppModel {
             await syncRelayTier()
         }
         startInteractionPoll()
+        // The cold-launch half of "refresh on entering the app": the return path
+        // has its own call in ``refreshAfterReturning()``, and the throttle makes
+        // the two harmless when both fire for one launch. Background, because
+        // the screen is already usable and a skill list is never worth a wait.
+        Task { await syncAgentSkills(force: false) }
 
         if let requested = Self.launchSelectedSession {
             selectedSessionId = requested == "first" ? sessions.first?.sessionId : requested
