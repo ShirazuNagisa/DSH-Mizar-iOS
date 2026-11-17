@@ -112,3 +112,7 @@ Resume by checking the connected phone and the original echo-only test session. 
 - 结论：**本次单条 echo-only 实测的 DSH 侧审批闭环通过**（same approval → allowed-once → pending 消失 → same toolCall exit=0 + 固定输出）。范围仅限本分支 `1326741`、已装 `0.9.11 (40)`、本机与本次运行；不覆盖其他设备/字号、全 UI/Island 系统呈现、后端或发布验收。
 - 证据：根仓库 `docs/evidence/ios-live-activity-redesign-2026-11-15/identity-fix/echo-approval-verified-receipt-2026-11-17.json`（脱敏，保留 readiness 原文件）。
 - 历史条目解释：上文「真实审批未验通」「echo 仍 pending」「未做手机端决定」等是各自时点的记录，不回改；本条只说明这次 pending 已由 `allowed-once` 解决，其他未完成项（full UI、跨设备矩阵、release）不因本条自动关闭。
+
+## 合并到 main（2026-11-17）
+
+功能已合并到本地 `main` `26729bf`（`cee3538` + `1326741`），未 push/部署/发版。合并后 `scripts/ios.sh build` 为 BUILD SUCCEEDED、MizarKit 968 tests / 124 suites PASS；`codex/live-activity-production` 分支与工作树已删除。仍未关闭的验收项（其他设备/字号的 Island 系统呈现、跨设备真实审批、完整 UI 回归、发布）见根仓库 `docs/ios/live-activity-production-implementation-2026-11-16.md`。
