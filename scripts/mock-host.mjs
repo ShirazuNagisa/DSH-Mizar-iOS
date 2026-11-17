@@ -267,6 +267,8 @@ const archivedSessionIds = new Set()
  * tell a direct socket from a relayed one.
  */
 let connections = 0
+/** Direct sockets that opted into the state feed; ordinary RPC sidecars do not count. */
+let primaryConnections = 0
 
 /**
  * How many WebSocket connections the relay stand-in has accepted since reset.
@@ -276,6 +278,8 @@ let connections = 0
  * failover this fixture exists to observe.
  */
 let relayConnections = 0
+/** Relay sockets that opted into the state feed. */
+let relayPrimaryConnections = 0
 
 /**
  * How many pairing requests the main listener has answered since the last reset.
@@ -316,6 +320,8 @@ let hellos = 0
  * asked. `session.messages` is the read that two overlapping loads both make.
  */
 const methodCounts = {}
+/** Methods sent by sockets that subscribed to the primary state feed. */
+const primaryMethodCounts = {}
 
 /**
  * One method whose answers are stalled, while the rest answer immediately.
@@ -2496,7 +2502,7 @@ const server = createServer((request, response) => {
     // invisible from the app's side -- the data looks the same afterwards -- so
     // this is the only way a test can say that a failure did *not* cost one.
     response.writeHead(200, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ connections }))
+    response.end(JSON.stringify({ connections, primaryConnections }))
     return
   }
   if (request.url?.startsWith('/hellos')) {
@@ -2540,6 +2546,7 @@ const server = createServer((request, response) => {
       inFlight: messagesInFlight,
       peak: messagesPeak,
       methods: { ...methodCounts },
+      primaryMethods: { ...primaryMethodCounts },
       refusedMethods: { ...refusedCounts },
       modelSets: modelSets.slice(),
       forks: forkRequests.slice(),
@@ -2558,6 +2565,7 @@ const server = createServer((request, response) => {
       messagesPeak = 0
       activityPageRequests = 0
       for (const key of Object.keys(methodCounts)) delete methodCounts[key]
+      for (const key of Object.keys(primaryMethodCounts)) delete primaryMethodCounts[key]
     }
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify(answer))
@@ -2744,7 +2752,9 @@ const server = createServer((request, response) => {
     const limit = /pageLimit=(\d+)/.exec(request.url ?? '')
     pageLimit = limit === null ? Infinity : Number(limit[1])
     connections = 0
+    primaryConnections = 0
     relayConnections = 0
+    relayPrimaryConnections = 0
     pairingRequests = 0
     hellos = 0
     // The LAN route goes back with everything else: a test that took it away
@@ -2779,6 +2789,7 @@ const server = createServer((request, response) => {
     holdingMessages = false
     heldMessages = []
     for (const key of Object.keys(methodCounts)) delete methodCounts[key]
+    for (const key of Object.keys(primaryMethodCounts)) delete primaryMethodCounts[key]
     for (const key of Object.keys(refusedCounts)) delete refusedCounts[key]
     modelSets.length = 0
     response.writeHead(200, { 'content-type': 'application/json' })
@@ -2904,7 +2915,8 @@ function playStateStream(socket) {
   setTimeout(() => { sessionRunning = false }, at + 250)
 }
 
-function handleSocket(socket) {
+function handleSocket(socket, onPrimaryConnection) {
+  let subscribedToState = false
   if (offline) {
     // Closed immediately rather than left hanging: a socket that opens and then
     // says nothing is what a network failure looks like from the app's side, and
@@ -2915,15 +2927,35 @@ function handleSocket(socket) {
   socket.on('message', (raw) => {
     let frame
     try { frame = JSON.parse(String(raw)) } catch { return }
-    methodCounts[frame.type] = (methodCounts[frame.type] ?? 0) + 1
+    if (frame === null || typeof frame !== 'object') return
+    const method = frame.type ?? frame.method
+    if (typeof method === 'string') {
+      methodCounts[method] = (methodCounts[method] ?? 0) + 1
+      if (subscribedToState) {
+        primaryMethodCounts[method] = (primaryMethodCounts[method] ?? 0) + 1
+      }
+    }
+    if (frame.method === 'state.subscribe') {
+      if (!subscribedToState) {
+        subscribedToState = true
+        onPrimaryConnection()
+        // The initial hello precedes state.subscribe. Attribute it to this
+        // socket now that the protocol has identified it as primary.
+        primaryMethodCounts.hello = (primaryMethodCounts.hello ?? 0) + 1
+        if (typeof method === 'string') {
+          primaryMethodCounts[method] = (primaryMethodCounts[method] ?? 0) + 1
+        }
+        if (stateStream !== '' && !stateStreamPlayed) {
+          stateStreamPlayed = true
+          console.log('mock: playing a live state stream')
+          setTimeout(() => playStateStream(socket), 700)
+        }
+      }
+      return
+    }
     // Counted around the whole answer, not around the delay: a read that is
     // still being answered when the next one arrives is the overlap being
     // measured, and whether it was slow is beside the point.
-    if (stateStream !== '' && !stateStreamPlayed && frame.type === 'hello') {
-      stateStreamPlayed = true
-      console.log('mock: playing a live state stream')
-      setTimeout(() => playStateStream(socket), 700)
-    }
     const isLogRead = frame.type === 'session.messages'
     if (isLogRead) {
       messagesInFlight += 1
@@ -2956,7 +2988,7 @@ function handleSocket(socket) {
 const wss = new WebSocketServer({ noServer: true })
 wss.on('connection', (socket) => {
   connections += 1
-  handleSocket(socket)
+  handleSocket(socket, () => { primaryConnections += 1 })
 })
 
 const announcementWss = new WebSocketServer({ noServer: true })
@@ -3009,7 +3041,10 @@ const relayServer = createServer((request, response) => {
     // sockets; this one counts relayed ones. Separate on purpose: the assertion
     // "the phone failed over" is "this number went from zero to one".
     response.writeHead(200, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ connections: relayConnections }))
+    response.end(JSON.stringify({
+      connections: relayConnections,
+      primaryConnections: relayPrimaryConnections,
+    }))
     return
   }
   if (url.pathname === '/mizar/v1/hello') {
@@ -3030,7 +3065,7 @@ const relayServer = createServer((request, response) => {
 const relayWss = new WebSocketServer({ noServer: true })
 relayWss.on('connection', (socket) => {
   relayConnections += 1
-  handleSocket(socket)
+  handleSocket(socket, () => { relayPrimaryConnections += 1 })
 })
 
 relayServer.on('upgrade', (request, socket, head) => {

@@ -643,6 +643,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.9.11;
+				CODE_SIGN_ENTITLEMENTS = "DSH-Mizar-LiveActivity.entitlements";
 				PRODUCT_BUNDLE_IDENTIFIER = me.shirazu.dshmizar.LiveActivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -669,6 +670,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.9.11;
+				CODE_SIGN_ENTITLEMENTS = "DSH-Mizar-LiveActivity.entitlements";
 				PRODUCT_BUNDLE_IDENTIFIER = me.shirazu.dshmizar.LiveActivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

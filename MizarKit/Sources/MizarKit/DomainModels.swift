@@ -326,6 +326,8 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
     public let sessionId: String
     /// Last activity, epoch milliseconds.
     public let updatedAt: Double
+    /// The current turn's wall-clock origin, including waiting time.
+    public let turnStartedAt: Double?
     /// Whether a turn is currently executing.
     public let running: Bool
     /// Whether the session has no user prompt yet.
@@ -381,9 +383,11 @@ public struct SessionRow: Codable, Sendable, Equatable, Identifiable {
         title: String? = nil,
         model: String? = nil,
         context: ContextPressure? = nil,
+        turnStartedAt: Double? = nil,
     ) {
         self.sessionId = sessionId
         self.updatedAt = updatedAt
+        self.turnStartedAt = turnStartedAt
         self.running = running
         self.blank = blank
         self.agentAvailable = agentAvailable

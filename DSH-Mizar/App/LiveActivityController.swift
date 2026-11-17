@@ -339,6 +339,15 @@ final class LiveActivityController {
         refreshPushToken()
     }
 
+    /// Apply the complete set of authorized desktop snapshots, independently of
+    /// whichever desktop or engine is currently open in the app.
+    func refresh(state: LiveActivityState) async {
+        let bounded = state.boundedForActivity()
+        ActivityCalls.reconcileSelectedApproval(for: bounded)
+        await apply(.init(phase: bounded, shouldDismiss: bounded.isFinished), runningRowCount: state.totalCount)
+        refreshPushToken()
+    }
+
     /// Take the island down because the host it describes cannot keep it true.
     ///
     /// A card is a window onto a *computer's* running turn: it is kept current by
@@ -633,6 +642,32 @@ private enum ActivityCalls {
         !presentable.isEmpty
     }
 
+    /// Keep the operator's first real approval in focus and advance only when
+    /// the selected request disappears from the host's authoritative queue.
+    /// The widget can render APNs-only updates without waking this process, so
+    /// selection reconciliation is intentionally limited to app-observed state.
+    static func reconcileSelectedApproval(for state: LiveActivityState) {
+        let presentation = LiveActivityPresentationStore.read()
+        let now = Date()
+        let incoming = state.approvals.filter { approval in
+            guard let feedback = presentation.feedback[approval.compositeId],
+                  feedback.phase == .accepted || feedback.phase == .rejected else { return true }
+            return now.timeIntervalSince(feedback.updatedAt) < 0.85
+        }
+        guard !incoming.isEmpty else { return }
+
+        let previous = presentable.first?.content.state.approvals ?? []
+        let selected = LiveActivityApprovalSelection.reconciledId(
+            currentId: presentation.selectedApprovalId,
+            previous: previous,
+            incoming: incoming,
+        )
+        guard selected != presentation.selectedApprovalId else { return }
+        var updated = presentation
+        updated.selectedApprovalId = selected
+        LiveActivityPresentationStore.write(updated)
+    }
+
     /// The push token of the activity that is up, hex-encoded, or `nil`.
     ///
     /// **Read, never observed.** ActivityKit also offers the token as an
@@ -804,15 +839,7 @@ private enum ActivityCalls {
     ///   - phase: what the decision layer says it should show.
     /// - Returns: whether there is nothing to send.
     private static func saysTheSame(_ activity: Island, as phase: LiveActivityState) -> Bool {
-        let mine = activity.content.state.rows
-        let theirs = phase.rows
-        guard mine.count == theirs.count else { return false }
-        return zip(mine, theirs).allSatisfy { current, next in
-            current.id == next.id
-                && current.prompt == next.prompt
-                && current.title == next.title
-                && abs(current.countingSince.timeIntervalSince(next.countingSince)) < 1
-        }
+        activity.content.state.hasSamePresentation(as: phase)
     }
 
     /// What a phase contains, without the prompts.

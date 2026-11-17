@@ -142,9 +142,9 @@ struct LiveActivityTests {
         #expect(decision.phase.approvals.first?.headline == "Bash")
     }
 
-    @Test("carries the approvals beside the running rows, and caps them at two")
+    @Test("carries the approvals beside the running rows, and caps them at four")
     func approvalsSitBesideRows() {
-        let approvals = (1...3).map { index in
+        let approvals = (1...5).map { index in
             LiveActivityApproval(
                 requestId: "r\(index)",
                 sessionId: "dsh:s-1",
@@ -155,7 +155,7 @@ struct LiveActivityTests {
         let decision = decide([running("s-1", seed: 0, at: t0)], approvals: approvals, at: t0)
 
         #expect(decision.phase.rows.count == 1, "the row is still there: the turn is blocked, not over")
-        #expect(decision.phase.approvals.map(\.requestId) == ["r1", "r2"])
+        #expect(decision.phase.approvals.map(\.requestId) == ["r1", "r2", "r3", "r4"])
     }
 
     @Test("decodes an approval the computer pushed, and a card that has none")
@@ -195,18 +195,18 @@ struct LiveActivityTests {
         #expect(decision.phase.headline == 600)
     }
 
-    @Test("shows the two longest of three, and the one behind them moves up")
-    func twoRowsOfThree() {
+    @Test("keeps all three rows and orders them by running time")
+    func threeRows() {
         let oldest = running("s-oldest", seed: 900, at: t0)
         let middle = running("s-middle", seed: 300, at: t0)
         let newest = running("s-newest", seed: 30, at: t0)
 
         let three = decide([newest, middle, oldest], at: at(10))
-        #expect(three.phase.rows.map(\.id) == ["s-oldest", "s-middle"])
-        #expect(three.phase.rows.map(\.elapsed) == [910, 310])
+        #expect(three.phase.rows.map(\.id) == ["s-oldest", "s-middle", "s-newest"])
+        #expect(three.phase.rows.map(\.elapsed) == [910, 310, 40])
 
-        // The third was never drawn. When the longest ends, the one behind it
-        // takes the row the finished session was holding.
+        // When the longest ends, the remaining sessions keep their own order
+        // and clocks rather than restarting the one that takes its place.
         let two = decide([newest, middle], at: at(10))
         #expect(two.phase.rows.map(\.id) == ["s-middle", "s-newest"])
         #expect(two.phase.headline == 310)
@@ -583,7 +583,10 @@ struct LiveActivityTests {
         // below.
         let finished = try JSONEncoder().encode(LiveActivityState())
         let empty = try JSONSerialization.jsonObject(with: finished) as? [String: Any]
-        #expect(Set(empty?.keys ?? [:].keys) == ["rows", "approvals"])
+        #expect(Set(empty?.keys ?? [:].keys) == [
+            "rows", "approvals", "totalCount", "deviceCount", "approvalCount",
+            "revision", "presentationRevision",
+        ])
         #expect((empty?["rows"] as? [Any])?.isEmpty == true)
         #expect(try JSONDecoder().decode(LiveActivityState.self, from: finished) == LiveActivityState())
         #expect(try JSONDecoder().decode(LiveActivityDecision.self, from: JSONEncoder().encode(decision)) == decision)

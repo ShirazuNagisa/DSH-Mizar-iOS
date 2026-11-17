@@ -12,9 +12,38 @@
    information -- so this noun is all a listener gets, and a duration announced
    with no noun is a number about nothing. */
 "Running time" = "Running time";
+"Elapsed time" = "Elapsed time";
+"Last known elapsed" = "Last known elapsed";
 
 /* The two buttons on a blocked turn's card, in the island and on the Lock
    Screen. "Allow once" is exactly what the protocol grants -- one call, not a
    standing permission -- and "Reject" is the other half of the choice. */
 "Allow once" = "Allow once";
 "Reject" = "Reject";
+
+/* Production Live Activity overview and approval queue. */
+"Approval" = "Approval";
+"More sessions" = "more sessions";
+"Approval waiting" = "Approval waiting";
+"Sessions" = "sessions";
+"Devices" = "devices";
+"View overview" = "View overview";
+"Running" = "Running";
+"Waiting for approval" = "Waiting for approval";
+"Waiting for a reply" = "Waiting for a reply";
+"Offline" = "Offline";
+"Untitled session" = "Untitled session";
+"Longest running session" = "Longest running session";
+"No running sessions" = "No running sessions";
+"Session count" = "Session count";
+"Sending approval" = "Sending";
+"Approval accepted" = "Allowed once";
+"Approval rejected" = "Rejected";
+"Approval failed" = "Could not send";
+"Approval result unknown" = "Result unknown";
+"Next" = "Next";
+"Next approval" = "Next approval";
+"View approval" = "View approval";
+"Sending" = "Sending…";
+
+"All approvals" = "All approvals";

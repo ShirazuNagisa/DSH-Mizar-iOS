@@ -669,7 +669,8 @@ final class Feature094UITests: XCTestCase {
     /// - Returns: method name to count.
     private static func mockMethodCounts() -> [String: Int] {
         guard let json = mockJSON("/loads"),
-              let methods = json["methods"] as? [String: Any] else { return [:] }
+              let methods = (json["primaryMethods"] as? [String: Any])
+                ?? (json["methods"] as? [String: Any]) else { return [:] }
         return methods.compactMapValues { ($0 as? NSNumber)?.intValue }
     }
 
@@ -689,7 +690,7 @@ final class Feature094UITests: XCTestCase {
     /// - Returns: the count, or `nil` when the mock is not answering.
     private static func mockConnections() -> Int? {
         guard let json = mockJSON("/connections") else { return nil }
-        return json["connections"] as? Int
+        return (json["primaryConnections"] ?? json["connections"]) as? Int
     }
 
     /// GET one mock-host endpoint and decode its JSON.

@@ -40,6 +40,11 @@ struct DSHMizarApp: App {
         // compiler may fold `_ = AllowOnceIntent.self` away, and then the
         // linker never sees the implementation. See LiveActivityIntentLink.
         _ = LiveActivityIntentLink.types.count
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-mizarEndLiveActivityValidation") {
+            Task { await DebugLiveActivityValidation.cleanup() }
+        }
+        #endif
     }
 
     var body: some Scene {
@@ -48,6 +53,10 @@ struct DSHMizarApp: App {
                 RootView()
                     .environment(model)
                     .onOpenURL { url in
+                        if let destination = LiveActivityDestination(url: url) {
+                            model.liveActivityDestination = destination
+                            return
+                        }
                         // The same payload the QR carries, arriving as a link. One
                         // parse path for both means a scanned code and a tapped
                         // link cannot behave differently.

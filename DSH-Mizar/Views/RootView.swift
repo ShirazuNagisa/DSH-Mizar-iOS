@@ -47,6 +47,21 @@ struct RootView: View {
                 phaseContent
             }
         }
+        .sheet(item: Binding(
+            get: { requiresLogin || model.hosts.isEmpty ? nil : model.liveActivityDestination },
+            set: { model.liveActivityDestination = $0 }
+        )) { destination in
+            LiveActivityDetailView(
+                destination: destination,
+                hosts: model.hosts,
+                relayHeaders: model.liveActivityRelayHeaders,
+                accountId: model.isSelfHosted ? nil : model.account.session?.profile.id,
+                routeSettings: .init(
+                    localNetworkFirst: model.settings.localNetworkFirst,
+                    directConnection: model.settings.directConnection,
+                ),
+            )
+        }
         .animation(.mizarSmooth, value: phaseKey)
         .animation(.mizarSmooth, value: requiresLogin)
         .animation(.mizarSmooth, value: onboardingDone)

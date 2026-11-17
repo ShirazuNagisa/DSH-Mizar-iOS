@@ -70,6 +70,10 @@ public actor MizarConnection {
         /// account refuses the socket: the pairing code proves somebody stood at
         /// the screen, not that the two accounts are the same person.
         public var accountId: String?
+        /// Whether this connection consumes the host's unsolicited state feed.
+        /// RPC-only clients can disable it while keeping ordinary calls and
+        /// interaction events available.
+        public var subscribeToStateChanges: Bool
         /// How long a unary call may take before it is failed.
         public var requestTimeout: Duration
         /// How long the handshake may take before it is failed.
@@ -101,6 +105,7 @@ public actor MizarConnection {
             deviceModel: String? = nil,
             engine: String? = nil,
             accountId: String? = nil,
+            subscribeToStateChanges: Bool = true,
             requestTimeout: Duration = .seconds(60),
             baseURL: String? = nil,
             handshakeTimeout: Duration = .seconds(20),
@@ -119,6 +124,7 @@ public actor MizarConnection {
             self.relayHeaders = relayHeaders
             self.p2p = p2p
             self.accountId = accountId
+            self.subscribeToStateChanges = subscribeToStateChanges
         }
 
         /// Which of the two routes this configuration names.
@@ -351,10 +357,11 @@ public actor MizarConnection {
         )
         do {
             try await socket.send(text: try Self.encode(hello))
-            // Ask for the state channel. A host without it -- an older build, or
-            // one whose `MIZAR_STATE_CHANNEL` is off -- ignores the unknown
-            // method, so this costs one frame and changes nothing there.
-            try? await socket.send(text: #"{"method":"state.subscribe"}"#)
+            if configuration.subscribeToStateChanges {
+                // A host without the state channel ignores this method. RPC-only
+                // connections skip the subscription and do not consume its feed.
+                try? await socket.send(text: #"{"method":"state.subscribe"}"#)
+            }
         } catch {
             // Closing first, then recording: the close would otherwise write its
             // own reason over the one that actually ended this attempt.

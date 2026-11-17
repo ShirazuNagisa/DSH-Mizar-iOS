@@ -124,6 +124,15 @@ public enum LiveActivityPushToken {
 public enum LiveActivityPushTokenStore {
     /// Where the token lives in `UserDefaults`.
     public static let tokenKey = "mizar.liveActivityToken"
+    public static var observedAt: Double {
+        let defaults = UserDefaults.standard
+        let key = tokenKey + ".observedAt"
+        let existing = defaults.double(forKey: key)
+        if existing > 0 { return existing }
+        let initial = (Date().timeIntervalSince1970 * 1_000).rounded(.down)
+        defaults.set(initial, forKey: key)
+        return initial
+    }
 
     /// Posted when the stored token changes, with no object.
     ///
@@ -169,6 +178,7 @@ public enum LiveActivityPushTokenStore {
         } else {
             defaults.removeObject(forKey: tokenKey)
         }
+        defaults.set((Date().timeIntervalSince1970 * 1_000).rounded(.down), forKey: tokenKey + ".observedAt")
         NotificationCenter.default.post(name: changed, object: nil)
         return true
     }

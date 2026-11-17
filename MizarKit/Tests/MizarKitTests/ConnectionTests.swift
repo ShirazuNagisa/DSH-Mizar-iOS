@@ -84,6 +84,24 @@ struct ConnectionTests {
         #expect(hello["protocolVersion"]?.intValue == mizarProtocolVersion)
     }
 
+    @Test("can connect without subscribing to state changes")
+    func skipsStateSubscriptionWhenDisabled() async throws {
+        let transport = StubTransport(responder: responder())
+        let connection = MizarConnection(
+            configuration: .init(
+                authority: "127.0.0.1:19390",
+                token: "mz_test",
+                subscribeToStateChanges: false,
+            ),
+            makeTransport: { transport },
+        )
+
+        _ = try await connection.connect()
+
+        let sent = await transport.sent
+        #expect(!sent.contains(#"{"method":"state.subscribe"}"#))
+    }
+
     @Test("correlates a response to its request")
     func requestCorrelation() async throws {
         let transport = StubTransport(responder: responderAnswering { type in
@@ -491,7 +509,7 @@ struct ConnectionTests {
         _ = try await connection.connect()
 
         let sent = await transport.sent
-        #expect(sent.contains { $0.contains("state.subscribe") })
+        #expect(sent.contains(#"{"method":"state.subscribe"}"#))
 
         func envelope(_ frame: StateFrame, session: String = "s-1") -> WebSocketFrame {
             var out = Data([UInt8(session.utf8.count)])
