@@ -87,6 +87,21 @@ struct ComposerView: View {
     @State private var stopping = false
     /// Bumped on every send, to bounce the arrow.
     @State private var sends = 0
+    // MARK: On-device input
+
+    /// Where the caret or selection last was, in plain-text offsets.
+    ///
+    /// Reported by the editor because only it knows: a hold-to-talk recording
+    /// has to put its words where the caret stood when the finger went down,
+    /// and neither the rewriter nor the microphone can ask a `UITextView` from
+    /// here.
+    @State private var composerSelection = NSRange(location: 0, length: 0)
+    /// Bumped whenever the draft changes, so work that started against an
+    /// earlier draft can tell it no longer speaks for what is on screen.
+    @State private var draftRevision = 0
+    /// A replacement waiting for the editor to place it, once.
+    @State private var pendingEdit: ComposerEdit?
+
     /// The field's resting height, measured by the editor and clamped to eight lines.
     ///
     /// The resting composer is laid out from this rather than from the
@@ -136,6 +151,12 @@ struct ComposerView: View {
                 knownTokenNames: knownTokenNames,
                 insertion: insertion,
                 onInsertionApplied: onInsertionApplied,
+                edit: pendingEdit,
+                onEditFinished: { outcome in
+                    pendingEdit = nil
+                    _ = outcome
+                },
+                onSelectionChanged: { range in composerSelection = range },
                 onSlashTokenChanged: onSlashTokenChanged,
                 onFocusChanged: { value in focused = value },
                 onMeasuredHeight: { height in fieldHeight = height },
@@ -289,6 +310,10 @@ struct ComposerView: View {
                     }
             }
         }
+        // Every change of the draft, from a keystroke, a command's insert or an
+        // on-device edit, moves the revision. Work that was asked for against an
+        // earlier draft compares this before it writes.
+        .onChange(of: text) { _, _ in draftRevision &+= 1 }
     }
 
     private enum Mode: Equatable { case idle, send, stop }
@@ -747,6 +772,13 @@ struct ComposerTextInput: UIViewRepresentable {
     var insertion: ComposerInsertion?
     /// Reported after ``insertion`` landed, so the screen clears it.
     var onInsertionApplied: () -> Void = {}
+    /// A replacement the on-device features asked for, placed once.
+    var edit: ComposerEdit?
+    /// Reported after ``edit`` was consumed, applied or discarded, so the
+    /// screen clears it and can say what happened.
+    var onEditFinished: (ComposerEditOutcome) -> Void = { _ in }
+    /// Reported whenever the caret or selection moves, in plain offsets.
+    var onSelectionChanged: (NSRange) -> Void = { _ in }
     /// Reported when the field starts or stops sitting on a lone `/`.
     var onSlashTokenChanged: (Bool) -> Void = { _ in }
     /// Called when the editor takes or gives up the keyboard on its own -- a
@@ -843,6 +875,9 @@ struct ComposerTextInput: UIViewRepresentable {
         context.coordinator.onSlashTokenChanged = onSlashTokenChanged
         context.coordinator.knownTokenNames = knownTokenNames
         context.coordinator.insertion = insertion
+        context.coordinator.edit = edit
+        context.coordinator.onEditFinished = onEditFinished
+        context.coordinator.onSelectionChanged = onSelectionChanged
         editor.knownTokenNames = knownTokenNames
         editor.onSlashTokenChanged = onSlashTokenChanged
 
@@ -851,6 +886,9 @@ struct ComposerTextInput: UIViewRepresentable {
         // binding is still the old value for the rest of this update. Treating
         // that as an external write would undo the insert immediately.
         let inserted = context.coordinator.applyPendingInsertion()
+        // The same for an on-device replacement: placed first, then the binding
+        // is written, so the still-old value is not read as an external write.
+        let placed = context.coordinator.applyPendingEdit()
 
         // The text, only when it has actually changed from outside. Assigning
         // on every SwiftUI update resets the selection, empties the undo
@@ -866,7 +904,7 @@ struct ComposerTextInput: UIViewRepresentable {
         editor.accessibilityValue = draft.isEmpty
             ? String(localized: "Ask your agent…")
             : draft
-        if !inserted, draft != text, editor.markedTextRange == nil {
+        if !inserted, !placed, draft != text, editor.markedTextRange == nil {
             // A composition in progress is the operator's: the marked text is
             // a candidate being chosen between, and a replacement now takes
             // it away. The write waits for the commit, which comes through
@@ -928,6 +966,14 @@ final class ComposerEditorView: UITextView {
     /// Whether the composer is expanded. Its viewport fills the available
     /// room, but height reports always describe the resting viewport.
     var isExpanded = false
+
+    /// The undo manager programmatic edits register into.
+    ///
+    /// `nil` in the app, where the view's own manager -- the window's, the one
+    /// typing lands on -- is used, so one ⌘Z or one shake takes a rewrite back
+    /// to the draft it replaced. Tests inject one because a view outside a
+    /// window has no responder chain to ask.
+    var editUndoManager: UndoManager?
 
     /// Called with the clamped resting height at the current width, whenever
     /// the layout produces a different one.
@@ -1049,6 +1095,92 @@ final class ComposerEditorView: UITextView {
         let location = attributedOffset(forPlain: target, in: rendered)
         selectedRange = NSRange(location: min(location, rendered.length), length: 0)
         reportSlashState()
+    }
+
+    // MARK: - The on-device edit
+
+    /// The manager a programmatic edit registers into.
+    private var registrationUndoManager: UndoManager? { editUndoManager ?? undoManager }
+
+    /// Apply one replacement as a single undoable edit.
+    ///
+    /// The whole draft is rebuilt with the same pill pass typing uses, and the
+    /// replacement is one `textStorage` change: one edit, one undo, a caret
+    /// after what was placed. A composition in progress is never written into
+    /// -- the operator is choosing between candidates and a replacement now
+    /// takes the candidate away.
+    ///
+    /// - Parameter edit: the replacement, with its range in plain offsets.
+    /// - Returns: whether the draft changed, and why not when it did not.
+    func apply(_ edit: ComposerEdit) -> ComposerEditOutcome {
+        guard markedTextRange == nil else { return .discardedComposition }
+        let plain = plainText
+        guard edit.isInBounds(of: plain) else { return .rejected }
+
+        let before = renderedText
+        let beforeSelection = selectedRange
+        let updated = (plain as NSString).replacingCharacters(in: edit.range, with: edit.text)
+        let tokens = ComposerTokens.scan(updated, names: knownTokenNames)
+        let built = makeAttributedText(updated, tokens: tokens, width: bounds.width)
+        let caret = edit.range.location + (edit.text as NSString).length
+        replaceAll(
+            with: built,
+            caret: attributedOffset(forPlain: caret, in: built),
+            tokens: tokens,
+        )
+        if let manager = registrationUndoManager {
+            manager.registerUndo(withTarget: self) { editor in
+                editor.restore(before, selection: beforeSelection)
+            }
+        }
+        if let start = selectedTextRange?.start {
+            scrollRectToVisible(caretRect(for: start), animated: false)
+        }
+        return .applied
+    }
+
+    /// Put a whole attributed draft back, for undo and for redo.
+    ///
+    /// Undo is not "apply the inverse range": a replacement can change lengths
+    /// and rebuild every pill, and restoring the snapshot bytes is the only
+    /// thing that is guaranteed to be exact. Registering the inverse while
+    /// undoing is also what gives the operator a redo.
+    private func restore(_ attributed: NSAttributedString, selection: NSRange) {
+        let current = renderedText
+        let currentSelection = selectedRange
+        replaceAll(
+            with: attributed,
+            caret: min(selection.location, attributed.length),
+            tokens: nil,
+        )
+        registrationUndoManager?.registerUndo(withTarget: self) { editor in
+            editor.restore(current, selection: currentSelection)
+        }
+    }
+
+    /// Replace everything, and make the render bookkeeping agree.
+    ///
+    /// - Parameter tokens: the tokens the replacement was built from, or `nil`
+    ///   when it was restored as bytes -- then the next render rescans.
+    private func replaceAll(with attributed: NSAttributedString, caret: Int, tokens: [ComposerToken]?) {
+        isRendering = true
+        textStorage.beginEditing()
+        textStorage.replaceCharacters(in: NSRange(location: 0, length: textStorage.length), with: attributed)
+        textStorage.endEditing()
+        selectedRange = NSRange(location: min(caret, textStorage.length), length: 0)
+        typingAttributes = baseAttributes
+        isRendering = false
+
+        if let tokens {
+            lastTokenLiterals = tokens.map(\.literal).joined(separator: "\u{1F}")
+            lastKnownTokenNames = knownTokenNames
+            lastBuildWidth = bounds.width
+            lastBuildStyle = traitCollection.userInterfaceStyle
+        } else {
+            // A restore brings its own pills; the sentinel makes the next
+            // render rescans rather than rebuild a bitmap over the snapshot.
+            lastTokenLiterals = "\u{0}"
+        }
     }
 
     // MARK: - Rendering
@@ -1235,9 +1367,18 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
     var knownTokenNames: [String] = []
     /// A token the palette asked for, waiting for the next update.
     var insertion: ComposerInsertion?
+    /// A replacement the on-device features asked for, waiting for the next update.
+    var edit: ComposerEdit?
+    /// Told after an edit was consumed, applied or discarded.
+    var onEditFinished: (ComposerEditOutcome) -> Void = { _ in }
+    /// Told where the caret or selection went, in plain offsets.
+    var onSelectionChanged: (NSRange) -> Void = { _ in }
     /// The last request this bridge placed. Identity, not equality: picking the
     /// same command twice is two inserts.
     private var lastInsertionId: UUID?
+    /// The same, for a replacement: the same text at the same range twice is
+    /// two edits.
+    private var lastEditId: UUID?
 
     /// The editor this coordinator belongs to. Weak: the editor holds the
     /// coordinator as its delegate, and the measurement has to reach the
@@ -1296,6 +1437,9 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
         // The hint follows the caret, not the text: typing `/`, walking the
         // caret off it and walking back are the same token and three states.
         editor?.reportSlashState()
+        // The on-device features remember where the operator was: dictation
+        // puts its words where the caret stood when the finger went down.
+        if let editor { onSelectionChanged(editor.plainSelectionRange) }
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) {
@@ -1362,6 +1506,39 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
             guard let self else { return }
             self.text.wrappedValue = updated
             self.onInsertionApplied()
+        }
+        return true
+    }
+
+    /// Place a replacement the on-device features asked for, once.
+    ///
+    /// The editor owns the write: it turns the plain range into a pill-aware
+    /// attributed range, replaces exactly that run, and registers the whole
+    /// thing as one undo. The binding follows afterwards, like an insertion's
+    /// does, so this update cannot read the still-old binding as an external
+    /// write and hand the field its previous draft back.
+    ///
+    /// - Returns: whether the draft changed. A discarded request (an input
+    ///   method was mid-composition) still counts as consumed, and the screen
+    ///   is told so it can clear the request and say what happened.
+    @discardableResult
+    func applyPendingEdit() -> Bool {
+        guard let editor, let edit, edit.id != lastEditId else { return false }
+        lastEditId = edit.id
+        let outcome = editor.apply(edit)
+        guard outcome.didApply else {
+            DispatchQueue.main.async { [weak self] in
+                self?.onEditFinished(outcome)
+            }
+            return false
+        }
+        editor.measureAndReportNaturalHeight()
+        editor.reportSlashState()
+        onSelectionChanged(editor.plainSelectionRange)
+        DispatchQueue.main.async { [weak self, weak editor] in
+            guard let self, let editor else { return }
+            self.text.wrappedValue = editor.plainText
+            self.onEditFinished(outcome)
         }
         return true
     }
