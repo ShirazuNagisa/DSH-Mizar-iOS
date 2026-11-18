@@ -113,6 +113,9 @@ struct ComposerView: View {
     /// The scene's phase, for stopping a rewrite and a recording that nobody is
     /// waiting for any more.
     @Environment(\.scenePhase) private var scenePhase
+    /// Whether an input method is mid-composition. A rewrite started now would
+    /// be a rewrite of a draft that is still being chosen between.
+    @State private var isComposing = false
 
     /// The field's resting height, measured by the editor and clamped to eight lines.
     ///
@@ -169,6 +172,13 @@ struct ComposerView: View {
                     _ = outcome
                 },
                 onSelectionChanged: { range in composerSelection = range },
+                onCompositionChanged: { composing in
+                    isComposing = composing
+                    // A composition starting mid-rewrite means the operator is
+                    // editing: the answer is already stale and nobody is
+                    // waiting for it.
+                    if composing, onDevice.isEnhancing { onDevice.cancelEnhancement() }
+                },
                 onSlashTokenChanged: onSlashTokenChanged,
                 onFocusChanged: { value in focused = value },
                 onMeasuredHeight: { height in fieldHeight = height },
@@ -360,7 +370,14 @@ struct ComposerView: View {
         // Every change of the draft, from a keystroke, a command's insert or an
         // on-device edit, moves the revision. Work that was asked for against an
         // earlier draft compares this before it writes.
-        .onChange(of: text) { _, _ in draftRevision &+= 1 }
+        .onChange(of: text) { _, _ in
+            draftRevision &+= 1
+            // Editing is the operator changing their mind: a rewrite of the
+            // draft they are leaving is work nobody will read, and a recording
+            // is listening to words that are no longer the draft.
+            if onDevice.isEnhancing { onDevice.cancelEnhancement() }
+            if onDevice.isRecording { onDevice.cancelHold() }
+        }
         .onAppear { onDevice.refreshAvailability() }
         .onChange(of: scenePhase) { _, phase in
             // A rewrite nobody is waiting for and a microphone left running are
@@ -488,7 +505,7 @@ struct ComposerView: View {
             .contentShape(.circle)
         }
         .buttonStyle(.pressable(scale: 0.88))
-        .disabled(blankDraft || onDevice.isRecording)
+        .disabled(blankDraft || onDevice.isRecording || isComposing)
         .mizarPopover(isPresented: $showingEnhance, arrowEdge: .bottom) {
             ComposerEnhancePanel(
                 availability: onDevice.enhancementAvailability,
@@ -554,7 +571,7 @@ struct ComposerView: View {
 
     /// Open the intent window, closing the other panels first.
     private func showEnhancePanel() {
-        guard !blankDraft else { return }
+        guard !blankDraft, !isComposing else { return }
         onDevice.refreshAvailability()
         withMizarAnimation(.mizarSnappy) {
             showingModel = false
@@ -976,6 +993,8 @@ struct ComposerTextInput: UIViewRepresentable {
     var onEditFinished: (ComposerEditOutcome) -> Void = { _ in }
     /// Reported whenever the caret or selection moves, in plain offsets.
     var onSelectionChanged: (NSRange) -> Void = { _ in }
+    /// Reported when an input method starts or finishes a composition.
+    var onCompositionChanged: (Bool) -> Void = { _ in }
     /// Reported when the field starts or stops sitting on a lone `/`.
     var onSlashTokenChanged: (Bool) -> Void = { _ in }
     /// Called when the editor takes or gives up the keyboard on its own -- a
@@ -1075,6 +1094,7 @@ struct ComposerTextInput: UIViewRepresentable {
         context.coordinator.edit = edit
         context.coordinator.onEditFinished = onEditFinished
         context.coordinator.onSelectionChanged = onSelectionChanged
+        context.coordinator.onCompositionChanged = onCompositionChanged
         editor.knownTokenNames = knownTokenNames
         editor.onSlashTokenChanged = onSlashTokenChanged
 
@@ -1570,6 +1590,8 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
     var onEditFinished: (ComposerEditOutcome) -> Void = { _ in }
     /// Told where the caret or selection went, in plain offsets.
     var onSelectionChanged: (NSRange) -> Void = { _ in }
+    /// Told when a composition starts or finishes.
+    var onCompositionChanged: (Bool) -> Void = { _ in }
     /// The last request this bridge placed. Identity, not equality: picking the
     /// same command twice is two inserts.
     private var lastInsertionId: UUID?
@@ -1628,6 +1650,7 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
         editor.refreshTokenRendering()
         editor.measureAndReportNaturalHeight()
         editor.reportSlashState()
+        onCompositionChanged(editor.markedTextRange != nil)
     }
 
     func textViewDidChangeSelection(_ textView: UITextView) {
@@ -1636,7 +1659,10 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
         editor?.reportSlashState()
         // The on-device features remember where the operator was: dictation
         // puts its words where the caret stood when the finger went down.
-        if let editor { onSelectionChanged(editor.plainSelectionRange) }
+        if let editor {
+            onSelectionChanged(editor.plainSelectionRange)
+            onCompositionChanged(editor.markedTextRange != nil)
+        }
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) {
