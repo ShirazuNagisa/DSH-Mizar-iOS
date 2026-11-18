@@ -292,7 +292,7 @@ struct ComposerDictationStrip: View {
                 // what has already scrolled away.
                 .truncationMode(.head)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(cancelling ? "Release to cancel" : "Slide up to cancel")
+            Text(cancelHint)
                 .font(.caption2)
                 .foregroundStyle(cancelling ? Theme.failed : .secondary)
                 .lineLimit(1)
@@ -342,6 +342,13 @@ struct ComposerDictationStrip: View {
                 .accessibilityLabel(Text("Dismiss"))
             }
         }
+    }
+
+    /// The cancel line, resolved through the catalogue: a ternary of two
+    /// string literals is a `String`, and `Text` draws that verbatim -- the
+    /// strip would have said "Slide up to cancel" in the Chinese interface.
+    private var cancelHint: LocalizedStringKey {
+        cancelling ? "Release to cancel" : "Slide up to cancel"
     }
 
     private var symbol: String {
