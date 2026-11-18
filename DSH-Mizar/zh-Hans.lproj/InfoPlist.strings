@@ -1,3 +1,4 @@
 "NSLocalNetworkUsageDescription" = "DSH-Mizar 需要访问本地网络，以连接你的电脑并监控、指导 agent 工作。";
 "NSCameraUsageDescription" = "用于扫描电脑上显示的配对二维码。";
+"NSMicrophoneUsageDescription" = "用于把你的语音转成输入框里的文字。";
 "CFBundleDisplayName" = "DSH-Mizar";

@@ -70,6 +70,22 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the pairing code shown on your computer.</string>
 	<!--
+	  The microphone, for hold-to-talk dictation, and nothing else.
+
+	  This is the only permission the feature needs. Recognition itself is
+	  Apple's on-device `SpeechTranscriber`, not `SFSpeechRecognizer`, so there
+	  is no `NSSpeechRecognitionUsageDescription` to declare and no second alert
+	  to answer: the audio is transcribed by the system on this phone and never
+	  uploaded or written to a file. Adding that key anyway would promise the
+	  operator a networked service the app does not use.
+
+	  Asked at the moment of use (`AVAudioApplication.requestRecordPermission`)
+	  rather than at launch, the same way the camera is: a prompt for a button
+	  most sessions never press is a prompt people learn to tap through.
+	-->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate into the composer; speech is transcribed on this iPhone and never uploaded.</string>
+	<!--
 	  Live Activities, declared on the app rather than on the extension.
 
 	  This is the key that decides whether this app may post one at all: without

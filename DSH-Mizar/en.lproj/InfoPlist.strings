@@ -1,3 +1,4 @@
 "NSLocalNetworkUsageDescription" = "DSH-Mizar connects to your computer on the local network to monitor and guide your agent.";
 "NSCameraUsageDescription" = "Scan the pairing code shown on your computer.";
+"NSMicrophoneUsageDescription" = "Dictate into the composer; speech is transcribed on this iPhone and never uploaded.";
 "CFBundleDisplayName" = "DSH-Mizar";
