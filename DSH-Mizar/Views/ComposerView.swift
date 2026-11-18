@@ -56,6 +56,12 @@ struct ComposerView: View {
     @Binding var showingModel: Bool
     @Binding var showingContext: Bool
     @Binding var showingCommands: Bool
+    /// Whether the rewrite's intent window is out. Owned by the screen, like
+    /// the other panels: a popover's content is rebuilt while it is up.
+    @Binding var showingEnhance: Bool
+    /// The two on-device entries' state, owned by the screen so a task survives
+    /// the rebuids a scrolling conversation causes.
+    let onDevice: ComposerOnDeviceInput
     /// Called the moment a send is tapped, with what is being sent: the screen
     /// puts it in flight towards the conversation before the host has answered.
     var onWillSend: (String) -> Void = { _ in }
@@ -101,6 +107,12 @@ struct ComposerView: View {
     @State private var draftRevision = 0
     /// A replacement waiting for the editor to place it, once.
     @State private var pendingEdit: ComposerEdit?
+    /// Whether the current press has crossed the cancel line, so the strip can
+    /// say what letting go will do.
+    @State private var dictationCancelling = false
+    /// The scene's phase, for stopping a rewrite and a recording that nobody is
+    /// waiting for any more.
+    @Environment(\.scenePhase) private var scenePhase
 
     /// The field's resting height, measured by the editor and clamped to eight lines.
     ///
@@ -179,6 +191,24 @@ struct ComposerView: View {
                 ComposerGeometry.shared.field = frame
             }
 
+            // The microphone's own region, above the controls and inside the
+            // glass: the operator's attention is on the finger, so the answer
+            // to "what is it hearing" belongs where the thumb already is.
+            if onDevice.dictation.phase != .idle {
+                ComposerDictationStrip(
+                    phase: onDevice.dictation.phase,
+                    liveText: onDevice.dictation.liveText,
+                    level: onDevice.dictation.level,
+                    elapsed: onDevice.dictation.elapsed,
+                    cancelling: dictationCancelling,
+                    onOpenSettings: openSettings,
+                    onDismiss: { onDevice.resetDictation() },
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 6)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             VStack(alignment: .leading, spacing: 0) {
                 if !attachments.isEmpty {
                     AttachmentStrip(drafts: attachments, progress: uploadProgress) { id in
@@ -211,6 +241,23 @@ struct ComposerView: View {
                         onBrowseCommands: onBrowseCommands,
                     )
                     Spacer(minLength: 4)
+                    // The two on-device entries sit with the keyboard button,
+                    // and appear and leave with it: with no keyboard there is
+                    // no caret to dictate into and no draft being written. The
+                    // microphone is leftmost so the thumb that holds it is not
+                    // over the send button.
+                    if focused {
+                        micButton
+                            .transition(.pop)
+                        // The rewriter's entry is permanent only on hardware
+                        // that can run the model. A phone that cannot is not
+                        // offered a button that will never work, however many
+                        // times it is tapped.
+                        if onDevice.showsEnhancementEntry {
+                            enhanceButton
+                                .transition(.pop)
+                        }
+                    }
                     // Put the keyboard away. Only there while the keyboard is up:
                     // with it down the button has nothing to do, and a control
                     // that does nothing reads as a broken one.
@@ -314,6 +361,30 @@ struct ComposerView: View {
         // on-device edit, moves the revision. Work that was asked for against an
         // earlier draft compares this before it writes.
         .onChange(of: text) { _, _ in draftRevision &+= 1 }
+        .onAppear { onDevice.refreshAvailability() }
+        .onChange(of: scenePhase) { _, phase in
+            // A rewrite nobody is waiting for and a microphone left running are
+            // both stopped when the scene leaves: the operator has looked away.
+            if phase == .active {
+                onDevice.refreshAvailability()
+            } else {
+                onDevice.cancelAll()
+            }
+        }
+        // A result is handed to the field only while the draft it was computed
+        // from is still the draft on screen; a stale one is dropped, not written.
+        .onChange(of: onDevice.pendingEdit) { _, request in
+            guard let request else { return }
+            onDevice.pendingEdit = nil
+            guard request.revision == draftRevision else { return }
+            pendingEdit = request.edit
+        }
+        // One panel at a time. Opening another closes the rewrite's window,
+        // exactly as each panel already closes the others.
+        .onChange(of: showingModel) { _, open in if open { showingEnhance = false } }
+        .onChange(of: showingContext) { _, open in if open { showingEnhance = false } }
+        .onChange(of: showingCommands) { _, open in if open { showingEnhance = false } }
+        .animation(.mizarSnappy, value: onDevice.dictation.phase != .idle)
     }
 
     private enum Mode: Equatable { case idle, send, stop }
@@ -389,6 +460,128 @@ struct ComposerView: View {
         .buttonStyle(.pressable(scale: 0.88))
         .accessibilityLabel(Text("Hide keyboard"))
         .accessibilityIdentifier("composer.dismissKeyboard")
+    }
+
+    /// Ask the on-device model to rewrite the draft, or explain why it cannot.
+    ///
+    /// In the same grey circle as the keyboard chevron: this is a small action
+    /// about what is being typed, not a mode of the screen. The draft says
+    /// whether it can be tapped, but the button stays in place -- a control
+    /// that moves in as the first character arrives makes the row jump under
+    /// the thumb, and one that vanishes when the model is off is a feature the
+    /// operator cannot find again.
+    private var enhanceButton: some View {
+        Button { showEnhancePanel() } label: {
+            ZStack {
+                Circle()
+                    .fill(Color(.tertiarySystemFill))
+                if onDevice.isEnhancing {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: Self.buttonSize, height: Self.buttonSize)
+            .contentShape(.circle)
+        }
+        .buttonStyle(.pressable(scale: 0.88))
+        .disabled(blankDraft || onDevice.isRecording)
+        .mizarPopover(isPresented: $showingEnhance, arrowEdge: .bottom) {
+            ComposerEnhancePanel(
+                availability: onDevice.enhancementAvailability,
+                onPick: { intent in
+                    // Closed first, then the rewrite starts: writing a draft
+                    // underneath a window that is still animating away is a
+                    // write the operator cannot see the result of.
+                    showingEnhance = false
+                    onDevice.enhance(draft: text, intent: intent, revision: draftRevision)
+                },
+                onOpenSettings: openSettings,
+            )
+        }
+        .accessibilityLabel(Text("Improve prompt"))
+        .accessibilityValue(onDevice.isEnhancing ? Text("Rewriting") : Text(""))
+        .accessibilityIdentifier("composer.enhance")
+    }
+
+    /// Hold to talk: the gesture surface, and the circle it is drawn on.
+    ///
+    /// The press is a UIKit long press because cancelling needs the finger's
+    /// *location*, and a long press has no translation -- that method belongs
+    /// to a pan, which is why a slide-up is measured against where the finger
+    /// went down. Starting one closes every panel first, so the keyboard and
+    /// the microphone never share the screen with a window.
+    private var micButton: some View {
+        ZStack {
+            Circle()
+                .fill(onDevice.isRecording ? Color.accentColor : Color(.tertiarySystemFill))
+                .shadow(
+                    color: onDevice.isRecording ? Color.accentColor.opacity(0.4) : .clear,
+                    radius: 8, y: 3,
+                )
+            Image(systemName: "mic.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(onDevice.isRecording ? Theme.onAccent : .secondary)
+        }
+        .frame(width: Self.buttonSize, height: Self.buttonSize)
+        .allowsHitTesting(false)
+        .overlay {
+            ComposerMicControl(
+                isEnabled: !onDevice.isEnhancing,
+                isRecording: onDevice.isRecording,
+                onPress: beginDictation,
+                onRelease: {
+                    dictationCancelling = false
+                    onDevice.endHold()
+                },
+                onCancel: {
+                    dictationCancelling = true
+                    onDevice.cancelHold()
+                },
+            )
+        }
+        .animation(.mizarSnappy, value: onDevice.isRecording)
+    }
+
+    /// A blank draft answers nothing: the button is drawn, disabled, with the
+    /// accessibility state to match.
+    private var blankDraft: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Open the intent window, closing the other panels first.
+    private func showEnhancePanel() {
+        guard !blankDraft else { return }
+        onDevice.refreshAvailability()
+        withMizarAnimation(.mizarSnappy) {
+            showingModel = false
+            showingContext = false
+            showingCommands = false
+            showingEnhance = true
+        }
+    }
+
+    /// Start listening where the caret stands, with every panel out of the way.
+    private func beginDictation() {
+        guard !onDevice.isEnhancing else { return }
+        dictationCancelling = false
+        withMizarAnimation(.mizarSnappy) {
+            showingModel = false
+            showingContext = false
+            showingCommands = false
+            showingEnhance = false
+        }
+        onDevice.beginHold(revision: draftRevision, selection: composerSelection)
+    }
+
+    /// iOS's own page for this app, where a switched-off permission is turned
+    /// back on. The only thing the app can do about a refusal.
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     /// Open the composer out to the height of the screen, and back.
@@ -481,6 +674,10 @@ struct ComposerView: View {
     // MARK: - Sending
 
     private func send() async {
+        // A rewrite or a recording in flight is about the draft being sent.
+        // Sending cancels it and sends what the operator wrote.
+        onDevice.cancelEnhancement()
+        onDevice.cancelHold()
         let outgoing = text
         let drafts = attachments
         let display = AttachmentDraft.promptText(outgoing, drafts: drafts)

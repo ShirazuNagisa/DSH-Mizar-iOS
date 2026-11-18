@@ -577,6 +577,8 @@ private struct ComposerMotionHost: View {
     @Bindable var state: ComposerMotionState
     let recorder: ComposerMotionRecorder
     @State private var model = AppModel()
+    @State private var onDevice = ComposerOnDeviceInput()
+    @State private var showingEnhance = false
 
     var body: some View {
         Color.white.overlay(alignment: .bottom) {
@@ -588,7 +590,8 @@ private struct ComposerMotionHost: View {
                         text: $state.text, focused: $state.focused,
                         expanded: $state.expanded,
                         showingModel: .constant(false), showingContext: .constant(false),
-                        showingCommands: .constant(false), onSent: { _ in },
+                        showingCommands: .constant(false), showingEnhance: $showingEnhance,
+                        onDevice: onDevice, onSent: { _ in },
                         onCollapsedHeightChanged: { state.collapsedTarget = $0 }
                     )
                     .background(ComposerMotionProbe(recorder: recorder))

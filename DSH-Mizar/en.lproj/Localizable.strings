@@ -1073,3 +1073,35 @@
 "This request is no longer pending on this host." = "This request is no longer pending on this host.";
 "Untitled session" = "Untitled session";
 "Waiting for approval" = "Waiting for approval";
+
+/* On-device input: the rewrite and the microphone */
+"Improve prompt" = "Improve prompt";
+"More detail" = "More detail";
+"Bullet points" = "Bullet points";
+"More formal" = "More formal";
+"This iPhone cannot run Apple Intelligence." = "This iPhone cannot run Apple Intelligence.";
+"Turn on Apple Intelligence to rewrite a prompt." = "Turn on Apple Intelligence to rewrite a prompt.";
+"The on-device model is still getting ready." = "The on-device model is still getting ready.";
+"The on-device model does not speak this language yet." = "The on-device model does not speak this language yet.";
+"The rewrite is not available right now." = "The rewrite is not available right now.";
+"The rewrite came back empty. Your draft is unchanged." = "The rewrite came back empty. Your draft is unchanged.";
+"The rewrite changed a path or command. Your draft is unchanged." = "The rewrite changed a path or command. Your draft is unchanged.";
+"This draft is too long to rewrite. Your draft is unchanged." = "This draft is too long to rewrite. Your draft is unchanged.";
+"Rewriting" = "Rewriting";
+"Rewriting the prompt…" = "Rewriting the prompt…";
+"Hold to dictate" = "Hold to dictate";
+"Hold to talk; slide up to cancel" = "Hold to talk; slide up to cancel";
+"Recording" = "Recording";
+"Start dictation" = "Start dictation";
+"Stop dictation" = "Stop dictation";
+"Cancel dictation" = "Cancel dictation";
+"Listening…" = "Listening…";
+"Slide up to cancel" = "Slide up to cancel";
+"Release to cancel" = "Release to cancel";
+"Allow microphone access to dictate." = "Allow microphone access to dictate.";
+"Dictation is not available on this device." = "Dictation is not available on this device.";
+"Downloading the speech model…" = "Downloading the speech model…";
+"Getting the microphone ready…" = "Getting the microphone ready…";
+"Dictation stopped. Your draft is unchanged." = "Dictation stopped. Your draft is unchanged.";
+"The text was not inserted. Finish choosing characters first." = "The text was not inserted. Finish choosing characters first.";
+"Open Settings" = "Open Settings";
