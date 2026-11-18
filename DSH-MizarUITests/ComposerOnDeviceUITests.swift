@@ -48,7 +48,7 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
             "the microphone is offered with the keyboard down",
         )
 
-        field.tap()
+        _ = focusEmptyComposer(app)
         expect(microphone(app), "tapping the field did not bring the microphone")
         // The rewrite's entry is permanent unless the hardware can never run
         // the model, which the simulator does not claim; when it is absent the
@@ -74,13 +74,21 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
     /// jump when the first character arrives.
     func testTheRewriteEntryIsRefusedOnABlankDraft() throws {
         let app = launch(pending: false)
-        app.textViews["composer.field"].tap()
+        let field = focusEmptyComposer(app)
         let enhance = app.buttons["composer.enhance"]
         guard enhance.waitForExistence(timeout: 5) else {
             throw XCTSkip("this runtime hides the rewrite entry: the model is not eligible")
         }
 
-        XCTAssertFalse(enhance.isEnabled, "the rewrite entry is enabled with nothing to rewrite")
+        let refused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isEnabled == false"),
+            object: enhance,
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [refused], timeout: 5),
+            .completed,
+            "the rewrite entry is enabled with nothing to rewrite; draft=\(String(describing: field.value))",
+        )
 
         app.textViews["composer.field"].typeText("Tidy this up")
         let enabled = XCTNSPredicateExpectation(
@@ -98,7 +106,7 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
     /// when it cannot -- never a tap that does nothing.
     func testTheRewriteWindowOffersTheIntentsOrSaysWhyNot() throws {
         let app = launch(pending: false)
-        app.textViews["composer.field"].tap()
+        let field = focusEmptyComposer(app)
         let enhance = app.buttons["composer.enhance"]
         guard enhance.waitForExistence(timeout: 5) else {
             throw XCTSkip("this runtime hides the rewrite entry: the model is not eligible")
@@ -151,6 +159,36 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
     }
 
     // MARK: - Helpers
+
+    /// Focus the composer on a blank draft, whatever it held before.
+    ///
+    /// Tapping the field is not enough on a simulator: the field is near the
+    /// keyboard, and a tap resolved while the keyboard was rising can land on
+    /// a key -- the Chinese layout's `/` sits under the caret -- so the field
+    /// can end up holding a slash no test typed. A previous test's draft can
+    /// also survive a relaunch for a moment. Both are cleared here, so a test
+    /// about a blank draft starts from one.
+    @discardableResult
+    private func focusEmptyComposer(_ app: XCUIApplication) -> XCUIElement {
+        let field = app.textViews["composer.field"]
+        expect(field, "the composer is missing")
+        field.tap()
+        let placeholder = "Ask your agent…"
+        if let value = field.value as? String, !value.isEmpty, value != placeholder {
+            // Delete, not select-all: the field is a `UITextView`, and a
+            // command-key shortcut is not guaranteed to reach it as a selection
+            // -- if it does not, the "a" is typed and the delete removes that
+            // instead, leaving the draft exactly as it was.
+            let length = (value as NSString).length
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: length + 2))
+        }
+        let blank = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", placeholder),
+            object: field,
+        )
+        _ = XCTWaiter.wait(for: [blank], timeout: 5)
+        return field
+    }
 
     /// Answer the system's microphone alert, whatever language it is in.
     ///
