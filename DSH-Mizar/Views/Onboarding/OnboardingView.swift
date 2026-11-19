@@ -43,6 +43,7 @@ struct OnboardingView: View {
     /// older build -- keeps the account and the settings it has, and must not
     /// be asked to sign in again.
     var isUpdate: Bool = false
+    let onShowDemo: () -> Void
 
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -319,6 +320,10 @@ struct OnboardingView: View {
 
     private var footer: some View {
         VStack(spacing: Theme.Space.md) {
+            if step == .welcome || (step == .account && !model.account.isLoggedIn) {
+                OfflineDemoButton(action: onShowDemo)
+                    .accessibilityIdentifier("onboarding.demo")
+            }
             if step == .account, !model.account.isLoggedIn {
                 Text(isUpdate
                     ? String(localized: "You can continue without an account.")

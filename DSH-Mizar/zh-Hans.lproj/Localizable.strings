@@ -1118,3 +1118,32 @@
 "Connect to your computer to rewrite with its model." = "连接你的电脑即可用它的模型改写。";
 "Update the desktop app to rewrite prompts with its model." = "请更新桌面端应用，以使用会话模型改写。";
 "The computer could not rewrite the draft." = "电脑未能完成改写。";
+
+/* Offline demo */
+"demo.open" = "体验演示";
+"demo.title" = "离线演示";
+"demo.description" = "体验使用预设回复的示例会话。演示指令和审批选择只在本次体验中保留。";
+"demo.select" = "选择一个示例会话";
+"demo.composer" = "输入演示指令";
+"demo.question.title" = "Agent 提问";
+"demo.approval.title" = "模拟审批";
+"demo.approval.reason %@" = "允许演示 Agent 在这条回复中附上内置示例文件 %@ 吗？";
+"demo.approval.allowed" = "示例文件附在下方。";
+"demo.approval.rejected" = "这条回复中没有附上文件。";
+"demo.file.missing" = "示例文件不可用";
+"demo.workshop.title" = "策划社区维修工作坊";
+"demo.workshop.opening" = "一起策划一场两小时的社区维修工作坊吧。你可以让我拟一份日程，我会请你选择当天的场地布置。";
+"demo.workshop.prompt" = "为维修工作坊拟一份日程。";
+"demo.workshop.question" = "日程应优先考虑哪种布置？";
+"demo.workshop.option.indoor" = "室内维修区";
+"demo.workshop.option.outdoor" = "户外维修区";
+"demo.research.title" = "比较笔记整理流程";
+"demo.research.opening" = "我正在比较小型研究项目中两种记录笔记的方法。你可以让我写一份简报，看看怎么呈现各自的取舍。";
+"demo.research.prompt" = "写一份研究简报，总结两种方法的取舍。";
+"demo.research.question" = "这个项目最看重什么？";
+"demo.research.option.time" = "快速记录";
+"demo.research.option.evidence" = "可追溯的证据";
+"demo.workshop.reply.indoor" = "室内工作坊可以用三张桌子分别设置缝补、紧固和故障排查区，在各区之间留出宽阔的通道。";
+"demo.workshop.reply.outdoor" = "户外工作坊可以在有遮挡的地方办理签到，并预留一间室内场地应对下雨。";
+"demo.research.reply.time" = "如果优先考虑记录速度，访谈时用一行记下一个要点，会后再按主题归类。";
+"demo.research.reply.evidence" = "如果优先考虑证据可追溯性，在每条观察旁记录来源编号和时间戳，方便队友之后核对。";

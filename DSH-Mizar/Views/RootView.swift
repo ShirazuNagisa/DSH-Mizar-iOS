@@ -32,6 +32,7 @@ struct RootView: View {
     /// Whether the one-time "the on-device agent stops in the background"
     /// notice is up. Asked once per install: see `LocalAgentController`.
     @State private var showingLocalAgentNotice = false
+    @State private var showingOfflineDemo = false
 
     var body: some View {
         Group {
@@ -40,12 +41,15 @@ struct RootView: View {
             if model.account.phase == .idle || !onboardingDecided {
                 LaunchingView()
             } else if !Self.skipOnboarding && !onboardingDone {
-                OnboardingView(isUpdate: onboardingIsUpdate)
+                OnboardingView(isUpdate: onboardingIsUpdate, onShowDemo: { showingOfflineDemo = true })
             } else if requiresLogin {
-                WelcomeGateView()
+                WelcomeGateView(onShowDemo: { showingOfflineDemo = true })
             } else {
                 phaseContent
             }
+        }
+        .fullScreenCover(isPresented: $showingOfflineDemo) {
+            OfflineDemoView()
         }
         .sheet(item: Binding(
             get: { requiresLogin || model.hosts.isEmpty ? nil : model.liveActivityDestination },

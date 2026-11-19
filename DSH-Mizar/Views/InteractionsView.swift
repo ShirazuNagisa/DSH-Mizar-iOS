@@ -49,6 +49,7 @@ struct InteractionsDock: View {
     var onQuestionAnswered: (String) -> Void = { _ in }
 
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     /// Read in the body, so the tucked pill's pulse holds while a drawer
     /// moves: those frames belong to the card.
     @Environment(\.drawersStill) private var drawersStill
@@ -197,7 +198,14 @@ struct InteractionsDock: View {
                 Group {
                     switch card {
                     case .approval(let approval):
-                        ApprovalCard(approval: approval) { allowed in
+                        ApprovalCard(
+                            id: approval.id,
+                            title: "Wants to run \(ToolNames.localized(approval.toolName))",
+                            reason: approval.reasonText(preferring: locale.identifier),
+                            sessionId: approval.sessionId,
+                        ) { outcome in
+                            await model.answerApproval(approval, outcome: outcome)
+                            let allowed = outcome == .allowedOnce
                             confirm(allowed ? String(format: String(localized: "Allowed %@"), ToolNames.localized(approval.toolName))
                                             : String(format: String(localized: "Rejected %@"), ToolNames.localized(approval.toolName)),
                                     allowed: allowed)
@@ -295,12 +303,12 @@ struct InteractionsDock: View {
 
 /// One approval.
 struct ApprovalCard: View {
-    let approval: PendingApproval
-    /// Called once the host has taken the answer, with whether it was a grant.
-    var onAnswered: (Bool) -> Void = { _ in }
+    let id: String
+    let title: LocalizedStringKey
+    let reason: String?
+    var sessionId: String?
+    let respond: (ApprovalOutcome) async -> Void
 
-    @Environment(AppModel.self) private var model
-    @Environment(\.locale) private var locale
     @State private var answering: ApprovalOutcome?
 
     var body: some View {
@@ -309,22 +317,20 @@ struct ApprovalCard: View {
                 Image(systemName: "hand.raised.fill")
                     .font(.headline)
                     .foregroundStyle(Theme.waiting)
-                    .symbolEffect(.wiggle, options: .nonRepeating, value: approval.id)
-                // The identifier is protocol data, not a name. `ToolNames` maps
-                // the tools this app knows to words in the operator's language.
-                Text("Wants to run \(ToolNames.localized(approval.toolName))")
+                    .symbolEffect(.wiggle, options: .nonRepeating, value: id)
+                Text(title)
                     .font(.headline)
                     .foregroundStyle(Theme.waiting)
             }
 
-            if let reason = approval.reasonText(preferring: locale.identifier) {
+            if let reason {
                 Text(reason)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let sessionId = approval.sessionId {
+            if let sessionId {
                 Text(sessionId)
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
@@ -371,10 +377,10 @@ struct ApprovalCard: View {
     }
 
     private func answer(_ outcome: ApprovalOutcome) async {
+        guard answering == nil else { return }
         answering = outcome
-        await model.answerApproval(approval, outcome: outcome)
+        await respond(outcome)
         answering = nil
-        onAnswered(outcome == .allowedOnce)
     }
 }
 

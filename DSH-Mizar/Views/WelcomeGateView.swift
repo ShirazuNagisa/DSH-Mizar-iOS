@@ -19,6 +19,8 @@ import MizarKit
 import SwiftUI
 
 struct WelcomeGateView: View {
+    let onShowDemo: () -> Void
+
     @Environment(AppModel.self) private var model
     /// Which form to present. Held as an item rather than a Bool plus a mode:
     /// setting both in one tap raced the sheet's first build, and the sheet
@@ -92,6 +94,9 @@ struct WelcomeGateView: View {
                         .buttonStyle(.glass)
                         .controlSize(.extraLarge)
                         .accessibilityIdentifier("welcome.gate.register")
+
+                        OfflineDemoButton(action: onShowDemo)
+                            .accessibilityIdentifier("welcome.gate.demo")
 
                         AppleSignInView { _ in }
                             .padding(.top, 2)
