@@ -36,9 +36,20 @@ class AppFlowTestBase: XCTestCase {
     /// why the pairing-URI defaults resolve inside the body instead.
     class var mockPort: Int { 19395 }
 
+    /// Where the mock hosts listen.
+    ///
+    /// Loopback for a simulator run, which shares the Mac's network stack. A
+    /// physical device cannot reach 127.0.0.1 on the Mac, so a device run sets
+    /// `MIZAR_UI_MOCK_HOST` (passed to the runner as
+    /// `TEST_RUNNER_MIZAR_UI_MOCK_HOST`) to the Mac's address on the LAN and
+    /// starts the mock with `MOCK_HOST=0.0.0.0`.
+    class var mockHost: String {
+        ProcessInfo.processInfo.environment["MIZAR_UI_MOCK_HOST"] ?? "127.0.0.1"
+    }
+
     /// The mock host, which must be running before this suite is.
     class var mockPairingURI: String {
-        "mizar://pair?h=127.0.0.1%3A\(mockPort)&c=MOCK-CODE&n=Mock%20Mac&v=1"
+        "mizar://pair?h=\(mockHost)%3A\(mockPort)&c=MOCK-CODE&n=Mock%20Mac&v=1"
     }
 
     /// A second computer, on a second port, with its own identity.
@@ -53,7 +64,7 @@ class AppFlowTestBase: XCTestCase {
     /// (reported to the user). Per-class secondaries land once that clears;
     /// until then two parallel AppFlow classes share this one second host.
     class var secondMockPairingURI: String {
-        "mizar://pair?h=127.0.0.1%3A19396&c=MOCK-CODE&n=Mock%20Mac%20(second)&v=1"
+        "mizar://pair?h=\(mockHost)%3A19396&c=MOCK-CODE&n=Mock%20Mac%20(second)&v=1"
     }
 
     /// How long to wait for the host to answer.
@@ -117,7 +128,7 @@ class AppFlowTestBase: XCTestCase {
         if hideSession { query += query.isEmpty ? "?hideSession=1" : "&hideSession=1" }
         if longStates { query += query.isEmpty ? "?states=long" : "&states=long" }
         else if states { query += query.isEmpty ? "?states=1" : "&states=1" }
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/reset\(query)") else { return }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/reset\(query)") else { return }
         let done = DispatchSemaphore(value: 0)
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
@@ -145,7 +156,7 @@ class AppFlowTestBase: XCTestCase {
         var query = "?pending=0"
         if !running { query += "&running=0" }
         // The shared second machine (19396) until per-class secondaries land.
-        guard let url = URL(string: "http://127.0.0.1:19396/reset\(query)") else { return }
+        guard let url = URL(string: "http://\(mockHost):19396/reset\(query)") else { return }
         let done = DispatchSemaphore(value: 0)
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
@@ -157,7 +168,7 @@ class AppFlowTestBase: XCTestCase {
     ///
     /// - Parameter off: whether it should be unreachable.
     static func setMockOffline(_ off: Bool) {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/offline?on=\(off ? 1 : 0)") else { return }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/offline?on=\(off ? 1 : 0)") else { return }
         let done = DispatchSemaphore(value: 0)
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
@@ -178,7 +189,7 @@ class AppFlowTestBase: XCTestCase {
     ///   an afternoon of reading a failure screen as a bug in the app.
     @discardableResult
     static func failMockHost(_ method: String) -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/fail?method=\(method)") else { return false }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/fail?method=\(method)") else { return false }
         let done = DispatchSemaphore(value: 0)
         let box = Box()
         var request = URLRequest(url: url)
@@ -204,7 +215,7 @@ class AppFlowTestBase: XCTestCase {
     /// - Parameter cold: whether to answer that way.
     static func setMockStatsCold(_ cold: Bool) {
         let variant = cold ? "cold" : "full"
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/stats?variant=\(variant)") else { return }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/stats?variant=\(variant)") else { return }
         let done = DispatchSemaphore(value: 0)
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
@@ -241,7 +252,7 @@ class AppFlowTestBase: XCTestCase {
     ///   - method: the one method to stall, or `nil` for every method.
     static func slowMockHost(_ milliseconds: Int, method: String?) {
         let named = method.map { "&method=\($0)" } ?? ""
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/slow?ms=\(milliseconds)\(named)") else { return }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/slow?ms=\(milliseconds)\(named)") else { return }
         let done = DispatchSemaphore(value: 0)
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
@@ -262,7 +273,7 @@ class AppFlowTestBase: XCTestCase {
     ///   say it released something rather than assume it did.
     @discardableResult
     static func holdMockConversationReads(_ holding: Bool) -> Int? {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/hold?messages=\(holding ? 1 : 0)") else { return nil }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/hold?messages=\(holding ? 1 : 0)") else { return nil }
         let done = DispatchSemaphore(value: 0)
         let box = Box()
         var request = URLRequest(url: url)
@@ -288,7 +299,7 @@ class AppFlowTestBase: XCTestCase {
     ///
     /// - Returns: the counts, or `nil` when the mock is not answering.
     static func mockLoads() -> (inFlight: Int, peak: Int)? {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/loads?reset=1") else { return nil }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/loads?reset=1") else { return nil }
         let done = DispatchSemaphore(value: 0)
         let box = Box()
         var request = URLRequest(url: url)
@@ -313,7 +324,7 @@ class AppFlowTestBase: XCTestCase {
     ///
     /// - Returns: method name to count, empty when the mock is not answering.
     static func mockMethodCounts() -> [String: Int] {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/loads") else { return [:] }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/loads") else { return [:] }
         let done = DispatchSemaphore(value: 0)
         let box = Box()
         var request = URLRequest(url: url)
@@ -342,7 +353,7 @@ class AppFlowTestBase: XCTestCase {
     /// - Returns: the prompt texts and their modes, in order; empty when the
     ///   mock is not answering.
     static func mockPrompts() -> (texts: [String], modes: [String]) {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/prompts") else { return ([], []) }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/prompts") else { return ([], []) }
         let done = DispatchSemaphore(value: 0)
         let box = Box()
         var request = URLRequest(url: url)
@@ -392,7 +403,7 @@ class AppFlowTestBase: XCTestCase {
     ///
     /// - Returns: one dictionary per switch, empty when the mock is not answering.
     static func mockModelSets() -> [[String: Any]] {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/loads") else { return [] }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/loads") else { return [] }
         let done = DispatchSemaphore(value: 0)
         let box = Box()
         var request = URLRequest(url: url)
@@ -541,7 +552,7 @@ class AppFlowTestBase: XCTestCase {
     ///
     /// - Returns: the count, or `nil` when the mock is not answering.
     static func mockConnections() -> Int? {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/connections") else { return nil }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/connections") else { return nil }
         let done = DispatchSemaphore(value: 0)
         let box = Box()
         var request = URLRequest(url: url)
@@ -691,7 +702,7 @@ class AppFlowTestBase: XCTestCase {
         // production `/me`, and the first screen would be measured through a
         // 30-second timeout. The override also keeps a future signed-in test
         // from reaching the real account server by accident.
-        arguments += ["-mizarAccountFreshStart", "-mizarAccountURL", "http://127.0.0.1:\(mockPort)"]
+        arguments += ["-mizarAccountFreshStart", "-mizarAccountURL", "http://\(mockHost):\(mockPort)"]
         // The app now opens on a login gate. The protocol and layout suites drive
         // screens behind it and have no account to sign in with, so they launch
         // past it; the gate has its own test class.
@@ -1194,7 +1205,7 @@ class AppFlowTestBase: XCTestCase {
     ///
     /// - Parameter running: whether it is running.
     static func setMockSessionRunning(_ running: Bool) {
-        guard let url = URL(string: "http://127.0.0.1:\(mockPort)/session?running=\(running ? 1 : 0)") else { return }
+        guard let url = URL(string: "http://\(mockHost):\(mockPort)/session?running=\(running ? 1 : 0)") else { return }
         let done = DispatchSemaphore(value: 0)
         var request = URLRequest(url: url)
         request.timeoutInterval = 5

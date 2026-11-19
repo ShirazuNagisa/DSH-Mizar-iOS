@@ -25,14 +25,17 @@ struct ComposerOnDeviceContractTests {
             ["composer.enhance"],
             in: "DSH-Mizar/Views/ComposerView.swift",
         )
-        // The microphone's identifier is set on the UIKit view it lives on,
-        // not with the SwiftUI modifier, so the contract names the assignment.
+        // Talking is a hold on the field, not a control on the row: the
+        // contract names the recogniser and its gate, because those are what
+        // the UI suite's long press reaches.
         try AppSourceContract.expectFragments(
             [
-                "view.accessibilityIdentifier = \"composer.mic\"",
+                "editor.dictationPressRecognizer = hold",
+                "hold.delegate = context.coordinator",
+                "!editor.isFirstResponder && !editor.isExpanded",
             ],
-            in: "DSH-Mizar/Views/Composer/ComposerOnDeviceControls.swift",
-            describing: "microphone identifier",
+            in: "DSH-Mizar/Views/ComposerView.swift",
+            describing: "hold-to-talk gesture",
         )
         try AppSourceContract.expectIdentifiers(
             [
@@ -65,6 +68,12 @@ struct ComposerOnDeviceContractTests {
         try AppSourceContract.expectFragments(
             [
                 "String(localized: \"Hold to dictate\")",
+            ],
+            in: "DSH-Mizar/Views/ComposerView.swift",
+            describing: "the hold's hint",
+        )
+        try AppSourceContract.expectFragments(
+            [
                 "\"Slide up to cancel\"",
                 "\"Release to cancel\"",
                 "String(localized: \"Allow microphone access to dictate.\")",

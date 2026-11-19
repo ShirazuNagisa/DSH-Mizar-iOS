@@ -7,12 +7,14 @@
 //  Neither feature can be driven to a result on this machine: the rewriter
 //  needs Apple Intelligence (the simulator reports the model as not ready) and
 //  the microphone needs a speech model this runtime does not carry. What can
-//  be proven here is the wiring that must hold on every machine -- the entries
-//  exist only while the field has the keyboard, a blank draft is refused, the
-//  rewrite's window says why when the model is not usable, and a hold on the
-//  microphone leaves an explanation instead of doing nothing. The rewrite's
-//  checks and the shared edit surface are pinned by the unit suites; the
-//  device-side behaviour is recorded in the plan's acceptance matrix.
+//  be proven here is the wiring that must hold on every machine -- the rewrite
+//  entry exists only while the field has the keyboard, a blank draft is
+//  refused, its window says why when the model is not usable, and a hold on
+//  the *resting* field is the microphone: it must leave the strip (or its
+//  explanation) without taking the field's own selection gesture away when the
+//  keyboard is up. The rewrite's checks and the shared edit surface are pinned
+//  by the unit suites; the device-side behaviour is recorded in the plan's
+//  acceptance matrix.
 //
 
 import XCTest
@@ -30,43 +32,35 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
         super.setUp()
     }
 
-    /// The microphone is a UIKit view with a button trait, not a SwiftUI
-    /// button, so it is queried by identifier without pinning an element type.
-    private func microphone(_ app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any)["composer.mic"]
-    }
-
-    /// The two entries only exist while the keyboard is up: with no caret there
-    /// is no draft being written and no place for words to land.
-    func testTheEntriesComeAndGoWithTheKeyboard() throws {
+    /// The rewrite entry belongs to the keyboard: with no caret there is no
+    /// draft being written, and the row keeps its resting shape.
+    func testTheRewriteEntryComesAndGoesWithTheKeyboard() throws {
         let app = launch(pending: false)
         let field = app.textViews["composer.field"]
         expect(field, "the composer is missing")
 
         XCTAssertFalse(
-            microphone(app).exists,
-            "the microphone is offered with the keyboard down",
+            app.buttons["composer.enhance"].exists,
+            "the rewrite entry is offered with the keyboard down",
         )
 
         _ = focusEmptyComposer(app)
-        expect(microphone(app), "tapping the field did not bring the microphone")
-        // The rewrite's entry is permanent unless the hardware can never run
-        // the model, which the simulator does not claim; when it is absent the
-        // window cannot be exercised, and the test says so rather than passing
-        // silently.
+        // The entry is always drawn now, even when this runtime cannot run the
+        // model; if it is absent the window cannot be exercised and the test
+        // says so rather than passing silently.
         guard app.buttons["composer.enhance"].exists else {
-            throw XCTSkip("this runtime hides the rewrite entry: the model is not eligible")
+            throw XCTSkip("the rewrite entry is not drawn on this runtime")
         }
 
         app.buttons["composer.dismissKeyboard"].tap()
         let gone = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
-            object: microphone(app),
+            object: app.buttons["composer.enhance"],
         )
         XCTAssertEqual(
             XCTWaiter.wait(for: [gone], timeout: 5),
             .completed,
-            "the microphone stayed after the keyboard left",
+            "the rewrite entry stayed after the keyboard left",
         )
     }
 
@@ -136,26 +130,50 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
         attachScreenshot(of: app, named: "rewrite-window")
     }
 
-    /// A hold on the microphone has to leave something on screen: the strip
-    /// while it listens, or the reason it cannot. On this runtime speech is
-    /// unavailable, so the strip stays until it is dismissed.
-    func testAHoldOnTheMicrophoneLeavesTheStrip() throws {
+    /// A hold on the resting field is the microphone. On this runtime speech is
+    /// unavailable, so the strip carries its explanation and stays until it is
+    /// dismissed -- which is exactly the "it answered instead of doing nothing"
+    /// property the device needs.
+    func testAHoldOnTheRestingFieldLeavesTheStrip() throws {
         let app = launch(pending: false)
         let field = app.textViews["composer.field"]
-        field.tap()
-        let mic = microphone(app)
-        expect(mic, "the microphone did not appear")
+        expect(field, "the composer is missing")
         attachScreenshot(of: app, named: "composer-entries")
 
-        mic.press(forDuration: 1.0)
+        // No tap first: the hold has to work on the field at rest, which is
+        // where the operator meets it.
+        field.press(forDuration: 1.0)
         allowMicrophoneIfAsked()
-        // A permission answer starts the next press, not the one that asked.
-        mic.press(forDuration: 1.0)
         dismissSpringboardAlertIfAny()
 
+        // On the simulator speech is unavailable and the strip carries the
+        // explanation; on a device the microphone opens, and whatever it heard
+        // leaves either a transcript in the field or a note that it heard
+        // nothing. Both are "the hold answered"; silence is the bug this
+        // catches.
         let strip = app.descendants(matching: .any)["composer.dictation.strip"]
-        expect(strip, "holding the microphone left nothing on screen")
+        let note = app.descendants(matching: .any)["composer.onDevice.note"]
+        XCTAssertTrue(
+            strip.waitForExistence(timeout: 2) || note.waitForExistence(timeout: 8) || strip.exists,
+            "holding the resting field left nothing on screen",
+        )
         attachScreenshot(of: app, named: "dictation-strip")
+    }
+
+    /// With the keyboard up the same hold belongs to the text: it selects, and
+    /// must not start a recording over the operator's selection.
+    func testAHoldWithTheKeyboardUpDoesNotDictate() throws {
+        let app = launch(pending: false)
+        let field = focusEmptyComposer(app)
+        field.press(forDuration: 1.0)
+        let strip = app.descendants(matching: .any)["composer.dictation.strip"]
+        XCTAssertFalse(
+            strip.waitForExistence(timeout: 2),
+            "a hold with the keyboard up started dictation",
+        )
+        // Dismiss whatever selection menu the press opened before the next
+        // test measures the screen.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
     }
 
     // MARK: - Helpers

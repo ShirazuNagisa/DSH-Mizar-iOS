@@ -3140,7 +3140,8 @@ relayServer.on('upgrade', (request, socket, head) => {
   relayWss.handleUpgrade(request, socket, head, (ws) => relayWss.emit('connection', ws, request))
 })
 
-server.listen(port, '127.0.0.1', () => {
+const HOST = process.env.MOCK_HOST ?? '127.0.0.1'
+server.listen(port, HOST, () => {
   console.log(`mock host on 127.0.0.1:${port}, code ${CODE}`)
   console.log(`mizar://pair?h=127.0.0.1%3A${port}&c=${CODE}&n=Mock%20Mac&v=1`)
   console.log(`relay base for this host: http://127.0.0.1:${RELAY_PORT}/r/${RELAY_ROOM}`)
@@ -3158,4 +3159,4 @@ relayServer.on('error', (error) => {
   process.exit(1)
 })
 
-relayServer.listen(RELAY_PORT, '127.0.0.1')
+relayServer.listen(RELAY_PORT, HOST)
