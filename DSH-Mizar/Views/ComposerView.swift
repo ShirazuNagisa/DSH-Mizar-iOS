@@ -179,6 +179,15 @@ struct ComposerView: View {
                     // waiting for it.
                     if composing, onDevice.isEnhancing { onDevice.cancelEnhancement() }
                 },
+                onDictationPress: beginDictation,
+                onDictationRelease: {
+                    dictationCancelling = false
+                    onDevice.endHold()
+                },
+                onDictationCancel: {
+                    dictationCancelling = true
+                    onDevice.cancelHold()
+                },
                 onSlashTokenChanged: onSlashTokenChanged,
                 onFocusChanged: { value in focused = value },
                 onMeasuredHeight: { height in fieldHeight = height },
@@ -251,22 +260,14 @@ struct ComposerView: View {
                         onBrowseCommands: onBrowseCommands,
                     )
                     Spacer(minLength: 4)
-                    // The two on-device entries sit with the keyboard button,
-                    // and appear and leave with it: with no keyboard there is
-                    // no caret to dictate into and no draft being written. The
-                    // microphone is leftmost so the thumb that holds it is not
-                    // over the send button.
+                    // The rewriter sits immediately left of the keyboard
+                    // chevron, and appears and leaves with it: it is about what
+                    // is being typed. The microphone is deliberately not here:
+                    // talking belongs to the resting field, and it is a hold on
+                    // the field itself rather than a button to aim at.
                     if focused {
-                        micButton
+                        enhanceButton
                             .transition(.pop)
-                        // The rewriter's entry is permanent only on hardware
-                        // that can run the model. A phone that cannot is not
-                        // offered a button that will never work, however many
-                        // times it is tapped.
-                        if onDevice.showsEnhancementEntry {
-                            enhanceButton
-                                .transition(.pop)
-                        }
                     }
                     // Put the keyboard away. Only there while the keyboard is up:
                     // with it down the button has nothing to do, and a control
@@ -524,45 +525,6 @@ struct ComposerView: View {
         .accessibilityIdentifier("composer.enhance")
     }
 
-    /// Hold to talk: the gesture surface, and the circle it is drawn on.
-    ///
-    /// The press is a UIKit long press because cancelling needs the finger's
-    /// *location*, and a long press has no translation -- that method belongs
-    /// to a pan, which is why a slide-up is measured against where the finger
-    /// went down. Starting one closes every panel first, so the keyboard and
-    /// the microphone never share the screen with a window.
-    private var micButton: some View {
-        ZStack {
-            Circle()
-                .fill(onDevice.isRecording ? Color.accentColor : Color(.tertiarySystemFill))
-                .shadow(
-                    color: onDevice.isRecording ? Color.accentColor.opacity(0.4) : .clear,
-                    radius: 8, y: 3,
-                )
-            Image(systemName: "mic.fill")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(onDevice.isRecording ? Theme.onAccent : .secondary)
-        }
-        .frame(width: Self.buttonSize, height: Self.buttonSize)
-        .allowsHitTesting(false)
-        .overlay {
-            ComposerMicControl(
-                isEnabled: !onDevice.isEnhancing,
-                isRecording: onDevice.isRecording,
-                onPress: beginDictation,
-                onRelease: {
-                    dictationCancelling = false
-                    onDevice.endHold()
-                },
-                onCancel: {
-                    dictationCancelling = true
-                    onDevice.cancelHold()
-                },
-            )
-        }
-        .animation(.mizarSnappy, value: onDevice.isRecording)
-    }
-
     /// A blank draft answers nothing: the button is drawn, disabled, with the
     /// accessibility state to match.
     private var blankDraft: Bool {
@@ -581,7 +543,12 @@ struct ComposerView: View {
         }
     }
 
-    /// Start listening where the caret stands, with every panel out of the way.
+    /// Start listening with every panel out of the way.
+    ///
+    /// The words land where the operator pointed: the keyboard's caret when it
+    /// is up, and the end of the draft when it is not -- a resting field has no
+    /// caret the operator can see, and guessing a position inside their text
+    /// would be worse than appending.
     private func beginDictation() {
         guard !onDevice.isEnhancing else { return }
         dictationCancelling = false
@@ -591,7 +558,10 @@ struct ComposerView: View {
             showingCommands = false
             showingEnhance = false
         }
-        onDevice.beginHold(revision: draftRevision, selection: composerSelection)
+        let range = focused
+            ? composerSelection
+            : NSRange(location: (text as NSString).length, length: 0)
+        onDevice.beginHold(revision: draftRevision, selection: range)
     }
 
     /// iOS's own page for this app, where a switched-off permission is turned
@@ -995,6 +965,10 @@ struct ComposerTextInput: UIViewRepresentable {
     var onSelectionChanged: (NSRange) -> Void = { _ in }
     /// Reported when an input method starts or finishes a composition.
     var onCompositionChanged: (Bool) -> Void = { _ in }
+    /// Held on the resting field: start listening, stop, or slide up to cancel.
+    var onDictationPress: () -> Void = {}
+    var onDictationRelease: () -> Void = {}
+    var onDictationCancel: () -> Void = {}
     /// Reported when the field starts or stops sitting on a lone `/`.
     var onSlashTokenChanged: (Bool) -> Void = { _ in }
     /// Called when the editor takes or gives up the keyboard on its own -- a
@@ -1015,6 +989,47 @@ struct ComposerTextInput: UIViewRepresentable {
         context.coordinator.editor = editor
         editor.knownTokenNames = knownTokenNames
         editor.onSlashTokenChanged = onSlashTokenChanged
+        // A hold on the resting field is the microphone. It is a UIKit
+        // recogniser rather than a SwiftUI gesture because cancelling needs
+        // the finger's *location* -- a long press has no translation, that
+        // method belongs to a pan -- and because it has to stay out of the
+        // field's own editing gestures: its delegate only lets it begin when
+        // no keyboard is up.
+        let hold = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(ComposerTextInputCoordinator.handleDictationHold(_:)),
+        )
+        hold.minimumPressDuration = 0.4
+        hold.allowableMovement = 10_000
+        hold.cancelsTouchesInView = true
+        hold.delegate = context.coordinator
+        editor.dictationPressRecognizer = hold
+        editor.addGestureRecognizer(hold)
+        editor.onDictationPress = { [weak coordinator = context.coordinator] in
+            coordinator?.onDictationPress()
+        }
+        editor.onDictationRelease = { [weak coordinator = context.coordinator] in
+            coordinator?.onDictationRelease()
+        }
+        editor.onDictationCancel = { [weak coordinator = context.coordinator] in
+            coordinator?.onDictationCancel()
+        }
+        // A long press is not something VoiceOver can perform, so the same
+        // three states are exposed as actions.
+        editor.accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: String(localized: "Start dictation")) { [weak coordinator = context.coordinator] _ in
+                coordinator?.onDictationPress()
+                return true
+            },
+            UIAccessibilityCustomAction(name: String(localized: "Stop dictation")) { [weak coordinator = context.coordinator] _ in
+                coordinator?.onDictationRelease()
+                return true
+            },
+            UIAccessibilityCustomAction(name: String(localized: "Cancel dictation")) { [weak coordinator = context.coordinator] _ in
+                coordinator?.onDictationCancel()
+                return true
+            },
+        ]
         // The pill's bitmap is drawn for one appearance and one type size.
         // Both can change while the field is alive -- a system appearance
         // switch, a Dynamic Type slider -- and neither is a text change.
@@ -1053,6 +1068,10 @@ struct ComposerTextInput: UIViewRepresentable {
         // component (see `docs/ios-three-issues-diagnosis-2026-10-22.md`).
         editor.accessibilityIdentifier = "composer.field"
         editor.accessibilityLabel = String(localized: "Ask your agent…")
+        // The hold is the microphone on the resting field; VoiceOver cannot
+        // perform a hold, so the hint names it and the custom actions below
+        // offer start, stop and cancel.
+        editor.accessibilityHint = String(localized: "Hold to dictate")
         // The placeholder is a label, not attributed text: it has to vanish
         // the moment the first character arrives and come back when the last
         // one goes, and it must not scroll with the text.
@@ -1095,6 +1114,9 @@ struct ComposerTextInput: UIViewRepresentable {
         context.coordinator.onEditFinished = onEditFinished
         context.coordinator.onSelectionChanged = onSelectionChanged
         context.coordinator.onCompositionChanged = onCompositionChanged
+        context.coordinator.onDictationPress = onDictationPress
+        context.coordinator.onDictationRelease = onDictationRelease
+        context.coordinator.onDictationCancel = onDictationCancel
         editor.knownTokenNames = knownTokenNames
         editor.onSlashTokenChanged = onSlashTokenChanged
 
@@ -1201,6 +1223,15 @@ final class ComposerEditorView: UITextView {
 
     /// Reported when the field starts or stops sitting on a lone `/`.
     var onSlashTokenChanged: ((Bool) -> Void)?
+
+    /// Told when a hold on the resting field begins, ends, or slides up.
+    var onDictationPress: (() -> Void)?
+    var onDictationRelease: (() -> Void)?
+    var onDictationCancel: (() -> Void)?
+
+    /// The recogniser installed for that hold, so the delegate can tell it
+    /// apart from the field's own editing gestures.
+    var dictationPressRecognizer: UILongPressGestureRecognizer?
 
     private var lastReportedHeight: CGFloat = 0
     /// The literals last rendered, in order. Positions are deliberately absent:
@@ -1575,7 +1606,7 @@ final class ComposerEditorView: UITextView {
 /// follows the binding without being re-opened on every update, and the
 /// height follows the layout without a loop.
 @MainActor
-final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
+final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
     var text: Binding<String>
     var onFocusChanged: (Bool) -> Void
     var onMeasuredHeight: (CGFloat) -> Void
@@ -1592,6 +1623,13 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
     var onSelectionChanged: (NSRange) -> Void = { _ in }
     /// Told when a composition starts or finishes.
     var onCompositionChanged: (Bool) -> Void = { _ in }
+    /// Told when a hold on the resting field starts, stops, or cancels.
+    var onDictationPress: () -> Void = {}
+    var onDictationRelease: () -> Void = {}
+    var onDictationCancel: () -> Void = {}
+    /// Where the hold began, and whether it has crossed the cancel line.
+    private var dictationStart: CGPoint?
+    private var dictationCancelled = false
     /// The last request this bridge placed. Identity, not equality: picking the
     /// same command twice is two inserts.
     private var lastInsertionId: UUID?
@@ -1674,6 +1712,63 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
         setFocus(false)
         // The retained selection still identifies the slash while the dock is open.
         editor?.reportSlashState()
+    }
+
+    // MARK: - The hold that talks
+
+    /// The field's hold belongs to it only when it is resting.
+    ///
+    /// With the keyboard up, a long press on a text view is how text is
+    /// selected; taking that gesture would take the field's editing away. The
+    /// resting field has no caret to select around, and there the hold is the
+    /// microphone. Expanded is a full-screen writing surface, not a resting
+    /// composer.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let editor, gestureRecognizer === editor.dictationPressRecognizer else { return true }
+        return !editor.isFirstResponder && !editor.isExpanded && editor.markedTextRange == nil
+    }
+
+    /// One long press on the resting field: start, stop, or cancel.
+    ///
+    /// Only the resting field's own recogniser reaches here; the field decides
+    /// that, so this handler is free to treat every event as a dictation one.
+    /// Cancel is measured by where the finger went down, because a long press
+    /// has no translation.
+    @objc func handleDictationHold(_ gesture: UILongPressGestureRecognizer) {
+        let point = gesture.location(in: gesture.view)
+        switch gesture.state {
+        case .began:
+            dictationStart = point
+            dictationCancelled = false
+            if Haptics.enabled {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }
+            onDictationPress()
+        case .changed:
+            guard let start = dictationStart, !dictationCancelled else { return }
+            // Up, not distance: sliding sideways along the row is a thumb
+            // adjusting, sliding up is the operator changing their mind.
+            if start.y - point.y > 60 {
+                dictationCancelled = true
+                if Haptics.enabled {
+                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                }
+                onDictationCancel()
+            }
+        case .ended:
+            guard dictationStart != nil else { return }
+            dictationStart = nil
+            let cancelled = dictationCancelled
+            dictationCancelled = false
+            if !cancelled { onDictationRelease() }
+        case .cancelled, .failed:
+            guard dictationStart != nil else { return }
+            dictationStart = nil
+            dictationCancelled = false
+            onDictationCancel()
+        default:
+            break
+        }
     }
 
     // MARK: - The palette's pick

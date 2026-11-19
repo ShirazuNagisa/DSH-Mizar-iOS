@@ -76,11 +76,6 @@ final class ComposerOnDeviceInput {
         return false
     }
 
-    /// The entry is hidden only when the hardware can never run the model.
-    var showsEnhancementEntry: Bool {
-        enhancementAvailability != .deviceNotEligible
-    }
-
     /// The entry is usable when the model is available and the draft is not
     /// blank. A blank draft keeps the button in place, disabled, so the row
     /// does not shift when the first character arrives.
@@ -185,8 +180,20 @@ final class ComposerOnDeviceInput {
                 return
             }
             if !started {
-                // A permission alert, an asset download, or a refusal: none of
-                // them is a recording, and the next press tries again.
+                // The first hold on a phone that has never asked shows the
+                // system alert and answers `false`; the permission may be
+                // granted by now, so the same hold tries once more. Every other
+                // no -- a refusal, an asset download, an unsupported model --
+                // leaves the entry at rest with its own explanation.
+                if self.dictation.phase == .idle {
+                    let retried = await self.dictation.begin()
+                    guard self.holdStarted else {
+                        if retried { _ = await self.dictation.finish() }
+                        return
+                    }
+                    if retried { return }
+                    self.showNotice(String(localized: "Microphone allowed. Hold the field again to dictate."))
+                }
                 self.holdStarted = false
                 self.holdRange = nil
                 self.holdRevision = nil
@@ -208,7 +215,18 @@ final class ComposerOnDeviceInput {
             guard let transcript,
                   !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let expected
-            else { return }
+            else {
+                // The microphone was open and nothing came back. Silence is
+                // the one answer the operator cannot tell apart from a broken
+                // button, so say it -- but only when the capture really ran:
+                // a refused permission or a download has its own explanation.
+                if self.dictation.phase == .idle {
+                    self.showNotice(
+                        String(localized: "Nothing was heard. Your draft is unchanged."),
+                    )
+                }
+                return
+            }
             self.pendingEdit = PendingEdit(
                 edit: ComposerEdit(range: range, text: transcript, source: .dictation),
                 revision: expected,

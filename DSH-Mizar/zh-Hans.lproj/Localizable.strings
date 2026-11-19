@@ -1109,3 +1109,5 @@
 "Dictation stopped. Your draft is unchanged." = "语音输入已停止，草稿保持不变。";
 "The text was not inserted. Finish choosing characters first." = "没有写入文字，请先确认输入法候选。";
 "Open Settings" = "打开设置";
+"Microphone allowed. Hold the field again to dictate." = "麦克风已允许。再次按住输入框即可说话。";
+"Nothing was heard. Your draft is unchanged." = "没有听到内容，草稿保持不变。";
