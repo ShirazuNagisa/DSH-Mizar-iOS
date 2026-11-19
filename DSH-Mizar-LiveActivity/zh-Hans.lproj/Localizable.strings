@@ -30,6 +30,12 @@
 "Offline" = "离线";
 "Untitled session" = "未命名会话";
 "Longest running session" = "最长运行会话用时";
+"Longest running" = "最长运行";
+
+/* 精炼稿的单一焦点：数量只在右上出现一次，待审批把琥珀状态与请求总数合并。 */
+"Pending approval" = "待审批";
+"Other sessions" = "另有 %d 个";
+"Other approvals" = "另有 %d 项";
 "No running sessions" = "当前没有执行中的会话";
 "Session count" = "会话数量";
 "Sending approval" = "正在发送审批";

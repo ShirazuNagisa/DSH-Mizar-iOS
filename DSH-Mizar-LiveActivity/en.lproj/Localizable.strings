@@ -34,6 +34,14 @@
 "Offline" = "Offline";
 "Untitled session" = "Untitled session";
 "Longest running session" = "Longest running session";
+"Longest running" = "Longest running";
+
+/* The single focus of the approved refinement. The count appears once, in the
+   trailing corner, and the pending label merges the amber signal with the
+   number of requests still waiting. */
+"Pending approval" = "Approval pending";
+"Other sessions" = "%d more";
+"Other approvals" = "%d more";
 "No running sessions" = "No running sessions";
 "Session count" = "Session count";
 "Sending approval" = "Sending";
