@@ -102,6 +102,12 @@ struct SessionDetailView: View {
     @State private var showingModelPicker = false
     @State private var showingContextDetail = false
     @State private var showingCommands = false
+    /// Whether the on-device rewrite's intent window is out. Owned here, like
+    /// the other panels: a popover's content is rebuilt while it is up.
+    @State private var showingEnhance = false
+    /// The rewrite and the microphone, owned by the screen so a task survives
+    /// the rebuids a scrolling conversation causes.
+    @State private var composerOnDevice = ComposerOnDeviceInput()
     @State private var showingPermissionPicker = false
     @State private var items: [ConversationItem] = []
     /// The session `items` and `turns` belong to, for the same reason as
@@ -574,6 +580,10 @@ struct SessionDetailView: View {
             await reload()
         }
         .onDisappear {
+            // A rewrite or a recording does not outlive the screen that asked
+            // for it, and neither result is written under a conversation that
+            // is no longer on screen.
+            composerOnDevice.cancelAll()
             // The turns leave with the screen: this drops only the page's
             // evidence, which stops a poll that was up for a conversation nobody
             // is looking at any more.
@@ -610,9 +620,16 @@ struct SessionDetailView: View {
             Task { await refreshAfterSend(delivered.text) }
         }
         .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else {
+                // Nothing on-device keeps running once the operator has left:
+                // a rewrite nobody is waiting for and a microphone still
+                // listening are both stopped, and neither is written.
+                composerOnDevice.cancelAll()
+                return
+            }
             // Ask again when the operator comes back: suspending cancels whatever
             // was in flight, and this screen had no way to notice.
-            guard phase == .active, !reloading else { return }
+            guard !reloading else { return }
             Task { await reload() }
         }
         .onChange(of: showingPermissionPicker) { _, showing in
@@ -1265,6 +1282,25 @@ struct SessionDetailView: View {
                         .padding(.horizontal, 18)
                         .transition(.fromBelow)
                     }
+                    // The on-device entries' one quiet line: a rewrite that is
+                    // taking a moment, or a refusal that left the draft alone.
+                    if !composerExpanded, let notice = composerOnDevice.notice {
+                        ComposerOnDeviceNote(
+                            text: notice,
+                            onDismiss: { composerOnDevice.dismissNotice() },
+                        )
+                        .padding(.horizontal, 18)
+                        .transition(.fromBelow)
+                    }
+                    if !composerExpanded, composerOnDevice.isEnhancingSlow {
+                        ComposerOnDeviceNote(
+                            text: String(localized: "Rewriting the prompt…"),
+                            isBusy: true,
+                            onCancel: { composerOnDevice.cancelEnhancement() },
+                        )
+                        .padding(.horizontal, 18)
+                        .transition(.fromBelow)
+                    }
                     ComposerView(
                         sessionId: sessionId,
                         stats: shownStats,
@@ -1274,6 +1310,8 @@ struct SessionDetailView: View {
                         showingModel: $showingModelPicker,
                         showingContext: $showingContextDetail,
                         showingCommands: $showingCommands,
+                        showingEnhance: $showingEnhance,
+                        onDevice: composerOnDevice,
                         onWillSend: { text in launch(text) },
                         onSent: { sent in await refreshAfterSend(sent) },
                         onSendFailed: { text in withdraw(text) },

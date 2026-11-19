@@ -1077,3 +1077,35 @@
 "Result unknown. Open details to check." = "结果未确认，请打开详情核验。";
 "Session status is unavailable while this host is offline." = "电脑离线，暂时无法确认此会话的状态。";
 "Session context is unavailable while this host is offline." = "电脑离线，暂时无法读取会话上下文。";
+
+/* 端侧输入：提示词改进与按住说话 */
+"Improve prompt" = "改进提示词";
+"More detail" = "更详细";
+"Bullet points" = "分点排版";
+"More formal" = "更正式";
+"This iPhone cannot run Apple Intelligence." = "这台 iPhone 不支持 Apple 智能。";
+"Turn on Apple Intelligence to rewrite a prompt." = "打开 Apple 智能后即可改进提示词。";
+"The on-device model is still getting ready." = "端侧模型仍在准备中。";
+"The on-device model does not speak this language yet." = "端侧模型暂不支持当前语言。";
+"The rewrite is not available right now." = "暂时无法改进提示词。";
+"The rewrite came back empty. Your draft is unchanged." = "改写没有返回内容，草稿保持不变。";
+"The rewrite changed a path or command. Your draft is unchanged." = "改写改动了路径或命令，草稿保持不变。";
+"This draft is too long to rewrite. Your draft is unchanged." = "草稿太长，无法改写，草稿保持不变。";
+"Rewriting" = "改写中";
+"Rewriting the prompt…" = "正在改写提示词…";
+"Hold to dictate" = "按住说话";
+"Hold to talk; slide up to cancel" = "按住说话，上滑取消";
+"Recording" = "录音中";
+"Start dictation" = "开始语音输入";
+"Stop dictation" = "结束语音输入";
+"Cancel dictation" = "取消语音输入";
+"Listening…" = "正在听…";
+"Slide up to cancel" = "上滑取消";
+"Release to cancel" = "松手取消";
+"Allow microphone access to dictate." = "允许麦克风权限后即可语音输入。";
+"Dictation is not available on this device." = "这台设备不支持语音输入。";
+"Downloading the speech model…" = "正在下载语音模型…";
+"Getting the microphone ready…" = "正在准备麦克风…";
+"Dictation stopped. Your draft is unchanged." = "语音输入已停止，草稿保持不变。";
+"The text was not inserted. Finish choosing characters first." = "没有写入文字，请先确认输入法候选。";
+"Open Settings" = "打开设置";
