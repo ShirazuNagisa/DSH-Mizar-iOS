@@ -42,6 +42,8 @@ final class ComposerOnDeviceInput {
 
     private(set) var enhancementPhase: EnhancementPhase = .idle
     private(set) var enhancementAvailability: ComposerEnhanceAvailability = .unknown
+    /// Whether the interface is being asked right now.
+    private(set) var isProbingAvailability = false
     /// One line about something the operator should know. Cleared on its own.
     private(set) var notice: String?
     /// The edit waiting for the field, if any.
@@ -53,6 +55,7 @@ final class ComposerOnDeviceInput {
     // MARK: Private
 
     private var enhanceTask: Task<Void, Never>?
+    private var probeTask: Task<Void, Never>?
     /// Identity of the request in flight; a result carrying an older token is
     /// a result for a draft the operator has already moved past.
     private var enhanceToken = UUID()
@@ -83,8 +86,28 @@ final class ComposerOnDeviceInput {
         enhancementAvailability.isAvailable && enhancementPhase == .idle
     }
 
+    /// Ask the interface, not the claim.
+    ///
+    /// The claim is instant and is used for the cases it is certainly right
+    /// about (`available`). When it says no, the panel asks the model itself:
+    /// 27.3 in mainland China can say "not eligible" while the model answers,
+    /// and only a real call can tell the difference.
     func refreshAvailability() {
-        enhancementAvailability = ComposerEnhancement.availability()
+        let claimed = ComposerEnhancement.availability()
+        guard claimed.isWorthProbing else {
+            enhancementAvailability = claimed
+            return
+        }
+        guard probeTask == nil else { return }
+        enhancementAvailability = .checking
+        isProbingAvailability = true
+        probeTask = Task { [weak self] in
+            let result = await ComposerEnhancement.probe()
+            guard let self else { return }
+            self.enhancementAvailability = result
+            self.isProbingAvailability = false
+            self.probeTask = nil
+        }
     }
 
     /// Rewrite the draft, once.
@@ -260,6 +283,9 @@ final class ComposerOnDeviceInput {
     func cancelAll() {
         cancelEnhancement()
         cancelHold()
+        probeTask?.cancel()
+        probeTask = nil
+        isProbingAvailability = false
         noticeTask?.cancel()
         notice = nil
     }

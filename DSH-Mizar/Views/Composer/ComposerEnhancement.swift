@@ -61,6 +61,8 @@ enum ComposerEnhanceIntent: String, CaseIterable, Identifiable, Sendable {
 enum ComposerEnhanceAvailability: Equatable, Sendable {
     /// Not asked yet.
     case unknown
+    /// The interface is being asked, not guessed.
+    case checking
     case available
     /// Apple Intelligence is not available on this device (unsupported
     /// hardware or a region that has no model yet). Not a permanent verdict:
@@ -76,6 +78,15 @@ enum ComposerEnhanceAvailability: Equatable, Sendable {
 
     var isAvailable: Bool { self == .available }
 
+    /// Whether the claim is one the interface should settle.
+    ///
+    /// "Off" and "downloading" are facts about the system, not opinions about
+    /// this device; the two that a 27.3 phone can get wrong are eligibility
+    /// and the language of a model that answers anyway.
+    var isWorthProbing: Bool {
+        self == .deviceNotEligible || self == .languageNotSupported
+    }
+
     /// Whether the reason is one the operator can act on.
     var isActionable: Bool {
         self == .intelligenceNotEnabled || self == .languageNotSupported
@@ -85,6 +96,8 @@ enum ComposerEnhanceAvailability: Equatable, Sendable {
     var explanation: LocalizedStringKey? {
         switch self {
         case .unknown, .available: nil
+        case .checking: "Checking Apple Intelligence…"
+
         case .deviceNotEligible: "Apple Intelligence is not available on this device."
         case .intelligenceNotEnabled: "Turn on Apple Intelligence to rewrite a prompt."
         case .modelNotReady: "The on-device model is still getting ready."
@@ -130,7 +143,7 @@ extension ComposerEnhanceFailure {
             String(localized: "The on-device model is still getting ready.")
         case .unavailable(.languageNotSupported), .wrongLanguage:
             String(localized: "The on-device model does not speak this language yet.")
-        case .unavailable(.unknown), .unavailable(.available):
+        case .unavailable(.unknown), .unavailable(.available), .unavailable(.checking):
             String(localized: "The rewrite is not available right now.")
         case .empty, .refused:
             String(localized: "The rewrite came back empty. Your draft is unchanged.")
@@ -213,6 +226,57 @@ enum ComposerEnhancement {
         }
     }
 
+    /// Ask the model to answer, and let the answer decide.
+    ///
+    /// `availability` is the system's claim about the model; a four-token
+    /// generation is the model itself. They disagree on 27.3 in mainland
+    /// China: the claim can say the device is not eligible while the interface
+    /// answers, so the panel's answer comes from a real call. A failure falls
+    /// back to the claim (or to a more precise language answer), and a call
+    /// that answers -- however briefly -- is ``ComposerEnhanceAvailability/available``.
+    static func probe() async -> ComposerEnhanceAvailability {
+        let claimed = availability()
+        guard claimed.isWorthProbing else { return claimed }
+
+        let session = LanguageModelSession(model: SystemLanguageModel.default)
+        do {
+            _ = try await session.respond(
+                to: "Reply with OK.",
+                options: GenerationOptions(maximumResponseTokens: 4),
+            )
+            return .available
+        } catch is CancellationError {
+            return claimed
+        } catch {
+            return probeOutcome(for: error, claimed: claimed)
+        }
+    }
+
+    /// What a failed probe means, given what the system claimed.
+    ///
+    /// Language is the one reason more precise than the claim; a refusal or a
+    /// guardrail means the interface works but this probe was rejected, so it
+    /// keeps the claim instead of turning a working model off.
+    static func probeOutcome(for error: Error, claimed: ComposerEnhanceAvailability) -> ComposerEnhanceAvailability {
+        if #available(iOS 27.0, *), let modelError = error as? LanguageModelError {
+            switch modelError {
+            case .unsupportedLanguageOrLocale:
+                return .languageNotSupported
+            default:
+                return claimed
+            }
+        }
+        if let generationError = error as? LanguageModelSession.GenerationError {
+            switch generationError {
+            case .unsupportedLanguageOrLocale:
+                return .languageNotSupported
+            default:
+                return claimed
+            }
+        }
+        return claimed
+    }
+
     /// Rewrite one draft, once, with no history and no tools.
     ///
     /// A fresh session per call is what makes the feature testable: what goes
@@ -225,11 +289,10 @@ enum ComposerEnhancement {
     /// answer about the part it saw, which is worse than refusing: the operator
     /// would be handed a rewrite of a prompt they cannot recognise.
     static func rewrite(_ draft: String, intent: ComposerEnhanceIntent) async throws -> String {
-        let availability = availability()
-        guard availability.isAvailable else {
-            throw ComposerEnhanceFailure.unavailable(availability)
-        }
-
+        // No claim check here: the screen asks the interface first (``probe``)
+        // and a generation that fails is mapped below. Refusing on the claim
+        // would be refusing on exactly the signal 27.3 in mainland China gets
+        // wrong.
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { throw ComposerEnhanceFailure.empty }
 

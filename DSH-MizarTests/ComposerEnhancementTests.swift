@@ -280,8 +280,8 @@ struct ComposerEnhancementTests {
     @Test("availability reports a case the panel can draw, without a model behind it")
     func availabilityIsDeclared() {
         switch ComposerEnhancement.availability() {
-        case .unknown, .available, .deviceNotEligible, .intelligenceNotEnabled, .modelNotReady,
-             .languageNotSupported:
+        case .unknown, .checking, .available, .deviceNotEligible, .intelligenceNotEnabled,
+             .modelNotReady, .languageNotSupported:
             break
         @unknown default:
             Issue.record("availability returned a case neither the panel nor this suite knows")
@@ -358,7 +358,8 @@ struct ComposerEnhancementTests {
     func availabilitySemantics() {
         #expect(ComposerEnhanceAvailability.available.isAvailable)
         let unavailable: [ComposerEnhanceAvailability] = [
-            .unknown, .deviceNotEligible, .intelligenceNotEnabled, .modelNotReady, .languageNotSupported,
+            .unknown, .checking, .deviceNotEligible, .intelligenceNotEnabled, .modelNotReady,
+            .languageNotSupported,
         ]
         #expect(unavailable.allSatisfy { !$0.isAvailable })
         #expect(ComposerEnhanceAvailability.intelligenceNotEnabled.isActionable)
@@ -366,6 +367,36 @@ struct ComposerEnhancementTests {
         #expect(!ComposerEnhanceAvailability.deviceNotEligible.isActionable)
         #expect(!ComposerEnhanceAvailability.modelNotReady.isActionable)
         #expect(!ComposerEnhanceAvailability.unknown.isActionable)
+        #expect(!ComposerEnhanceAvailability.checking.isActionable)
+        #expect(ComposerEnhanceAvailability.deviceNotEligible.isWorthProbing)
+        #expect(ComposerEnhanceAvailability.languageNotSupported.isWorthProbing)
+        #expect(!ComposerEnhanceAvailability.modelNotReady.isWorthProbing)
+        #expect(!ComposerEnhanceAvailability.intelligenceNotEnabled.isWorthProbing)
+        #expect(!ComposerEnhanceAvailability.available.isWorthProbing)
+    }
+
+    @Test("a failed probe only refines the language answer, and otherwise keeps the claim")
+    func probeOutcome() {
+        // The interface answered with a reason instead of words. Language is
+        // more precise than the claim; everything else keeps the claim so a
+        // working model is not turned off by a probe that was refused.
+        if #available(iOS 27.0, *) {
+            let language = LanguageModelError.unsupportedLanguageOrLocale(
+                .init(languageCode: .init("fr"), debugDescription: "test"),
+            )
+            #expect(
+                ComposerEnhancement.probeOutcome(for: language, claimed: .deviceNotEligible)
+                    == .languageNotSupported,
+            )
+        }
+        let other = NSError(domain: "composer.test", code: 1)
+        #expect(
+            ComposerEnhancement.probeOutcome(for: other, claimed: .deviceNotEligible)
+                == .deviceNotEligible,
+        )
+        #expect(
+            ComposerEnhancement.probeOutcome(for: other, claimed: .modelNotReady) == .modelNotReady,
+        )
     }
 
     @Test("every refusal that kept the draft explains itself, and the no-op stays silent")
