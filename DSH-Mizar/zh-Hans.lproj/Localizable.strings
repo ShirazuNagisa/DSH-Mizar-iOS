@@ -49,7 +49,7 @@
 "Thinking" = "思考强度";
 "Done" = "完成";
 "Unavailable" = "不可用";
-"Ask your agent…" = "给 agent 发消息…";
+"Ask your agent…" = "点击输入框开始键入或长按进行语音输入";
 "Stop" = "停止";
 "Nothing yet" = "暂无内容";
 "This session has no messages." = "这个会话还没有消息。";
@@ -1083,7 +1083,6 @@
 "More detail" = "更详细";
 "Bullet points" = "分点排版";
 "More formal" = "更正式";
-"This iPhone cannot run Apple Intelligence." = "这台 iPhone 不支持 Apple 智能。";
 "Turn on Apple Intelligence to rewrite a prompt." = "打开 Apple 智能后即可改进提示词。";
 "The on-device model is still getting ready." = "端侧模型仍在准备中。";
 "The on-device model does not speak this language yet." = "端侧模型暂不支持当前语言。";
@@ -1111,3 +1110,4 @@
 "Open Settings" = "打开设置";
 "Microphone allowed. Hold the field again to dictate." = "麦克风已允许。再次按住输入框即可说话。";
 "Nothing was heard. Your draft is unchanged." = "没有听到内容，草稿保持不变。";
+"Apple Intelligence is not available on this device." = "这台设备暂时无法使用 Apple 智能。";

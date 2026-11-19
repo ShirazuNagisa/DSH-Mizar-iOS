@@ -48,7 +48,7 @@
 "Thinking" = "Thinking";
 "Done" = "Done";
 "Unavailable" = "Unavailable";
-"Ask your agent…" = "Ask your agent…";
+"Ask your agent…" = "Tap to type, or hold to talk.";
 "Stop" = "Stop";
 "Nothing yet" = "Nothing yet";
 "This session has no messages." = "This session has no messages.";
@@ -1081,7 +1081,6 @@
 "More detail" = "More detail";
 "Bullet points" = "Bullet points";
 "More formal" = "More formal";
-"This iPhone cannot run Apple Intelligence." = "This iPhone cannot run Apple Intelligence.";
 "Turn on Apple Intelligence to rewrite a prompt." = "Turn on Apple Intelligence to rewrite a prompt.";
 "The on-device model is still getting ready." = "The on-device model is still getting ready.";
 "The on-device model does not speak this language yet." = "The on-device model does not speak this language yet.";
@@ -1109,3 +1108,4 @@
 "Open Settings" = "Open Settings";
 "Microphone allowed. Hold the field again to dictate." = "Microphone allowed. Hold the field again to dictate.";
 "Nothing was heard. Your draft is unchanged." = "Nothing was heard. Your draft is unchanged.";
+"Apple Intelligence is not available on this device." = "Apple Intelligence is not available on this device.";

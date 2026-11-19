@@ -143,7 +143,7 @@ final class AppFlowTurnLifecycleTests: AppFlowTestBase {
 
         // Accepted: the composer clears only on success.
         let cleared = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in (field.value as? String) == "Ask your agent…" },
+            predicate: NSPredicate { _, _ in (field.value as? String) == "Tap to type, or hold to talk." },
             object: nil,
         )
         XCTAssertEqual(

@@ -623,15 +623,13 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         // The composer's placeholder, which is interface copy. This used to
         // assert on the "对话" segmented control; that control is gone, and the
         // placeholder is the localised string nearest the same place on screen.
-        // Put the keyboard away first: a focused empty field reports an empty
-        // value instead of its placeholder.
-        if chinese.keyboards.firstMatch.exists {
-            let dismissKeyboard = chinese.buttons["composer.dismissKeyboard"]
-            if dismissKeyboard.exists, dismissKeyboard.isHittable { dismissKeyboard.tap() }
-        }
+        // A draft can survive a relaunch, and a focused empty field reports an
+        // empty value instead of its placeholder, so blank it and put the
+        // keyboard away first.
+        let chineseField = blankComposer(chinese, placeholder: "点击输入框开始键入或长按进行语音输入")
         XCTAssertEqual(
-            chinese.textViews["composer.field"].value as? String,
-            "给 agent 发消息…",
+            chineseField.value as? String,
+            "点击输入框开始键入或长按进行语音输入",
             "the interface did not follow Chinese",
         )
         // Message content is data from the session, not interface copy.
@@ -655,9 +653,10 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         let english = launch(language: "en", pending: false)
         let englishFailure = english.staticTexts["The turn ended without a response"]
         XCTAssertTrue(reveal(englishFailure, in: english), "the failure card did not translate")
+        let englishField = blankComposer(english, placeholder: "Tap to type, or hold to talk.")
         XCTAssertEqual(
-            english.textViews["composer.field"].value as? String,
-            "Ask your agent…",
+            englishField.value as? String,
+            "Tap to type, or hold to talk.",
             "the interface did not follow English",
         )
         english.buttons["composer.commands"].tap()
@@ -870,6 +869,25 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         // are listed directly, and the on-device agent is the first row.
         expect(app.buttons["host.row.local"], "the window does not offer the on-device agent")
         expect(app.buttons["host.row.mock-host-0000-4000-8000-000000000000"], "the paired computer is not listed")
+    }
+
+
+    /// Leave the composer showing its placeholder: clear a draft that survived
+    /// a relaunch, then put the keyboard away. A focused field reports an empty
+    /// value, not the placeholder the copy lives in.
+    @discardableResult
+    private func blankComposer(_ app: XCUIApplication, placeholder: String) -> XCUIElement {
+        let field = app.textViews["composer.field"]
+        expect(field, "the composer is missing")
+        field.tap()
+        if let value = field.value as? String, !value.isEmpty, value != placeholder {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (value as NSString).length + 2))
+        }
+        let dismiss = app.buttons["composer.dismissKeyboard"]
+        if app.keyboards.firstMatch.exists, dismiss.exists, dismiss.isHittable {
+            dismiss.tap()
+        }
+        return field
     }
 
 }

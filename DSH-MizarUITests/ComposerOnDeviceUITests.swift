@@ -118,7 +118,7 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
         // model's state.
         let offered = [
             "More detail", "Bullet points", "More formal",
-            "This iPhone cannot run Apple Intelligence.",
+            "Apple Intelligence is not available on this device.",
             "Turn on Apple Intelligence to rewrite a prompt.",
             "The on-device model is still getting ready.",
             "The on-device model does not speak this language yet.",
@@ -191,7 +191,7 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
         let field = app.textViews["composer.field"]
         expect(field, "the composer is missing")
         field.tap()
-        let placeholder = "Ask your agent…"
+        let placeholder = "Tap to type, or hold to talk."
         if let value = field.value as? String, !value.isEmpty, value != placeholder {
             // Delete, not select-all: the field is a `UITextView`, and a
             // command-key shortcut is not guaranteed to reach it as a selection
