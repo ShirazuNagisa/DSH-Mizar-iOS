@@ -41,7 +41,31 @@ final class AppModel {
     }
 
     private(set) var phase: Phase = .launching
+    /// A Live Activity card that still needs its own sheet: only the overview
+    /// does. A tap on a session card is not a page of its own -- it opens the
+    /// conversation, which is what the operator was looking at on the Lock
+    /// Screen.
     var liveActivityDestination: LiveActivityDestination?
+
+    /// Land a Live Activity tap where the Lock Screen pointed.
+    ///
+    /// A session or approval card names its conversation; selecting it hands
+    /// the tap to the normal shell, so the drawer, the transcript and the
+    /// composer behave exactly as they do after picking the row by hand. The
+    /// overview keeps its sheet: it lists several conversations and has no
+    /// single session to open.
+    func openLiveActivity(_ destination: LiveActivityDestination) {
+        switch destination {
+        case .overview:
+            liveActivityDestination = destination
+        case let .session(_, sessionId), let .approval(_, sessionId, _):
+            // Clear the sheet first: if the app is already showing the
+            // overview, setting the selection under it would leave the sheet
+            // covering the conversation it just opened.
+            liveActivityDestination = nil
+            selectedSessionId = sessionId
+        }
+    }
     var liveActivityRelayHeaders: [String: String] {
         guard !isSelfHosted else { return pairingHeaders }
         var headers = pairingHeaders

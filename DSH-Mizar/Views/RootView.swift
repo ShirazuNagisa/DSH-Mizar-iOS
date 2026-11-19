@@ -52,7 +52,14 @@ struct RootView: View {
             OfflineDemoView()
         }
         .sheet(item: Binding(
-            get: { requiresLogin || model.hosts.isEmpty ? nil : model.liveActivityDestination },
+            // Only the overview is a sheet. A session card is not: its URL
+            // selects the conversation and the shell presents it, which is
+            // what a tap on the Lock Screen means.
+            get: {
+                guard !requiresLogin, !model.hosts.isEmpty,
+                      case .overview? = model.liveActivityDestination else { return nil }
+                return model.liveActivityDestination
+            },
             set: { model.liveActivityDestination = $0 }
         )) { destination in
             LiveActivityDetailView(

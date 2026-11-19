@@ -54,7 +54,7 @@ struct DSHMizarApp: App {
                     .environment(model)
                     .onOpenURL { url in
                         if let destination = LiveActivityDestination(url: url) {
-                            model.liveActivityDestination = destination
+                            model.openLiveActivity(destination)
                             return
                         }
                         // The same payload the QR carries, arriving as a link. One
