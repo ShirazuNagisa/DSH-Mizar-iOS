@@ -19,6 +19,7 @@
 //
 
 import Foundation
+import FoundationModels
 import Testing
 @testable import DSH_Mizar
 
@@ -288,6 +289,69 @@ struct ComposerEnhancementTests {
         // Asking twice is free, and the answer does not depend on the call
         // site: the entry asks again every time it appears.
         #expect(ComposerEnhancement.availability() == ComposerEnhancement.availability())
+    }
+
+    @Test("a Chinese phone stays eligible when the model names its language zh-Hans")
+    func chineseLocaleResolvesAvailable() {
+        // The phone reports `zh_CN`; the model lists `zh-Hans`. `supportsLocale`
+        // is the authority, but when it declines a region the model never
+        // spells out, the language it does speak is the answer -- otherwise a
+        // 27.3 phone in mainland China is told the model cannot speak Chinese.
+        let supported: Set<Locale.Language> = [Locale(identifier: "zh-Hans").language]
+        #expect(
+            ComposerEnhancement.resolve(
+                availability: .available,
+                supportsCurrentLocale: false,
+                supportedLanguages: supported,
+                locale: Locale(identifier: "zh_CN"),
+            ) == .available,
+        )
+        // A script the model does not speak is still refused.
+        #expect(
+            ComposerEnhancement.resolve(
+                availability: .available,
+                supportsCurrentLocale: false,
+                supportedLanguages: supported,
+                locale: Locale(identifier: "zh-Hant_TW"),
+            ) == .languageNotSupported,
+        )
+    }
+
+    @Test("a language the model does not speak is refused, and its own locale is enough")
+    func unsupportedLanguageResolves() {
+        let english: Set<Locale.Language> = [Locale(identifier: "en_US").language]
+        #expect(
+            ComposerEnhancement.resolve(
+                availability: .available,
+                supportsCurrentLocale: true,
+                supportedLanguages: [],
+                locale: Locale(identifier: "fr_FR"),
+            ) == .available,
+        )
+        #expect(
+            ComposerEnhancement.resolve(
+                availability: .available,
+                supportsCurrentLocale: false,
+                supportedLanguages: english,
+                locale: Locale(identifier: "fr_FR"),
+            ) == .languageNotSupported,
+        )
+    }
+
+    @Test("each unavailable reason keeps the panel's own explanation")
+    func unavailableReasonsResolve() {
+        let english: Set<Locale.Language> = [Locale(identifier: "en_US").language]
+        func resolve(_ availability: SystemLanguageModel.Availability) -> ComposerEnhanceAvailability {
+            ComposerEnhancement.resolve(
+                availability: availability,
+                supportsCurrentLocale: true,
+                supportedLanguages: english,
+                locale: Locale(identifier: "en_US"),
+            )
+        }
+        #expect(resolve(.unavailable(.deviceNotEligible)) == .deviceNotEligible)
+        #expect(resolve(.unavailable(.appleIntelligenceNotEnabled)) == .intelligenceNotEnabled)
+        #expect(resolve(.unavailable(.modelNotReady)) == .modelNotReady)
     }
 
     @Test("only one case counts as available, and two as actionable")

@@ -62,8 +62,9 @@ enum ComposerEnhanceAvailability: Equatable, Sendable {
     /// Not asked yet.
     case unknown
     case available
-    /// The hardware cannot run Apple Intelligence at all. The entry is hidden:
-    /// there is nothing to retry and nothing to turn on.
+    /// Apple Intelligence is not available on this device (unsupported
+    /// hardware or a region that has no model yet). Not a permanent verdict:
+    /// a system update can change it, so the entry stays and the panel explains.
     case deviceNotEligible
     /// The hardware can, but the operator has it off. The entry explains and
     /// offers Settings.
@@ -84,7 +85,7 @@ enum ComposerEnhanceAvailability: Equatable, Sendable {
     var explanation: LocalizedStringKey? {
         switch self {
         case .unknown, .available: nil
-        case .deviceNotEligible: "This iPhone cannot run Apple Intelligence."
+        case .deviceNotEligible: "Apple Intelligence is not available on this device."
         case .intelligenceNotEnabled: "Turn on Apple Intelligence to rewrite a prompt."
         case .modelNotReady: "The on-device model is still getting ready."
         case .languageNotSupported: "The on-device model does not speak this language yet."
@@ -122,7 +123,7 @@ extension ComposerEnhanceFailure {
     var message: String? {
         switch self {
         case .unavailable(.deviceNotEligible):
-            String(localized: "This iPhone cannot run Apple Intelligence.")
+            String(localized: "Apple Intelligence is not available on this device.")
         case .unavailable(.intelligenceNotEnabled):
             String(localized: "Turn on Apple Intelligence to rewrite a prompt.")
         case .unavailable(.modelNotReady):
@@ -161,11 +162,36 @@ enum ComposerEnhancement {
     /// Intelligence can be switched on while the app is in the background, and
     /// a cached "no" would outlive the switch.
     static func availability() -> ComposerEnhanceAvailability {
-        switch SystemLanguageModel.default.availability {
+        let model = SystemLanguageModel.default
+        return resolve(
+            availability: model.availability,
+            supportsCurrentLocale: model.supportsLocale(Locale.current),
+            supportedLanguages: model.supportedLanguages,
+            locale: Locale.current,
+        )
+    }
+
+    /// Resolve the model's state into the answer the panel shows.
+    ///
+    /// Split from the model so the mapping can be tested with fabricated
+    /// states -- the states this feature has to explain are exactly the ones
+    /// a simulator cannot produce.
+    static func resolve(
+        availability: SystemLanguageModel.Availability,
+        supportsCurrentLocale: Bool,
+        supportedLanguages: Set<Locale.Language>,
+        locale: Locale,
+    ) -> ComposerEnhanceAvailability {
+        switch availability {
         case .available:
-            return SystemLanguageModel.default.supportsLocale(Locale.current)
-                ? .available
-                : .languageNotSupported
+            // `supportsLocale` is the authority. It is not the only evidence:
+            // a phone in mainland China reports `zh_CN` while the model's list
+            // spells the language `zh-Hans`, and asking the language rather
+            // than the whole locale is what keeps an eligible phone out of the
+            // "does not speak this language" panel.
+            let speaks = supportsCurrentLocale
+                || Self.speaks(locale.language, in: supportedLanguages)
+            return speaks ? .available : .languageNotSupported
         case .unavailable(.deviceNotEligible):
             return .deviceNotEligible
         case .unavailable(.appleIntelligenceNotEnabled):
@@ -174,6 +200,16 @@ enum ComposerEnhancement {
             return .modelNotReady
         @unknown default:
             return .unknown
+        }
+    }
+
+    /// Whether the model speaks this language, comparing language and script
+    /// rather than the complete locale.
+    static func speaks(_ language: Locale.Language, in supported: Set<Locale.Language>) -> Bool {
+        guard let code = language.languageCode else { return false }
+        return supported.contains { candidate in
+            candidate.languageCode == code
+                && (language.script == nil || candidate.script == language.script)
         }
     }
 

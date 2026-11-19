@@ -95,7 +95,7 @@ struct ComposerOnDeviceContractTests {
             "Slide up to cancel",
             "Release to cancel",
             "Rewriting the prompt…",
-            "This iPhone cannot run Apple Intelligence.",
+            "Apple Intelligence is not available on this device.",
             "Open Settings",
         ]
         for relative in ["DSH-Mizar/en.lproj/Localizable.strings", "DSH-Mizar/zh-Hans.lproj/Localizable.strings"] {
