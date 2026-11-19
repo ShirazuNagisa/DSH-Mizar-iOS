@@ -1110,3 +1110,9 @@
 "Nothing was heard. Your draft is unchanged." = "Nothing was heard. Your draft is unchanged.";
 "Apple Intelligence is not available on this device." = "Apple Intelligence is not available on this device.";
 "Checking Apple Intelligence…" = "Checking Apple Intelligence…";
+"Prompt Enhancement" = "Prompt Enhancement";
+"Use the desktop session model" = "Use the desktop session model";
+"Off, the rewrite runs on this iPhone's on-device model and the draft never leaves the phone. On, the draft is sent to the paired computer, which rewrites it with the session's model; the computer must be connected. On the on-device path a phone whose model is unavailable cannot rewrite at all." = "Off, the rewrite runs on this iPhone's on-device model and the draft never leaves the phone. On, the draft is sent to the paired computer, which rewrites it with the session's model; the computer must be connected. On the on-device path a phone whose model is unavailable cannot rewrite at all.";
+"Connect to your computer to rewrite with its model." = "Connect to your computer to rewrite with its model.";
+"Update the desktop app to rewrite prompts with its model." = "Update the desktop app to rewrite prompts with its model.";
+"The computer could not rewrite the draft." = "The computer could not rewrite the draft.";

@@ -7558,6 +7558,48 @@ final class AppModel {
         }
     }
 
+    /// Ask the desktop to rewrite a draft with the session's model.
+    ///
+    /// The model is the one the session is already using: the phone's own
+    /// choice when it has one, otherwise the model the host reports for the
+    /// session. The instructions come from the same function the on-device
+    /// path uses, so the two paths ask for the same rewrite in the same words.
+    ///
+    /// - Parameters:
+    ///   - sessionId: the session whose model does the rewrite.
+    ///   - intent: what "improve" means this time.
+    ///   - draft: the whole draft.
+    /// - Returns: the rewritten draft, unvalidated.
+    /// - Throws: ``MizarError`` when the host refuses or no model is known.
+    func enhancePrompt(
+        sessionId: String,
+        intent: ComposerEnhanceIntent,
+        draft: String,
+    ) async throws -> String {
+        guard let connection else {
+            throw MizarError(code: "NOT_CONNECTED", message: "the desktop is not connected")
+        }
+        guard let selection = await enhancementSelection(for: sessionId) else {
+            throw MizarError(code: "NO_MODEL", message: "the session has no model to ask")
+        }
+        return try await connection.sessionEnhancePrompt(
+            sessionId: sessionId,
+            provider: selection.provider,
+            model: selection.model,
+            system: ComposerEnhancement.instructions(for: intent),
+            draft: draft,
+            maxTokens: ComposerEnhancement.responseTokenBudget,
+        )
+    }
+
+    /// Which model a desktop rewrite would use: the phone's choice, or the
+    /// model the host reports the session is on.
+    private func enhancementSelection(for sessionId: String) async -> ModelSelection? {
+        if let chosen = chosenModelSelection(for: sessionId) { return chosen }
+        guard let stats = await cachedStats(for: sessionId) else { return nil }
+        return stats.model?.lastUsed ?? stats.model?.next
+    }
+
     /// The relay's silent end push woke the app to take the card down.
     ///
     /// Deliberately local and token-free: this path exists precisely because a

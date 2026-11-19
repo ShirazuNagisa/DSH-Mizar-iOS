@@ -41,6 +41,28 @@ struct SendingSettingsView: View {
                         ),
                     )
                 }
+
+                // The rewriter's second half: where the rewrite runs. It is a
+                // switch about the operator's text leaving the phone, so it
+                // sits on its own shelf with its own footer rather than beside
+                // the send behaviour.
+                Section {
+                    Toggle(isOn: Binding(
+                        get: { model.settings.values.enhanceWithDesktopModel },
+                        set: { model.settings.values.enhanceWithDesktopModel = $0 },
+                    )) {
+                        SettingsRowLabel("Use the desktop session model", systemImage: "sparkles")
+                    }
+                    .accessibilityIdentifier("settings.send.enhanceDesktop")
+                } header: {
+                    SettingsSectionHeader("Prompt Enhancement")
+                } footer: {
+                    Text(
+                        String(
+                            localized: "Off, the rewrite runs on this iPhone's on-device model and the draft never leaves the phone. On, the draft is sent to the paired computer, which rewrites it with the session's model; the computer must be connected. On the on-device path a phone whose model is unavailable cannot rewrite at all.",
+                        ),
+                    )
+                }
             }
         }
     }

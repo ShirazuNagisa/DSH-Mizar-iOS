@@ -1155,6 +1155,15 @@ function answer(frame) {
           git: workspaceGit,
         },
       }
+    case 'session.enhancePrompt': {
+      // The desktop rewrite. A canned, deterministic answer keeps the test
+      // about the toggle and the edit, not about a model: the draft is kept
+      // and a marker is appended, which also keeps the anchor check happy.
+      const draft = typeof frame.payload?.draft === 'string' ? frame.payload.draft : ''
+      const text = draft.trim() === '' ? '' : `${draft.trim()} — rewritten on the desktop.`
+      console.log('mock: enhancePrompt for', frame.payload?.sessionId, '->', JSON.stringify(text))
+      return { v: 1, type: 'ok', id, result: { text } }
+    }
     case 'session.stats':
       // A frame per session, because the app draws one session at a time out of
       // one view: a title that is the same for both cannot show whether the

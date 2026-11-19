@@ -64,6 +64,38 @@ final class ComposerOnDeviceUITests: AppFlowTestBase {
         )
     }
 
+    /// The settings switch's other half: with the desktop model chosen, the
+    /// rewrite goes to the paired computer and its answer lands in the field.
+    ///
+    /// The mock host answers `session.enhancePrompt` with the draft plus a
+    /// marker, so this proves the toggle chooses the other path and that the
+    /// result goes through the same validation and edit handoff as the
+    /// on-device one.
+    func testTheDesktopModelRewritesWhenTheSwitchAsks() throws {
+        let app = launch(pending: false, extraArguments: ["-mizarDesktopEnhance"])
+        let field = focusEmptyComposer(app)
+        field.typeText("Tidy this up")
+        app.buttons["composer.enhance"].tap()
+
+        // The popover merges its rows' identifiers into the panel's, so the
+        // row is found by its label -- the same way the person finds it.
+        let moreDetail = app.buttons
+            .matching(NSPredicate(format: "label == %@", "More detail"))
+            .firstMatch
+        expect(moreDetail, "the desktop path did not offer the intents")
+        moreDetail.tap()
+
+        let rewritten = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "rewritten on the desktop"),
+            object: field,
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [rewritten], timeout: 15),
+            .completed,
+            "the desktop rewrite never reached the field; value=\(String(describing: field.value))",
+        )
+    }
+
     /// A blank draft keeps the button and refuses the tap, so the row does not
     /// jump when the first character arrives.
     func testTheRewriteEntryIsRefusedOnABlankDraft() throws {

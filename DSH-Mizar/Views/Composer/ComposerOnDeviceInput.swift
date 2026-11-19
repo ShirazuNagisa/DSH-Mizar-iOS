@@ -19,6 +19,7 @@
 //
 
 import Foundation
+import MizarKit
 import Observation
 
 @Observable
@@ -28,6 +29,18 @@ final class ComposerOnDeviceInput {
     struct PendingEdit: Equatable {
         let edit: ComposerEdit
         let revision: Int
+    }
+
+    /// How the desktop-model path is reached when the setting asks for it.
+    ///
+    /// Supplied by the composer, which owns the session id and the app model.
+    /// `isReady` is asked every time the entry appears: a disconnected desktop
+    /// is a reason the panel can state, not a cached "no".
+    @MainActor
+    struct DesktopEnhancement {
+        let isEnabled: () -> Bool
+        let isReady: () -> Bool
+        let rewrite: (String, ComposerEnhanceIntent) async throws -> String
     }
 
     /// What the rewriter is doing.
@@ -44,6 +57,8 @@ final class ComposerOnDeviceInput {
     private(set) var enhancementAvailability: ComposerEnhanceAvailability = .unknown
     /// Whether the interface is being asked right now.
     private(set) var isProbingAvailability = false
+    /// The desktop-model path, when the composer configured one.
+    var desktop: DesktopEnhancement?
     /// One line about something the operator should know. Cleared on its own.
     private(set) var notice: String?
     /// The edit waiting for the field, if any.
@@ -93,6 +108,10 @@ final class ComposerOnDeviceInput {
     /// 27.3 in mainland China can say "not eligible" while the model answers,
     /// and only a real call can tell the difference.
     func refreshAvailability() {
+        if let desktop, desktop.isEnabled() {
+            enhancementAvailability = desktop.isReady() ? .available : .desktopUnavailable
+            return
+        }
         let claimed = ComposerEnhancement.availability()
         guard claimed.isWorthProbing else {
             enhancementAvailability = claimed
@@ -121,6 +140,11 @@ final class ComposerOnDeviceInput {
         guard canEnhance,
               !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
+
+        if let desktop, desktop.isEnabled() {
+            enhanceViaDesktop(draft: draft, intent: intent, revision: revision, desktop: desktop)
+            return
+        }
 
         let token = UUID()
         enhanceToken = token
@@ -160,6 +184,63 @@ final class ComposerOnDeviceInput {
                     self.showNotice(failure.message)
                 } else {
                     self.showNotice(String(localized: "The rewrite is not available right now."))
+                }
+            }
+        }
+    }
+
+    /// Rewrite through the paired desktop's model.
+    ///
+    /// The same phases, slow note, token and validation as the on-device path:
+    /// the only difference is where the answer comes from, so the composer's
+    /// row and the field's edit behave identically.
+    private func enhanceViaDesktop(
+        draft: String,
+        intent: ComposerEnhanceIntent,
+        revision: Int,
+        desktop: DesktopEnhancement,
+    ) {
+        let token = UUID()
+        enhanceToken = token
+        enhancementPhase = .running(intent)
+        notice = nil
+
+        let slow = Task { [weak self] in
+            try? await Task.sleep(for: Self.slowThreshold)
+            guard let self, !Task.isCancelled, self.enhanceToken == token,
+                  self.enhancementPhase == .running(intent)
+            else { return }
+            self.enhancementPhase = .slow(intent)
+        }
+        enhanceTask = Task { [weak self] in
+            defer { slow.cancel() }
+            guard let self else { return }
+            do {
+                let rewritten = try await desktop.rewrite(draft, intent)
+                guard !Task.isCancelled, self.enhanceToken == token else { return }
+                try ComposerEnhancement.validate(original: draft, rewritten: rewritten)
+                guard self.enhanceToken == token, !Task.isCancelled else { return }
+                self.enhancementPhase = .idle
+                self.pendingEdit = PendingEdit(
+                    edit: ComposerEdit(
+                        range: NSRange(location: 0, length: (draft as NSString).length),
+                        text: rewritten,
+                        source: .enhancement,
+                    ),
+                    revision: revision,
+                )
+            } catch {
+                guard self.enhanceToken == token else { return }
+                self.enhancementPhase = .idle
+                if let failure = error as? ComposerEnhanceFailure {
+                    if failure == .unchanged { return }
+                    self.showNotice(failure.message)
+                } else if let failure = error as? MizarError, failure.known == .notImplemented {
+                    self.showNotice(
+                        String(localized: "Update the desktop app to rewrite prompts with its model."),
+                    )
+                } else {
+                    self.showNotice(String(localized: "The computer could not rewrite the draft."))
                 }
             }
         }

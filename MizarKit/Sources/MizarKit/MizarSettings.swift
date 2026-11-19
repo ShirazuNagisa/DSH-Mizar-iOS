@@ -361,6 +361,18 @@ public struct MizarSettings: Equatable, Sendable, Codable {
     /// time the text is -- and is queued unless this is on.
     public var guidedSendByDefault: Bool
 
+    /// Whether prompt enhancement is done by the desktop session's model
+    /// instead of Apple's on-device model.
+    ///
+    /// Off -- the default -- keeps the draft on the phone: the rewrite runs on
+    /// the on-device model, and the draft never leaves the device. On, the
+    /// composer sends the draft to the paired desktop, which answers with its
+    /// session model; the payload is the draft and the intent's instructions,
+    /// nothing else. This is an explicit choice because it changes where the
+    /// operator's text goes, which is why it is a settings switch and not a
+    /// silent fallback when the on-device model is unavailable.
+    public var enhanceWithDesktopModel: Bool
+
     /// Which relay this phone uses: the official one, or the operator's own.
     ///
     /// Kept here with the other choices so the guide, the settings page and the
@@ -388,6 +400,7 @@ public struct MizarSettings: Equatable, Sendable, Codable {
         localNetworkFirst: Bool = false,
         directConnection: Bool = false,
         guidedSendByDefault: Bool = false,
+        enhanceWithDesktopModel: Bool = false,
         serverMode: ServerMode = .official,
         selfHostedOrigin: String = "",
         selfHostedPin: String = "",
@@ -397,6 +410,7 @@ public struct MizarSettings: Equatable, Sendable, Codable {
         self.localNetworkFirst = localNetworkFirst
         self.directConnection = directConnection
         self.guidedSendByDefault = guidedSendByDefault
+        self.enhanceWithDesktopModel = enhanceWithDesktopModel
         self.serverMode = serverMode
         self.selfHostedOrigin = selfHostedOrigin
         self.selfHostedPin = selfHostedPin
@@ -436,6 +450,8 @@ public struct MizarSettings: Equatable, Sendable, Codable {
 
     /// The key the guided-send switch is stored under.
     public static let guidedSendKey = "mizar.settings.guidedSend"
+    /// Storage key for ``enhanceWithDesktopModel``.
+    public static let enhanceWithDesktopKey = "mizar.settings.enhanceDesktop"
 
     /// The key the official/self-hosted choice is stored under.
     public static let serverModeKey = "mizar.settings.serverMode"
@@ -485,6 +501,10 @@ public struct MizarSettings: Equatable, Sendable, Codable {
             // and guidance into a running turn is a change the operator asks
             // for. See ``guidedSendByDefault``.
             guidedSendByDefault: storage.bool(forKey: guidedSendKey) ?? false,
+            // Off by default: the on-device rewrite keeps the draft on the
+            // phone, and sending it to the desktop is a choice the operator
+            // makes for a reason (see ``enhanceWithDesktopModel``).
+            enhanceWithDesktopModel: storage.bool(forKey: enhanceWithDesktopKey) ?? false,
             // Official by default: the official path is the one that existed
             // before this field, and a default read must not change it.
             serverMode: ServerMode(rawValue: storage.string(forKey: serverModeKey) ?? "") ?? .official,
@@ -505,6 +525,7 @@ public struct MizarSettings: Equatable, Sendable, Codable {
         storage.set(localNetworkFirst, forKey: Self.localNetworkFirstKey)
         storage.set(directConnection, forKey: Self.directConnectionKey)
         storage.set(guidedSendByDefault, forKey: Self.guidedSendKey)
+        storage.set(enhanceWithDesktopModel, forKey: Self.enhanceWithDesktopKey)
         storage.set(serverMode.rawValue, forKey: Self.serverModeKey)
         storage.set(selfHostedOrigin, forKey: Self.selfHostedOriginKey)
         storage.set(selfHostedPin, forKey: Self.selfHostedPinKey)

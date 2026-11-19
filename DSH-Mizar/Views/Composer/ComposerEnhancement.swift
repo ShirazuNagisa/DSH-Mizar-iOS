@@ -75,6 +75,9 @@ enum ComposerEnhanceAvailability: Equatable, Sendable {
     case modelNotReady
     /// The device language is outside what the on-device model speaks.
     case languageNotSupported
+    /// The operator asked for the desktop model, and the desktop is not
+    /// reachable (or the session has no model selection yet).
+    case desktopUnavailable
 
     var isAvailable: Bool { self == .available }
 
@@ -102,6 +105,7 @@ enum ComposerEnhanceAvailability: Equatable, Sendable {
         case .intelligenceNotEnabled: "Turn on Apple Intelligence to rewrite a prompt."
         case .modelNotReady: "The on-device model is still getting ready."
         case .languageNotSupported: "The on-device model does not speak this language yet."
+        case .desktopUnavailable: "Connect to your computer to rewrite with its model."
         }
     }
 }
@@ -143,6 +147,8 @@ extension ComposerEnhanceFailure {
             String(localized: "The on-device model is still getting ready.")
         case .unavailable(.languageNotSupported), .wrongLanguage:
             String(localized: "The on-device model does not speak this language yet.")
+        case .unavailable(.desktopUnavailable):
+            String(localized: "Connect to your computer to rewrite with its model.")
         case .unavailable(.unknown), .unavailable(.available), .unavailable(.checking):
             String(localized: "The rewrite is not available right now.")
         case .empty, .refused:

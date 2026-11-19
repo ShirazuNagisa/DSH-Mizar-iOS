@@ -92,6 +92,14 @@ final class AppSettings {
     /// the send path cannot disagree -- the failure this file exists to prevent.
     var guidedSendByDefault: Bool { values.guidedSendByDefault }
 
+    /// Whether the prompt rewriter asks the desktop's model instead of this
+    /// phone's. Read by the composer at the moment the entry is used, so the
+    /// switch and the behaviour cannot disagree.
+    var enhanceWithDesktopModel: Bool {
+        values.enhanceWithDesktopModel
+            || ProcessInfo.processInfo.arguments.contains("-mizarDesktopEnhance")
+    }
+
     /// Write a change to the log.
     ///
     /// One line per switch that moved, and none for the ones that did not: this
@@ -117,6 +125,12 @@ final class AppSettings {
             ActivityLog.shared.add(
                 .settings,
                 "guided send \(values.guidedSendByDefault ? "on" : "off")",
+            )
+        }
+        if old.enhanceWithDesktopModel != values.enhanceWithDesktopModel {
+            ActivityLog.shared.add(
+                .settings,
+                "prompt enhancement \(values.enhanceWithDesktopModel ? "desktop" : "on-device")",
             )
         }
         for kind in NotificationKind.allCases

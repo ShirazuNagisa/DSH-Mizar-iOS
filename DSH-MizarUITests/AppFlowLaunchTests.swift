@@ -164,6 +164,10 @@ final class AppFlowLaunchTests: AppFlowTestBase {
             revealInSettings(settingControl("settings.send.guidedSend", in: app), in: app),
             "there is no guided-send switch",
         )
+        XCTAssertTrue(
+            revealInSettings(settingControl("settings.send.enhanceDesktop", in: app), in: app),
+            "there is no prompt-enhancement switch",
+        )
         closeSettingsTopic(app)
 
         // 通知与实时活动: the four switches, the system permission they sit under,

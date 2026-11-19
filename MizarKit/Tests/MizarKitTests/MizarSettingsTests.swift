@@ -175,6 +175,9 @@ struct MizarSettingsTests {
         // Off is the host's queue, which is what every build before this one
         // did, and it is the answer a fresh store must give.
         #expect(!settings.guidedSendByDefault)
+        // The desktop rewrite sends the draft off the phone, so a fresh store
+        // must not choose it on the operator's behalf.
+        #expect(!settings.enhanceWithDesktopModel)
     }
 
     @Test("round-trips every switch through a store")
@@ -185,6 +188,7 @@ struct MizarSettingsTests {
         settings.notifications.set(false, for: .turnInterrupted)
         settings.localNetworkFirst = true
         settings.guidedSendByDefault = true
+        settings.enhanceWithDesktopModel = true
         settings.save(to: storage)
 
         let reloaded = MizarSettings.load(from: storage)
@@ -195,6 +199,7 @@ struct MizarSettingsTests {
         #expect(reloaded.notifications.isEnabled(.question))
         #expect(reloaded.localNetworkFirst)
         #expect(reloaded.guidedSendByDefault)
+        #expect(reloaded.enhanceWithDesktopModel)
     }
 
     @Test("survives a relaunch, which is a second load of the same store")
@@ -222,6 +227,7 @@ struct MizarSettingsTests {
         #expect(storage.bool(forKey: MizarSettings.liveActivitiesKey) == true)
         #expect(storage.bool(forKey: MizarSettings.localNetworkFirstKey) == false)
         #expect(storage.bool(forKey: MizarSettings.guidedSendKey) == false)
+        #expect(storage.bool(forKey: MizarSettings.enhanceWithDesktopKey) == false)
     }
 
     @Test("writes and reads the real defaults, distinguishing absent from off")
@@ -265,6 +271,25 @@ struct MizarSettingsTests {
         settings.localNetworkFirst = false
         settings.save(to: storage)
         #expect(!MizarSettings.load(from: storage).localNetworkFirst)
+    }
+
+    @Test("the desktop rewrite switch round-trips on its own")
+    func desktopEnhanceRoundTrip() {
+        // Where the draft goes is the operator's choice; a relaunch that
+        // turned it back on would upload a draft they had chosen to keep on
+        // the phone, and one that turned it off would strand a phone whose
+        // on-device model cannot answer.
+        let storage = MemoryStorage()
+        var settings = MizarSettings()
+        #expect(!settings.enhanceWithDesktopModel)
+        settings.enhanceWithDesktopModel = true
+        settings.save(to: storage)
+        #expect(MizarSettings.load(from: storage).enhanceWithDesktopModel)
+        #expect(storage.bool(forKey: MizarSettings.enhanceWithDesktopKey) == true)
+
+        settings.enhanceWithDesktopModel = false
+        settings.save(to: storage)
+        #expect(!MizarSettings.load(from: storage).enhanceWithDesktopModel)
     }
 
     @Test("the guided-send switch round-trips on its own")

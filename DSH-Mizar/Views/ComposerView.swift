@@ -379,11 +379,15 @@ struct ComposerView: View {
             if onDevice.isEnhancing { onDevice.cancelEnhancement() }
             if onDevice.isRecording { onDevice.cancelHold() }
         }
-        .onAppear { onDevice.refreshAvailability() }
+        .onAppear {
+            configureDesktopEnhancement()
+            onDevice.refreshAvailability()
+        }
         .onChange(of: scenePhase) { _, phase in
             // A rewrite nobody is waiting for and a microphone left running are
             // both stopped when the scene leaves: the operator has looked away.
             if phase == .active {
+                configureDesktopEnhancement()
                 onDevice.refreshAvailability()
             } else {
                 onDevice.cancelAll()
@@ -534,6 +538,9 @@ struct ComposerView: View {
     /// Open the intent window, closing the other panels first.
     private func showEnhancePanel() {
         guard !blankDraft, !isComposing else { return }
+        // Re-read at the moment of use: the switch lives in Settings, and a
+        // session can stay open while it moves.
+        configureDesktopEnhancement()
         onDevice.refreshAvailability()
         withMizarAnimation(.mizarSnappy) {
             showingModel = false
@@ -541,6 +548,25 @@ struct ComposerView: View {
             showingCommands = false
             showingEnhance = true
         }
+    }
+
+    /// Tell the controller how to reach the desktop model.
+    ///
+    /// The closures read the switch and the connection at the moment they are
+    /// called, so a settings change or a dropped link is answered by the next
+    /// appearance of the entry without rebuilding the screen.
+    private func configureDesktopEnhancement() {
+        onDevice.desktop = ComposerOnDeviceInput.DesktopEnhancement(
+            isEnabled: { AppSettings.shared.enhanceWithDesktopModel },
+            isReady: { model.isConnected && !model.isLocalAgentMode },
+            rewrite: { draft, intent in
+                try await model.enhancePrompt(
+                    sessionId: sessionId,
+                    intent: intent,
+                    draft: draft,
+                )
+            },
+        )
     }
 
     /// Start listening with every panel out of the way.

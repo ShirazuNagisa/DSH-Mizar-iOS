@@ -608,6 +608,7 @@ class AppFlowTestBase: XCTestCase {
         freshStart: Bool = true,
         pairingURIs: [String]? = nil,
         contentSizeCategory: String? = nil,
+        extraArguments: [String] = [],
     ) -> XCUIApplication {
         Self.resetMockHost(
             pending: pending,
@@ -636,6 +637,7 @@ class AppFlowTestBase: XCTestCase {
         if let contentSizeCategory {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategory]
         }
+        app.launchArguments += extraArguments
         app.launch()
         dismissSystemAlertIfPresent(app)
         // Simulator/system relaunches can reopen the app without the runner's
