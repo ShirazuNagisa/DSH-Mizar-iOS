@@ -11,6 +11,10 @@
 //  control, so it takes a touch, and it lives until the lone `/` that summoned
 //  it stops being a lone slash.
 //
+//  It now shares its row with the Git capsule and the answer receipt. The
+//  chrome lives in `ComposerStatusCapsule` so all three keep one height and one
+//  inner margin even when the operator's text size grows.
+//
 
 import SwiftUI
 
@@ -25,14 +29,13 @@ struct CommandPaletteHint: View {
                     .foregroundStyle(Theme.accentText)
                 Text("Open commands and skills")
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16)
-            .frame(height: 38)
-            .contentShape(.capsule)
-            .liquidCapsule(interactive: true)
+            .composerStatusCapsule(interactive: true)
         }
         .buttonStyle(.pressable(scale: 0.97))
         .accessibilityIdentifier("composer.paletteHint")

@@ -260,6 +260,8 @@
 "Jump to the latest message" = "Jump to the latest message";
 "1 request waiting" = "1 request waiting";
 "%lld requests waiting" = "%lld requests waiting";
+"%lld files" = "%lld files";
+"%lld files, %lld lines added, %lld lines deleted" = "%lld files, %lld lines added, %lld lines deleted";
 "Allowed %@" = "Allowed %@";
 "Rejected %@" = "Rejected %@";
 "Answer sent" = "Answer sent";

@@ -145,6 +145,26 @@ struct SessionDetailView: View {
     @State private var composerInsertion: ComposerInsertion?
     /// Whether the command palette is open.
     @State private var showingSkillPalette = false
+    /// The working-tree figures for this session, when the computer has a
+    /// repository and the host is new enough to describe it.
+    @State private var workspaceGit: WorkspaceGitStatus?
+    /// The session and connection ``workspaceGit`` was read for.
+    ///
+    /// The shell keys the page per session, but the same session id can be
+    /// opened on a different computer without the page being rebuilt, so the
+    /// connection generation is part of the tag. A reply that no longer matches
+    /// is a reply for a page that is not on screen any more.
+    @State private var workspaceGitTag: WorkspaceGitTag?
+    /// Whether this computer answered `NOT_IMPLEMENTED`; stop asking until the
+    /// next connection rather than every fifteen seconds.
+    @State private var workspaceGitUnsupported = false
+    /// When the Git capsule first appeared, so the status row can order the
+    /// items by the moment they arrived rather than by their kind.
+    @State private var gitAppearedAt: Date?
+    /// The same, for the palette's door.
+    @State private var hintAppearedAt: Date?
+    /// The 1.7-second receipt that follows an answered question.
+    @State private var answerReceipt: ComposerReceipt?
     /// Whether the palette was opened from a lone `/`, which the pick replaces.
     @State private var paletteReplacesSlash = false
     /// How tall the floating composer is, measured rather than guessed, so the
@@ -332,6 +352,14 @@ struct SessionDetailView: View {
     static let placementAttempts = 32
     /// The spacing between those re-aims, in milliseconds.
     static let placementAttemptSpacing = 32
+    /// How often the working tree is re-read while the page is up.
+    ///
+    /// Slow on purpose: this is a line of figures above the field, not a
+    /// running clock, and every read is a round trip to a computer that may be
+    /// on the other side of a relay.
+    static let workspaceGitInterval: Duration = .seconds(15)
+    /// How long "Answer sent" stays in the status row.
+    static let answerReceiptDuration: Duration = .milliseconds(1700)
 
     /// Whether the message area may be shown and touched: the initial
     /// placement has settled, or there was nothing to settle.
@@ -364,6 +392,21 @@ struct SessionDetailView: View {
                     bottomStack(proxy: proxy)
                 }
                 .task(id: sessionId) { await watchStream() }
+                // The working tree changes on the computer, not here, so this
+                // is a read rather than an event: once when the page appears and
+                // then slowly, only while the screen is in front of the
+                // operator and the socket is up. The key carries every one of
+                // those facts so a change cancels a sleeping tick instead of
+                // leaving it to wake up against a page that is gone.
+                .task(id: WorkspaceGitWatch(
+                    sessionId: sessionId,
+                    epoch: model.connectionGeneration,
+                    active: scenePhase == .active,
+                    connected: model.isConnected,
+                    local: model.isLocalAgentMode,
+                )) {
+                    await watchWorkspaceGit()
+                }
                 // On an iPad with the index column put away, the turns stay at the
                 // edge as a rail to scrub.
                 .overlay(alignment: .trailing) {
@@ -1044,6 +1087,118 @@ struct SessionDetailView: View {
         return .ready
     }
 
+    /// The capsules above the field, oldest first.
+    ///
+    /// Ordered by when the operator first saw each one, not by kind. SwiftUI
+    /// redraws this on every Git tick, so the order is derived from stamps
+    /// rather than kept in a mutable array: a figure that changed must not make
+    /// its capsule jump to the right, and an item that left must not leave a
+    /// hole that later items keep their old distance from.
+    private var composerStatusItems: [ComposerStatusItem] {
+        var items: [(appearedAt: Date, slot: Int, item: ComposerStatusItem)] = []
+        if let git = workspaceGit,
+           workspaceGitTag?.sessionId == sessionId,
+           let appearedAt = gitAppearedAt {
+            items.append((appearedAt, 0, .git(git)))
+        }
+        if slashTokenActive, !showingSkillPalette, let appearedAt = hintAppearedAt {
+            items.append((appearedAt, 1, .paletteHint))
+        }
+        if let receipt = answerReceipt {
+            items.append((receipt.appearedAt, 2, .receipt(receipt)))
+        }
+        return items
+            .sorted {
+                $0.appearedAt == $1.appearedAt
+                    ? $0.slot < $1.slot
+                    : $0.appearedAt < $1.appearedAt
+            }
+            .map(\.item)
+    }
+
+    /// Put the "Answer sent" receipt in the composer's row for its moment.
+    ///
+    /// The receipt is owned here rather than by the request dock because the
+    /// question card -- and the dock with it -- may be gone by the time the
+    /// answer lands. The delay is the same 1.7 seconds the approval receipt has
+    /// always used; a second answer replaces the first rather than queueing
+    /// behind it.
+    private func showAnswerReceipt(_ text: String) {
+        let receipt = ComposerReceipt(text: text, allowed: true)
+        withMizarAnimation(.mizarSmooth) { answerReceipt = receipt }
+        Task {
+            try? await Task.sleep(for: Self.answerReceiptDuration)
+            guard answerReceipt?.id == receipt.id else { return }
+            withMizarAnimation(.mizarSmooth) { answerReceipt = nil }
+        }
+    }
+
+    /// Read the working-tree figures, then keep them warm while the page is up.
+    ///
+    /// The read runs once on appearance and then on a slow tick: the working
+    /// tree changes on the computer, and nobody is waiting on the number, so a
+    /// round trip every few seconds would be traffic spent on a caption. The
+    /// loop checks the facts the task key also names, because a socket can go
+    /// away between two ticks without the view being rebuilt.
+    private func watchWorkspaceGit() async {
+        let epoch = model.connectionGeneration
+        let tag = WorkspaceGitTag(sessionId: sessionId, epoch: epoch)
+        if workspaceGitTag != tag {
+            workspaceGitTag = tag
+            workspaceGitUnsupported = false
+            gitAppearedAt = nil
+            withMizarAnimation(.mizarSmooth) { workspaceGit = nil }
+        }
+        guard scenePhase == .active, model.isConnected, !model.isLocalAgentMode,
+              !workspaceGitUnsupported else { return }
+
+        await readWorkspaceGit(epoch: epoch)
+        while !Task.isCancelled, !workspaceGitUnsupported {
+            do {
+                try await Task.sleep(for: Self.workspaceGitInterval)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, scenePhase == .active, model.isConnected else { return }
+            await readWorkspaceGit(epoch: epoch)
+        }
+    }
+
+    /// One read, guarding the page and the connection it was asked for.
+    ///
+    /// A reply that arrives after the operator switched sessions, switched
+    /// computers or walked away is dropped rather than drawn: the capsule is
+    /// about one working tree, and the next page's figures have nothing to do
+    /// with this one's. A failed read keeps whatever is already on screen; only
+    /// an answer that says "no repository" takes the capsule away.
+    private func readWorkspaceGit(epoch: Int) async {
+        guard !Task.isCancelled, model.selectedSessionId == sessionId else { return }
+        let answer = await model.workspaceGit(for: sessionId)
+        guard !Task.isCancelled,
+              model.connectionGeneration == epoch,
+              model.selectedSessionId == sessionId,
+              workspaceGitTag == WorkspaceGitTag(sessionId: sessionId, epoch: epoch)
+        else { return }
+
+        switch answer {
+        case .unsupported:
+            // Older computer: stop asking for the rest of this connection.
+            // There is nothing to draw and no reason to spend a round trip on
+            // the same "no" every fifteen seconds.
+            workspaceGitUnsupported = true
+        case .failed:
+            break
+        case .status(let status):
+            if let status {
+                if workspaceGit == nil { gitAppearedAt = .now }
+                withMizarAnimation(.mizarSmooth) { workspaceGit = status }
+            } else {
+                gitAppearedAt = nil
+                withMizarAnimation(.mizarSmooth) { workspaceGit = nil }
+            }
+        }
+    }
+
     /// The dock, the way back to the newest message, and the composer.
     private func bottomStack(proxy: ScrollViewProxy) -> some View {
         GeometryReader { container in
@@ -1071,6 +1226,7 @@ struct SessionDetailView: View {
                             composerFocused: composerFocused,
                             onExpand: { composerFocused = false },
                             maxHeight: max(160, container.size.height * 0.34),
+                            onQuestionAnswered: { text in showAnswerReceipt(text) },
                         )
                     }
                     // The message waiting for the running turn, directly above
@@ -1090,15 +1246,19 @@ struct SessionDetailView: View {
                         .padding(.horizontal, 18)
                         .transition(.fromBelow)
                     }
-                    // The palette's door while typing. A lone `/` is not yet a
-                    // command, and the operator who typed it is asking for the
-                    // list rather than for a prompt that says slash. It sits
-                    // directly above the field, where the confirmation capsule
-                    // lands after an approval -- the same thumb, the same
-                    // height -- and it leaves the moment the token stops being
-                    // a lone slash.
-                    if !composerExpanded, slashTokenActive, !showingSkillPalette {
-                        CommandPaletteHint {
+                    // The small facts that belong to this session, on one line
+                    // directly above the field: the working tree's figures, the
+                    // palette's door while a lone `/` is typed, and the receipt
+                    // that follows an answered question. They share a row
+                    // because they are the same kind of thing -- true for a
+                    // moment, about this conversation -- and because a column of
+                    // three capsules would push the field down the screen.
+                    //
+                    // The row is gone while the field is expanded: the open
+                    // field is the whole height of the screen, and these are
+                    // facts about what was typed, not what is being typed.
+                    if !composerExpanded, !composerStatusItems.isEmpty {
+                        ComposerStatusRow(items: composerStatusItems) {
                             paletteReplacesSlash = true
                             showingSkillPalette = true
                         }
@@ -1135,7 +1295,16 @@ struct SessionDetailView: View {
                         onSlashTokenChanged: { active in
                             // Off while the palette is open: the hint under a
                             // modal is a control nothing can tap.
+                            let wasActive = slashTokenActive
                             slashTokenActive = active && !showingSkillPalette
+                            // A hint that comes back after the operator typed
+                            // on is a new appearance, so it joins the row on the
+                            // right like anything else. A hint hidden only
+                            // because the palette opened keeps its place: it is
+                            // the same door.
+                            if slashTokenActive, !wasActive {
+                                hintAppearedAt = .now
+                            }
                         },
                         onBrowseCommands: {
                             // Not a replacement for a `/`: the field was empty
@@ -1154,9 +1323,10 @@ struct SessionDetailView: View {
                 // stack, so the room it takes and the room handed back move with
                 // the same spring as the surface itself.
                 .animation(Motion.pick(.mizarSmooth), value: model.pendingPrompt(for: sessionId)?.id)
-                // The hint arrives and leaves through the field's top edge,
-                // like the held-prompt bar above it.
-                .animation(Motion.pick(.mizarSmooth), value: slashTokenActive)
+                // The row arrives and leaves through the field's top edge, like
+                // the held-prompt bar above it. Its own members are animated by
+                // `ComposerStatusRow`, which knows which of them changed.
+                .animation(Motion.pick(.mizarSmooth), value: composerStatusItems.isEmpty)
                 .overlayPreferenceValue(ComposerShellBoundsKey.self) { shellBounds in
                     GeometryReader { stack in
                         Color.clear
@@ -3153,6 +3323,26 @@ private struct NewestContent: Equatable {
 private struct PlacementKey: Equatable {
     var sessionId: String
     var round: Int
+}
+
+/// The facts a working-tree read depends on, as something `.task(id:)` watches.
+///
+/// A sleeping tick that wakes up against a page that has gone away, a socket
+/// that has dropped or a phone that has gone into the background is a request
+/// nobody asked for. Putting the facts in the key is what cancels it instead of
+/// letting it finish and be thrown away.
+private struct WorkspaceGitWatch: Equatable {
+    var sessionId: String
+    var epoch: Int
+    var active: Bool
+    var connected: Bool
+    var local: Bool
+}
+
+/// Which page, on which connection, a set of Git figures belongs to.
+private struct WorkspaceGitTag: Equatable {
+    var sessionId: String
+    var epoch: Int
 }
 
 /// Acceptance uses valid measured geometry, never an unmeasured default zero.

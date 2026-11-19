@@ -1099,7 +1099,7 @@ final class ComposerEditorView: UITextView {
     func reportSlashState() {
         guard !isRendering else { return }
         let caret = plainOffset(for: selectedRange.location, in: renderedText)
-        onSlashTokenChanged?(ComposerTokens.isLoneSlashToken(plainText, caret: caret))
+        onSlashTokenChanged?(selectedRange.length == 0 && ComposerTokens.isLoneSlashToken(plainText, caret: caret))
     }
 
     /// The attributes every ordinary character is drawn with.
@@ -1305,9 +1305,8 @@ final class ComposerTextInputCoordinator: NSObject, UITextViewDelegate {
 
     func textViewDidEndEditing(_ textView: UITextView) {
         setFocus(false)
-        // A hint that stayed up after the keyboard went away would be a control
-        // about typing with nothing to type into.
-        onSlashTokenChanged(false)
+        // The retained selection still identifies the slash while the dock is open.
+        editor?.reportSlashState()
     }
 
     // MARK: - The palette's pick

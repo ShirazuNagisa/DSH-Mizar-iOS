@@ -40,6 +40,13 @@ struct InteractionsDock: View {
     var onExpand: () -> Void = {}
     /// The tallest the dock may grow before its card scrolls.
     var maxHeight: CGFloat = 320
+    /// Called once a question batch has been sent, with the receipt to show.
+    ///
+    /// The receipt for a question now belongs to the composer's status row
+    /// rather than this dock: the question card is gone by then, and the row is
+    /// where the operator's attention already is. Approvals keep their receipt
+    /// here, because a rejected tool is a fact about the card that asked.
+    var onQuestionAnswered: (String) -> Void = { _ in }
 
     @Environment(AppModel.self) private var model
     /// Read in the body, so the tucked pill's pulse holds while a drawer
@@ -47,16 +54,10 @@ struct InteractionsDock: View {
     @Environment(\.drawersStill) private var drawersStill
     /// The card in front, by id.
     @State private var frontId: String?
-    /// Brief "done" notes, one per answered card.
-    @State private var confirmations: [Confirmation] = []
+    /// Brief "done" notes, one per answered approval card.
+    @State private var confirmations: [ComposerReceipt] = []
     /// How tall each card's content is, so the card can be exactly that tall.
     @State private var contentHeights: [String: CGFloat] = [:]
-
-    struct Confirmation: Identifiable, Equatable {
-        let id = UUID()
-        let text: String
-        let allowed: Bool
-    }
 
     /// One pending request, of either kind.
     enum Card: Identifiable, Equatable {
@@ -100,7 +101,7 @@ struct InteractionsDock: View {
         let all = cards
         VStack(spacing: 8) {
             ForEach(confirmations) { note in
-                ConfirmationCapsule(note: note)
+                ReceiptCapsule(receipt: note)
                     .transition(
                         AsymmetricTransition(
                             insertion: PopTransition(scale: 0.6),
@@ -203,7 +204,7 @@ struct InteractionsDock: View {
                         }
                     case .question(let question):
                         QuestionCard(question: question) {
-                            confirm(String(localized: "Answer sent"), allowed: true)
+                            onQuestionAnswered(String(localized: "Answer sent"))
                         }
                     }
                 }
@@ -281,32 +282,12 @@ struct InteractionsDock: View {
     }
 
     private func confirm(_ text: String, allowed: Bool) {
-        let note = Confirmation(text: text, allowed: allowed)
+        let note = ComposerReceipt(text: text, allowed: allowed)
         confirmations.append(note)
         Task {
             try? await Task.sleep(for: .milliseconds(1700))
             confirmations.removeAll { $0.id == note.id }
         }
-    }
-}
-
-/// "Allowed write_file", for a moment, where the card was.
-private struct ConfirmationCapsule: View {
-    let note: InteractionsDock.Confirmation
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: note.allowed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(note.allowed ? Theme.running : Theme.failed)
-                .symbolEffect(.bounce, value: note.id)
-            Text(note.text)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 38)
-        .liquidCapsule()
-        .mizarFeedback(note.allowed ? .success : .warning, trigger: note.id)
     }
 }
 
@@ -476,8 +457,9 @@ struct QuestionCard: View {
                 custom: typed.isEmpty ? nil : typed,
             )
         }
-        await model.answerQuestion(question, answers: answers)
+        let accepted = await model.answerQuestion(question, answers: answers)
         submitting = false
+        guard accepted else { return }
         onAnswered()
     }
 }

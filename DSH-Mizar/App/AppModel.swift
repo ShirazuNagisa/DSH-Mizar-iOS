@@ -101,6 +101,22 @@ final class AppModel {
         case localMode
     }
 
+    /// What one read of a session's working-tree figures said.
+    ///
+    /// Three answers, not an optional: "this directory is not a repository" is
+    /// an answer that should take the capsule away, while "the read failed" and
+    /// "this computer is older than the method" must not blank figures that are
+    /// already on screen. The first is a value, the other two are reasons to
+    /// keep drawing what the phone has.
+    enum WorkspaceGitRead: Sendable, Equatable {
+        /// The host answered. `nil` means the directory is not in a repository.
+        case status(WorkspaceGitStatus?)
+        /// An older computer answered `NOT_IMPLEMENTED`; stop asking.
+        case unsupported
+        /// No connection, a timeout, or a refused read. Try again later.
+        case failed
+    }
+
     /// The on-device agent, and the kernel behind it.
     ///
     /// Present from launch so the host list can ask it whether a model is
@@ -3359,13 +3375,14 @@ final class AppModel {
     /// - Parameters:
     ///   - question: the batch being answered.
     ///   - answers: one answer per question, in the batch's order.
-    func answerQuestion(_ question: PendingQuestion, answers: [QuestionAnswer]) async {
-        guard let connection else { return }
+    func answerQuestion(_ question: PendingQuestion, answers: [QuestionAnswer]) async -> Bool {
+        guard let connection, let tag = currentTag else { return false }
+        let selectedAtStart = selectedSessionId
         let payload = JSONValue.object(["callId": .string(question.callId)])
         let batch = QuestionAnswerBatch(answers: answers)
         guard let encoded = try? JSONEncoder().encode(batch),
               let value = try? JSONDecoder().decode(JSONValue.self, from: encoded)
-        else { return }
+        else { return false }
         var merged = payload
         if case .object(var fields) = merged, case .object(let batchFields) = value {
             for (key, fieldValue) in batchFields { fields[key] = fieldValue }
@@ -3377,6 +3394,7 @@ final class AppModel {
             on: connection,
             as: AcceptanceResult.self,
         ))?.accepted ?? false
+        guard tag == currentTag else { return false }
         // An answer that continues a turn is a prompt by another name. The
         // list is not re-read after this call, so the accepted answer is the
         // evidence the running poll starts from.
@@ -3384,6 +3402,8 @@ final class AppModel {
             notePromptAccepted(for: sessionId)
         }
         await refreshInteractions()
+        return accepted && tag == currentTag && selectedAtStart == selectedSessionId
+            && (question.sessionId == nil || question.sessionId == selectedSessionId)
     }
 
     /// Load the model and permission catalogs, once.
@@ -7509,6 +7529,32 @@ final class AppModel {
             if !message.isEmpty { lastError = message }
             statsError = message.isEmpty ? "The computer did not answer." : message
             return nil
+        }
+    }
+
+    /// Read one session's working-tree figures for the composer's Git capsule.
+    ///
+    /// Deliberately quieter than ``stats(for:)``: a Git read has no screen of
+    /// its own, and a machine with no repository, an older computer and a
+    /// dropped socket are all ordinary ways for it to answer nothing. None of
+    /// them belongs in `lastError` -- the conversation is still working, and the
+    /// capsule simply is not there.
+    ///
+    /// The on-device agent is not asked at all: its sessions are phone-local,
+    /// so there is no working tree on the computer to describe.
+    ///
+    /// - Parameter sessionId: the session whose directory to read.
+    /// - Returns: an answer, or why there is no answer.
+    func workspaceGit(for sessionId: String) async -> WorkspaceGitRead {
+        guard !isLocalAgentMode, let connection else { return .failed }
+        do {
+            let result = try await connection.sessionWorkspaceGit(sessionId: sessionId)
+            return .status(result.git)
+        } catch {
+            if let failure = error as? MizarError, failure.known == .notImplemented {
+                return .unsupported
+            }
+            return .failed
         }
     }
 

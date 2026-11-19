@@ -79,6 +79,8 @@ const DEVICE_ID = SECOND_IDENTITY
  * measuring a screenful of card. A test says which it wants.
  */
 let withPending = process.env['MIZAR_MOCK_PENDING'] !== '0'
+let questionOnly = false
+let questionAccepted = true
 
 /**
  * Whether the fixture's first turn declares a delivered file.
@@ -210,6 +212,18 @@ let pageLimit = Infinity
  * runtime is the only way to get there without waiting for an agent to stop.
  */
 let sessionRunning = true
+
+/**
+ * The working tree `session.workspaceGit` reports, or `null` for no repository.
+ *
+ * Off by default, like every other fixture a suite can opt into: the sessions
+ * every existing test measures are directories the mock cannot inspect, and an
+ * older host would not answer this method at all. `/workspaceGit?files=43&
+ * additions=4016&deletions=202` turns the capsule on with a real-looking
+ * summary; `/workspaceGit?repo=0` puts the no-repository answer back. `/reset`
+ * returns it to `null`.
+ */
+let workspaceGit = null
 
 /**
  * Whether this reset asks the mock to play a live state sequence.
@@ -1126,7 +1140,20 @@ function answer(frame) {
         v: 1,
         type: 'ok',
         id,
-        result: withPending ? { approvals: [APPROVAL], questions: [QUESTION] } : { approvals: [], questions: [] },
+        result: withPending ? { approvals: questionOnly ? [] : [APPROVAL], questions: [QUESTION] } : { approvals: [], questions: [] },
+      }
+    case 'session.workspaceGit':
+      // The optional read behind the composer's Git capsule. `git: null` is a
+      // real answer -- the session's directory is not in a repository -- and
+      // deliberately distinct from the error an older host answers with.
+      return {
+        v: 1,
+        type: 'ok',
+        id,
+        result: {
+          sessionId: frame.payload?.sessionId ?? SESSION.sessionId,
+          git: workspaceGit,
+        },
       }
     case 'session.stats':
       // A frame per session, because the app draws one session at a time out of
@@ -1976,8 +2003,9 @@ function answer(frame) {
       // What the real host answers: its own clock.
       return { v: 1, type: 'ok', id, result: { time: Date.now() } }
     case 'approval.answer':
-    case 'question.answer':
       return { v: 1, type: 'ok', id, result: { accepted: true } }
+    case 'question.answer':
+      return { v: 1, type: 'ok', id, result: { accepted: questionAccepted } }
     default:
       return { v: 1, type: 'ok', id, result: {} }
   }
@@ -2662,6 +2690,35 @@ const server = createServer((request, response) => {
     response.end(JSON.stringify({ ok: true, statsVariant }))
     return
   }
+  if (request.url?.startsWith('/workspaceGit')) {
+    // Turn the fixture's working-tree summary on, off, or to an exact set of
+    // figures. No `repo=0` and no numbers means the 43/4016/202 example the
+    // composer's design notes use, so the same state is one short curl away.
+    //
+    // `repo=0` is the no-repository answer, which is a successful read with
+    // `git: null` -- the phone must take its capsule away rather than keep the
+    // last one or report a failure.
+    const query = (request.url ?? '').split('?')[1] ?? ''
+    const params = new URLSearchParams(query)
+    if (params.get('repo') === '0') {
+      workspaceGit = null
+    } else {
+      const number = (name, fallback) => {
+        const raw = params.get(name)
+        if (raw === null || raw === '') return fallback
+        const value = Number(raw)
+        return Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback
+      }
+      workspaceGit = {
+        files: number('files', 43),
+        additions: number('additions', 4016),
+        deletions: number('deletions', 202),
+      }
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ ok: true, git: workspaceGit }))
+    return
+  }
   if (request.url?.startsWith('/images')) {
     // Put a picture in the fixture's answer, or take it out. Off is the default
     // so every suite that predates inline pictures keeps measuring the screen it
@@ -2778,9 +2835,15 @@ const server = createServer((request, response) => {
     // `/reset` restores the whole fixture, the delivered file included: a test
     // that leaves it on would put a card under every later test's answer.
     deliverablesPresent = false
+    // The working-tree summary is fixture state too. A test that turned the Git
+    // capsule on must not hand the next test a session with a repository.
+    workspaceGit = null
     // `?pending=0` takes the two interaction cards off the screen, for a test
     // that is about what is underneath them. The default is to offer them.
     withPending = !(request.url ?? '').includes('pending=0')
+    const resetParams = new URL(request.url, 'http://localhost').searchParams
+    questionOnly = resetParams.get('questionOnly') === '1'
+    questionAccepted = resetParams.get('questionAccepted') !== '0'
     const slow = /slow=(\d+)/.exec(request.url ?? '')
     answerDelayMs = slow === null ? 0 : Math.min(5000, Number(slow[1]))
     slowMethod = null

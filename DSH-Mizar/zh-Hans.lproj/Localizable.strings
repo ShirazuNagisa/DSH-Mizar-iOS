@@ -260,9 +260,11 @@
 "Jump to the latest message" = "跳到最新消息";
 "1 request waiting" = "1 个请求待处理";
 "%lld requests waiting" = "%lld 个请求待处理";
+"%lld files" = "%lld 个文件";
+"%lld files, %lld lines added, %lld lines deleted" = "%lld 个文件，新增 %lld 行，删除 %lld 行";
 "Allowed %@" = "已允许 %@";
 "Rejected %@" = "已拒绝 %@";
-"Answer sent" = "回答已发送";
+"Answer sent" = "已回复";
 "%lld of %lld" = "第 %1$lld 个，共 %2$lld 个";
 "Next" = "下一个";
 "What should the agent work on?" = "想让 Agent 做点什么？";
