@@ -63,7 +63,13 @@ jobs:
           set -euo pipefail
           # The simulator name differs between Xcode versions; pick the first
           # available iPhone and hand it to xcodebuild instead of hardcoding one.
-          sim="$(xcrun simctl list devices available | sed -nE 's/^\s+(iPhone[^(]*)\(([0-9A-F-]{36})\).*/\1/p' | head -1 | sed 's/ *$//')"
+          # awk, not sed: BSD sed on the runner has no \s and produced an empty name.
+          sim="$(xcrun simctl list devices available | awk -F '[()]' '/^[[:space:]]+iPhone/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1; exit}')"
+          if [ -z "$sim" ]; then
+            echo 'no available iPhone simulator on this runner' >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
           echo "simulator: $sim"
           xcrun simctl boot "$sim" 2>/dev/null || true
           xcrun simctl bootstatus "$sim" -b >/dev/null 2>&1 || true
