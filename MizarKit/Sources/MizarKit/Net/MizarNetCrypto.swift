@@ -32,17 +32,10 @@
 import CryptoKit
 import Foundation
 
-/// The AEAD, under whatever name this SDK gives it.
-///
-/// The 2026 SDKs (Xcode 27, Swift 6.4) renamed CryptoKit's
-/// `ChaCha20Poly1305` to `ChaChaPoly` — same algorithm, same wire format,
-/// new spelling. The shim keeps this file building on either generation;
-/// the algorithm is identical, so a session is interoperable across them.
-#if compiler(>=6.4)
+/// The AEAD. CryptoKit has always spelled it `ChaChaPoly`; there is no
+/// `ChaCha20Poly1305` type in any released SDK, so the package builds on the
+/// oldest supported toolchain and on Xcode 27 alike.
 typealias MizarNetAEAD = ChaChaPoly
-#else
-typealias MizarNetAEAD = ChaCha20Poly1305
-#endif
 
 enum MizarNetCrypto {
     /// The info string baked into every derived key. Part of the wire
