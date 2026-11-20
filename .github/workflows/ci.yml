@@ -1,0 +1,106 @@
+name: ci
+
+# Unit + snapshot suite on every pull request, plus main. The UI suite is not on
+# the default path: it takes 20+ minutes and needs a booted simulator, so it runs
+# only when a PR carries the `ui` label (or by manual dispatch).
+#
+# Local equivalent: scripts/pre-merge.sh (.github/workflows/ci.yml mirrors it).
+
+on:
+  pull_request:
+    paths:
+      - 'MizarKit/**'
+      - 'DSH-Mizar/**'
+      - 'DSH-MizarTests/**'
+      - 'DSH-MizarUITests/**'
+      - 'LocalKernel/**'
+      - 'protocol/**'
+      - 'scripts/**'
+      - 'test/**'
+      - '*.xcodeproj/**'
+      - '.github/**'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit + snapshots
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin the newest installed Xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+          xcrun simctl list devices available | grep -E '^\s+iPhone' | head -5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Kernel (TypeScript) verify
+        working-directory: LocalKernel/kernel
+        run: |
+          npm ci
+          npm run verify
+
+      - name: Unit suite (host, whole)
+        run: scripts/swift.sh test
+
+      - name: Snapshot suite
+        run: |
+          set -euo pipefail
+          # The simulator name differs between Xcode versions; pick the first
+          # available iPhone and hand it to xcodebuild instead of hardcoding one.
+          sim="$(xcrun simctl list devices available | sed -nE 's/^\s+(iPhone[^(]*)\(([0-9A-F-]{36})\).*/\1/p' | head -1 | sed 's/ *$//')"
+          echo "simulator: $sim"
+          xcrun simctl boot "$sim" 2>/dev/null || true
+          xcrun simctl bootstatus "$sim" -b >/dev/null 2>&1 || true
+          xcodebuild test \
+            -project DSH-Mizar.xcodeproj \
+            -scheme DSH-Mizar-Snapshots \
+            -destination "platform=iOS Simulator,name=$sim" \
+            -derivedDataPath .devcache/DerivedData-snap \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
+            -collect-test-diagnostics never
+
+      - name: Upload xcresult
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcresult
+          path: .devcache/**/*.xcresult
+          if-no-files-found: ignore
+
+  ui:
+    name: "UI suite (label: ui)"
+    if: contains(github.event.pull_request.labels.*.name, 'ui')
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin the newest installed Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)" && xcodebuild -version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Full UI suite
+        run: scripts/test-select.sh --full
+      - name: Upload xcresult
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-xcresult
+          path: .devcache/**/*.xcresult
+          if-no-files-found: ignore
