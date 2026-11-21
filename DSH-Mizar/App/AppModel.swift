@@ -2261,6 +2261,18 @@ final class AppModel {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
+        #if DEBUG
+        // A shared phone, or a reviewer account with a pairing left over from
+        // somebody else's account, cannot reach Settings to unpair: the shell
+        // stops on "cannot reach the computer". This launch flag is the only
+        // way back to the welcome screen without erasing the whole device.
+        if ProcessInfo.processInfo.arguments.contains("-mizarForgetPairings") {
+            try? await credentials.clear()
+            host = nil
+            hosts = []
+            phase = .unpaired
+        }
+        #endif
         // Launching is opening the app, so the Live Activity's flag starts set.
         // Only the flag: the session list has not been read yet, and "nothing is
         // running" must not be confused with "nothing is known".
