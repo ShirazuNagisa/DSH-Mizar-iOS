@@ -611,16 +611,38 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
     /// forever as somewhere to start new work.
     func testTheNewSessionPickerDoesNotOfferADeletedWorkspace() {
         let app = launch(session: nil)
+        openSidebar(app)
         expect(app.buttons["sessions.new"], "the new-session button is missing")
         app.buttons["sessions.new"].tap()
 
         expect(
-            app.staticTexts["/Users/you/projects/demo"],
+            app.buttons["workspace.choice./Users/you/projects/demo"],
             "the host's own workspace is not offered",
         )
         XCTAssertFalse(
             offersDirectory(app, "/Users/you/projects/deleted-workspace"),
             "a deleted workspace was offered as somewhere to start a session",
+        )
+
+        // The mock resets created sessions for each test, so this choice must
+        // create session-mock-created-1. Creating closes the sheet and selects
+        // the new conversation. SessionDetailView intentionally hides the
+        // title's child text from accessibility, so verify the titled row in
+        // the sidebar after confirming the conversation and reopening it.
+        app.buttons["workspace.choice./Users/you/projects/demo"].tap()
+        expect(app.textViews["composer.field"], "choosing the host workspace did not open a conversation")
+
+        // The sheet has closed; the created-session-only stats title proves its
+        // row was adopted. The new-session flow selects that row before closing
+        // the sheet, and the composer above confirms the conversation is open.
+        openSidebar(app)
+        expect(
+            app.staticTexts["Started from the phone"],
+            "the created session's titled row was not adopted into the sidebar",
+        )
+        expect(
+            app.buttons["workspace./Users/you/projects/fresh"],
+            "the other host workspace disappeared after creating a session",
         )
     }
 

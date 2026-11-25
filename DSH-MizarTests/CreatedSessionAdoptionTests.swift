@@ -38,14 +38,19 @@ struct CreatedSessionAdoptionTests {
             session("other-a", cwd: "/work/other", updatedAt: 2),
             session("other-b", cwd: "/work/other", updatedAt: 1),
         ]
-        let transient = [blank("new", cwd: "/work/chosen"), previous[0]]
-        let merged = AppModel.sessionsAfterCreate(
-            current: transient,
+        let hostNew = session("new", cwd: "/host/returned", updatedAt: 99)
+        let current = [previous[0], hostNew]
+        let merged = CreatedSessionAdoption.sessionsAfterCreate(
+            current: current,
             previous: previous,
             new: blank("new", cwd: "/work/chosen"),
         )
 
-        #expect(merged.map(\.sessionId) == ["new", "previous", "other-a", "other-b"])
+        #expect(merged.map(\.sessionId) == ["previous", "new", "other-a", "other-b"])
+        #expect(merged.first?.sessionId == "previous")
+        #expect(merged[1].cwd == "/host/returned")
+        #expect(merged[1].updatedAt == 99)
+        #expect(merged.filter { $0.sessionId == "new" }.count == 1)
     }
 
     @Test("a partial workspace answer keeps the other workspaces and files the new id")
@@ -62,7 +67,7 @@ struct CreatedSessionAdoptionTests {
             title: "Other",
             sessionIds: ["other-a", "other-b"],
         )
-        let merged = AppModel.workspacesAfterCreate(
+        let merged = CreatedSessionAdoption.workspacesAfterCreate(
             current: [chosen],
             previous: [chosen, other],
             cwd: "/work/chosen/",
@@ -72,6 +77,40 @@ struct CreatedSessionAdoptionTests {
         #expect(merged?.map(\.path) == ["/work/chosen", "/work/other"])
         #expect(merged?.first?.sessionIds == ["new", "previous"])
         #expect(merged?.last?.sessionIds == ["other-a", "other-b"])
+    }
+
+    @Test("a host returned workspace keeps its order and metadata without duplicating the new id")
+    func returnedWorkspaceKeepsIdentityAndMembership() {
+        let first = WorkspaceRow(
+            workspaceId: "dsh:first",
+            path: "/work/first",
+            title: "First from host",
+            sessionIds: ["first-session"],
+        )
+        let chosen = WorkspaceRow(
+            workspaceId: "dsh:chosen",
+            path: "/work/chosen",
+            title: "Chosen from host",
+            sessionIds: ["new", "previous"],
+        )
+        let other = WorkspaceRow(
+            workspaceId: "dsh:other",
+            path: "/work/other",
+            title: "Other",
+            sessionIds: ["other-a"],
+        )
+
+        let merged = CreatedSessionAdoption.workspacesAfterCreate(
+            current: [first, chosen],
+            previous: [chosen, other],
+            cwd: "/work/chosen/",
+            sessionId: "new",
+        )
+
+        #expect(merged?.map(\.workspaceId) == ["dsh:first", "dsh:chosen", "dsh:other"])
+        #expect(merged?[1].title == "Chosen from host")
+        #expect(merged?[1].sessionIds == ["new", "previous"])
+        #expect(merged?[2].sessionIds == ["other-a"])
     }
 
     @Test("the sidebar keeps every session under a workspace after a create")
@@ -94,12 +133,12 @@ struct CreatedSessionAdoptionTests {
             session("other-b", cwd: "/work/other"),
         ]
         let new = blank("new", cwd: "/work/chosen")
-        let sessions = AppModel.sessionsAfterCreate(
+        let sessions = CreatedSessionAdoption.sessionsAfterCreate(
             current: [new, previous[0]],
             previous: previous,
             new: new,
         )
-        let workspaces = AppModel.workspacesAfterCreate(
+        let workspaces = CreatedSessionAdoption.workspacesAfterCreate(
             current: [chosen],
             previous: [chosen, other],
             cwd: "/work/chosen",
