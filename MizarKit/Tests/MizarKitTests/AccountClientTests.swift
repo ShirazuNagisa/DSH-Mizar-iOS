@@ -246,6 +246,43 @@ struct AccountClientTests {
         #expect(try jsonBody(of: requests[1])["confirmation"] as? String == "DELETE")
     }
 
+    @Test("removes a device with DELETE on its own path")
+    func removeDeviceRequest() async throws {
+        let transport = ScriptedHTTPTransport()
+        await transport.on(
+            "devices/install-2",
+            body: #"{"ok":true,"deviceId":"install-2"}"#,
+        )
+        let client = AccountClient(baseURL: baseURL, transport: transport, clientId: "install-1")
+
+        try await client.removeDevice(token: "mza_token", deviceId: "install-2")
+
+        let request = try #require(await transport.recorded().first)
+        #expect(request.httpMethod == "DELETE")
+        #expect(request.url?.path == "/account/v1/devices/install-2")
+        #expect(request.value(forHTTPHeaderField: "authorization") == "Bearer mza_token")
+        #expect(request.value(forHTTPHeaderField: "x-mizar-client-id") == "install-1")
+        // The route documents no body; a DELETE with a JSON body is a different
+        // request than the one the relay validates.
+        #expect(request.httpBody == nil)
+        #expect(request.value(forHTTPHeaderField: "accept") == "application/json")
+    }
+
+    @Test("refuses an unconfirmed removal instead of reporting a deletion")
+    func removeDeviceUnconfirmed() async throws {
+        let transport = ScriptedHTTPTransport()
+        await transport.on("devices/install-2", body: #"{"ok":false}"#)
+        let client = makeClient(transport)
+
+        do {
+            try await client.removeDevice(token: "t", deviceId: "install-2")
+            Issue.record("expected a failure")
+        } catch let error as AccountError {
+            #expect(error.code == AccountErrorCode.malformedResponse)
+            #expect(!error.retryable)
+        }
+    }
+
     // MARK: - Failures
 
     @Test("turns a 401 into a re-authentication signal with the server's code")
@@ -284,6 +321,45 @@ struct AccountClientTests {
             Issue.record("expected a failure")
         } catch let error as AccountError {
             #expect(error.code == AccountErrorCode.inviteExpired)
+            #expect(!error.retryable)
+        }
+    }
+
+    @Test("keeps SELF_DEVICE when this phone is the device being removed")
+    func removeDeviceSelfRefused() async throws {
+        let transport = ScriptedHTTPTransport()
+        await transport.on(
+            "devices/install-1",
+            status: 403,
+            body: #"{"error":"SELF_DEVICE","message":"You cannot remove this device."}"#,
+        )
+        let client = makeClient(transport)
+        do {
+            try await client.removeDevice(token: "t", deviceId: "install-1")
+            Issue.record("expected a failure")
+        } catch let error as AccountError {
+            #expect(error.code == AccountErrorCode.selfDevice)
+            #expect(error.status == 403)
+            #expect(error.message == "You cannot remove this device.")
+            #expect(!error.requiresReauthentication)
+        }
+    }
+
+    @Test("keeps NO_SUCH_DEVICE for a device that is not on the account")
+    func removeDeviceNotFound() async throws {
+        let transport = ScriptedHTTPTransport()
+        await transport.on(
+            "devices/gone",
+            status: 404,
+            body: #"{"error":"NO_SUCH_DEVICE","message":"That device is not on this account."}"#,
+        )
+        let client = makeClient(transport)
+        do {
+            try await client.removeDevice(token: "t", deviceId: "gone")
+            Issue.record("expected a failure")
+        } catch let error as AccountError {
+            #expect(error.code == AccountErrorCode.noSuchDevice)
+            #expect(error.status == 404)
             #expect(!error.retryable)
         }
     }

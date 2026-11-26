@@ -545,6 +545,65 @@ final class AccountController {
         }
     }
 
+    // MARK: - Devices
+
+    /// Remove one device from the account.
+    ///
+    /// A removal ends the session on that device, so this phone's copy of the
+    /// roster is stale the moment the server agrees: `/me` is read again and the
+    /// computers are listed again rather than deleting the row locally and
+    /// hoping the server did the same thing.
+    ///
+    /// The connection to a removed computer is not dropped here. The account
+    /// owns no socket — see the contract note at the top of `AppModel` — so a
+    /// caller that holds the app model asks it to forget the machine after a
+    /// `true`; this type only knows the roster.
+    ///
+    /// - Parameter device: the device, from ``user``.
+    /// - Returns: whether the server removed it; ``lastError`` says why not.
+    @discardableResult
+    func removeDevice(_ device: AccountDevice) async -> Bool {
+        await removeDevice(deviceID: device.id)
+    }
+
+    /// Remove one of the account's computers.
+    ///
+    /// - Parameter desktop: the computer, from ``desktops``.
+    /// - Returns: whether the server removed it; ``lastError`` says why not.
+    @discardableResult
+    func removeDevice(_ desktop: AccountDesktop) async -> Bool {
+        await removeDevice(deviceID: desktop.deviceId)
+    }
+
+    /// The shared body of the two removals: the roster keys both by install id.
+    ///
+    /// - Parameter deviceID: the install id to delete.
+    /// - Returns: whether the server removed it.
+    @discardableResult
+    private func removeDevice(deviceID: String) async -> Bool {
+        guard let token = session?.token, !token.isEmpty else {
+            lastError = String(localized: "Sign in first to manage devices.")
+            return false
+        }
+        working = true
+        lastError = nil
+        defer { working = false }
+        do {
+            try await client.removeDevice(token: token, deviceId: deviceID)
+        } catch {
+            let accountError = AccountError.transport(error)
+            noteBan(accountError)
+            lastError = message(for: accountError)
+            return false
+        }
+        await refresh()
+        // `refresh` lists the computers after a successful `/me`, but a profile
+        // read that failed must not leave a deleted computer on screen: the
+        // list is cheap and it is the answer to what the deletion changed.
+        await loadDesktops()
+        return true
+    }
+
     // MARK: - Questionnaires
 
     /// Read the questionnaires this account may fill in.
@@ -872,6 +931,10 @@ final class AccountController {
             String(localized: "That invite code has been used up.")
         case AccountErrorCode.inviteAlreadyUsed:
             String(localized: "This account has already used that invite code.")
+        case AccountErrorCode.selfDevice:
+            String(localized: "This device cannot be removed.")
+        case AccountErrorCode.noSuchDevice:
+            String(localized: "That device is no longer on the account.")
         case AccountErrorCode.surveyUnavailable:
             String(localized: "Questionnaires are unavailable right now. Try again later.")
         case AccountErrorCode.surveyNotFound:

@@ -361,6 +361,8 @@
 "Create account" = "Create account";
 "Current" = "Current";
 "Delete account" = "Delete account";
+"Delete Device…" = "Delete Device…";
+"Delete Device?" = "Delete Device?";
 "Delete this account?" = "Delete this account?";
 "Devices" = "Devices";
 "Email" = "Email";
@@ -394,6 +396,7 @@
 "Restore purchases" = "Restore purchases";
 "Sign in" = "Sign in";
 "Sign in first" = "Sign in first";
+"Sign in first to manage devices." = "Sign in first to manage devices.";
 "Sign in first to redeem an invite code." = "Sign in first to redeem an invite code.";
 "Sign in first to restore purchases." = "Sign in first to restore purchases.";
 "Sign in first: the subscription is bound to your account." = "Sign in first: the subscription is bound to your account.";
@@ -409,6 +412,8 @@
 "Subscription" = "Subscription";
 "Terms of use" = "Terms of use";
 "That App Store transaction was revoked or refunded." = "That App Store transaction was revoked or refunded.";
+"That device is no longer on the account." = "That device is no longer on the account.";
+"That device will be signed out immediately and will need to sign in again." = "That device will be signed out immediately and will need to sign in again.";
 "That email already has an account." = "That email already has an account.";
 "That file could not be read." = "That file could not be read.";
 "That file is too large. The limit is %@ per file." = "That file is too large. The limit is %@ per file.";
@@ -435,6 +440,7 @@
 "This account's id could not be read, so the purchase cannot be linked to it." = "This account's id could not be read, so the purchase cannot be linked to it.";
 "This cannot be undone. The account, its devices and its invite records are removed on the server. An App Store subscription is not cancelled by deleting the account; cancel it in your Apple ID subscription settings." = "This cannot be undone. The account, its devices and its invite records are removed on the server. An App Store subscription is not cancelled by deleting the account; cancel it in your Apple ID subscription settings.";
 "This computer's DSH plugin is too old to receive attachments. Update DSH on the computer, then try again." = "This computer's DSH plugin is too old to receive attachments. Update DSH on the computer, then try again.";
+"This device cannot be removed." = "This device cannot be removed.";
 "This device was signed out. Sign in again." = "This device was signed out. Sign in again.";
 "This subscription is linked to another account." = "This subscription is linked to another account.";
 "This subscription is not available from the App Store right now." = "This subscription is not available from the App Store right now.";

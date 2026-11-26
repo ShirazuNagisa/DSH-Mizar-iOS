@@ -183,6 +183,12 @@ struct AccountScreen: View {
     @State private var connectingDesktop: String?
     /// Why the last connect attempt failed, for the section's footer.
     @State private var desktopFailure: String?
+    /// The device row whose removal is waiting for confirmation.
+    @State private var pendingRemoval: RemovalTarget?
+    /// The id of the row whose removal is in flight, so it can show busy.
+    @State private var removingDeviceId: String?
+    /// Why the last removal failed, and which section it belongs under.
+    @State private var removalFailure: RemovalFailure?
     @State private var verification: VerificationChallenge?
     @State private var resetChallenge: VerificationChallenge?
     @State private var showingResetForm = false
@@ -194,6 +200,35 @@ struct AccountScreen: View {
         let id = UUID()
         let email: String
         let resendAfter: Int
+    }
+
+    /// A row on this screen that can be removed, with the id the roster uses.
+    ///
+    /// The account keys both ledgers by install id, and both are deleted
+    /// through the same route, so one confirmation and one busy state serve
+    /// both sections.
+    private enum RemovalTarget {
+        case phone(AccountDevice)
+        case computer(AccountDesktop)
+
+        var id: String {
+            switch self {
+            case .phone(let device): device.id
+            case .computer(let desktop): desktop.deviceId
+            }
+        }
+
+        /// Whether the row lives under "Computers", for the failure footer.
+        var isComputer: Bool {
+            if case .computer = self { return true }
+            return false
+        }
+    }
+
+    /// A failed removal, and the section whose footer should carry it.
+    private struct RemovalFailure {
+        let message: String
+        let isComputer: Bool
     }
 
     /// - Parameters:
@@ -271,6 +306,21 @@ struct AccountScreen: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This cannot be undone. The account, its devices and its invite records are removed on the server. An App Store subscription is not cancelled by deleting the account; cancel it in your Apple ID subscription settings.")
+        }
+        .alert(
+            "Delete Device?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } },
+            ),
+            presenting: pendingRemoval,
+        ) { target in
+            Button("Delete", role: .destructive) {
+                remove(target)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("That device will be signed out immediately and will need to sign in again.")
         }
         .sheet(item: $verification) { challenge in
             VerificationCodeSheet(
@@ -720,24 +770,30 @@ struct AccountScreen: View {
         return Section {
             if !devices.isEmpty {
                 ForEach(devices) { device in
-                    HStack(spacing: 12) {
-                        Image(systemName: device.platform == "ios" ? "iphone" : "desktopcomputer")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 22)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(device.name.isEmpty ? String(localized: "This device") : device.name)
-                            Text(deviceDetail(device))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 8)
-                        if device.current {
-                            Text("Current")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(Theme.accentText)
-                        }
+                    if device.current {
+                        // This phone's own row has nothing to confirm: the server
+                        // refuses it with `SELF_DEVICE`, and offering the action
+                        // would only produce an error after the operator confirms.
+                        deviceRow(device)
+                    } else {
+                        deviceRow(device)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    pendingRemoval = .phone(device)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                .disabled(removingDeviceId != nil)
+                            }
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    pendingRemoval = .phone(device)
+                                } label: {
+                                    Label("Delete Device…", systemImage: "trash")
+                                }
+                                .disabled(removingDeviceId != nil)
+                            }
                     }
-                    .accessibilityIdentifier("account.device.\(device.id)")
                 }
             } else {
                 Text("No phones or iPads are signed in.")
@@ -747,8 +803,39 @@ struct AccountScreen: View {
         } header: {
             Text("Devices")
         } footer: {
-            Text("Email accounts can be signed in on two devices at a time; the oldest is signed out when a third signs in. Sign in with Apple has no limit.")
+            if let removalFailure, !removalFailure.isComputer {
+                Text(removalFailure.message)
+                    .foregroundStyle(Theme.failed)
+                    .accessibilityIdentifier("account.device.deleteError")
+            } else {
+                Text("Email accounts can be signed in on two devices at a time; the oldest is signed out when a third signs in. Sign in with Apple has no limit.")
+            }
         }
+    }
+
+    /// One device row, without the removal actions its caller attaches.
+    private func deviceRow(_ device: AccountDevice) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: device.platform == "ios" ? "iphone" : "desktopcomputer")
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.name.isEmpty ? String(localized: "This device") : device.name)
+                Text(deviceDetail(device))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if removingDeviceId == device.id {
+                ProgressView()
+                    .controlSize(.small)
+            } else if device.current {
+                Text("Current")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.accentText)
+            }
+        }
+        .accessibilityIdentifier("account.device.\(device.id)")
     }
 
     /// One device's line: platform, model, and when it last signed in.
@@ -782,7 +869,10 @@ struct AccountScreen: View {
                             .foregroundStyle(desktop.online ? Theme.accentText : .secondary)
                     }
                     Spacer(minLength: 8)
-                    if desktop.online {
+                    if removingDeviceId == desktop.deviceId {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else if desktop.online {
                         if connectingDesktop == desktop.deviceId {
                             ProgressView()
                         } else {
@@ -796,6 +886,22 @@ struct AccountScreen: View {
                     }
                 }
                 .accessibilityIdentifier("account.computer.\(desktop.deviceId)")
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        pendingRemoval = .computer(desktop)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(removingDeviceId != nil)
+                }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        pendingRemoval = .computer(desktop)
+                    } label: {
+                        Label("Delete Device…", systemImage: "trash")
+                    }
+                    .disabled(removingDeviceId != nil)
+                }
             }
             if model.account.desktops.isEmpty {
                 Text("No computers are signed in to this account.")
@@ -805,7 +911,11 @@ struct AccountScreen: View {
         } header: {
             Text("Computers")
         } footer: {
-            if let desktopFailure {
+            if let removalFailure, removalFailure.isComputer {
+                Text(removalFailure.message)
+                    .foregroundStyle(Theme.failed)
+                    .accessibilityIdentifier("account.computer.deleteError")
+            } else if let desktopFailure {
                 Text(desktopFailure)
                     .foregroundStyle(.red)
             } else if let error = model.account.desktopsError {
@@ -835,6 +945,37 @@ struct AccountScreen: View {
             } catch {
                 desktopFailure = error.localizedDescription
             }
+        }
+    }
+
+    /// Remove one row once the operator has confirmed it.
+    ///
+    /// The account is left to delete and re-read the roster; the socket is this
+    /// screen's to close, because ``AppModel`` owns it and the account
+    /// deliberately does not. A removed computer takes the same teardown as a
+    /// forgotten pairing, which is what moves the selection off it.
+    private func remove(_ target: RemovalTarget) {
+        removingDeviceId = target.id
+        removalFailure = nil
+        Task {
+            let removed: Bool
+            switch target {
+            case .phone(let device):
+                removed = await model.account.removeDevice(device)
+            case .computer(let desktop):
+                removed = await model.account.removeDevice(desktop)
+            }
+            if removed {
+                if model.host?.hostId == target.id {
+                    await model.forget(hostId: target.id)
+                }
+            } else {
+                removalFailure = RemovalFailure(
+                    message: model.account.lastError ?? String(localized: "Something went wrong. Try again."),
+                    isComputer: target.isComputer,
+                )
+            }
+            removingDeviceId = nil
         }
     }
 

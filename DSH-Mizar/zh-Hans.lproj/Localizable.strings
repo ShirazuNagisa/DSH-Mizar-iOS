@@ -361,6 +361,8 @@
 "Create account" = "创建账户";
 "Current" = "当前设备";
 "Delete account" = "删除账户";
+"Delete Device…" = "删除设备…";
+"Delete Device?" = "删除设备？";
 "Delete this account?" = "删除此账户？";
 "Devices" = "设备";
 "Email" = "邮箱";
@@ -394,6 +396,7 @@
 "Restore purchases" = "恢复购买";
 "Sign in" = "登录";
 "Sign in first" = "请先登录";
+"Sign in first to manage devices." = "请先登录后再管理设备。";
 "Sign in first to redeem an invite code." = "请先登录再兑换邀请码。";
 "Sign in first to restore purchases." = "请先登录再恢复购买。";
 "Sign in first: the subscription is bound to your account." = "请先登录：订阅会绑定到你的账户。";
@@ -409,6 +412,8 @@
 "Subscription" = "订阅";
 "Terms of use" = "使用条款";
 "That App Store transaction was revoked or refunded." = "该 App Store 交易已被撤销或退款。";
+"That device is no longer on the account." = "这台设备已不在账户中。";
+"That device will be signed out immediately and will need to sign in again." = "删除后该设备会立即退出登录，需要重新登录。";
 "That email already has an account." = "该邮箱已注册账户。";
 "That file could not be read." = "无法读取该文件。";
 "That file is too large. The limit is %@ per file." = "该文件太大。单个文件上限为 %@。";
@@ -435,6 +440,7 @@
 "This account's id could not be read, so the purchase cannot be linked to it." = "无法读取该账户的 ID，因此购买无法关联到账户。";
 "This cannot be undone. The account, its devices and its invite records are removed on the server. An App Store subscription is not cancelled by deleting the account; cancel it in your Apple ID subscription settings." = "此操作无法撤销。账户、设备和邀请记录都会从服务器移除。删除账户不会取消 App Store 订阅，请在 Apple ID 的订阅设置中取消。";
 "This computer's DSH plugin is too old to receive attachments. Update DSH on the computer, then try again." = "这台电脑上的 DSH 插件版本过旧，无法接收附件。请先在电脑上更新 DSH，然后重试。";
+"This device cannot be removed." = "无法删除本机设备。";
 "This device was signed out. Sign in again." = "此设备已退出登录。请重新登录。";
 "This subscription is linked to another account." = "该订阅已关联到其他账户。";
 "This subscription is not available from the App Store right now." = "该订阅目前无法从 App Store 获取。";

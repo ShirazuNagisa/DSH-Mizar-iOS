@@ -265,6 +265,34 @@ public struct AccountClient: Sendable {
         return nil
     }
 
+    /// Remove one device from the account.
+    ///
+    /// The server ends the session that device holds, so it is signed out the
+    /// next time it is asked to prove itself. The device presenting this token
+    /// is refused with `SELF_DEVICE`: "delete this phone remotely" is what the
+    /// account deletion route is for, and a phone that removes its own row would
+    /// leave itself holding a token the roster no longer knows.
+    ///
+    /// - Parameters:
+    ///   - token: the bearer token.
+    ///   - deviceId: the install id of the device to remove, from
+    ///     ``AccountUser/devices`` or ``desktops(token:)``.
+    /// - Throws: ``AccountError`` with `SELF_DEVICE` (403) or
+    ///   `NO_SUCH_DEVICE` (404).
+    public func removeDevice(token: String, deviceId: String) async throws {
+        let request = try makeRequest(path: "devices/\(deviceId)", method: "DELETE", token: token)
+        // Decode the documented `{ok:true}` instead of trusting the status: a
+        // 200 from some other route must not read as a deletion.
+        let answer = try decode(try await send(request), as: DeviceRemovalEnvelope.self)
+        guard answer.ok else {
+            throw AccountError(
+                code: AccountErrorCode.malformedResponse,
+                status: 200,
+                message: "The account server did not confirm the device removal.",
+            )
+        }
+    }
+
     /// Redeem an invite code.
     ///
     /// - Parameters:
@@ -424,6 +452,13 @@ public struct AccountClient: Sendable {
 
     struct AppStoreSyncBody: Codable, Sendable {
         let signedTransactions: [String]
+    }
+
+    /// The `{ok}` envelope the deletion routes answer with.
+    struct DeviceRemovalEnvelope: Codable, Sendable {
+        let ok: Bool
+        /// The device the server removed, when it names one.
+        let deviceId: String?
     }
 
     /// The `{user}` envelope.
@@ -615,6 +650,8 @@ public struct AccountClient: Sendable {
         case AccountErrorCode.inviteInvalid: "That invite code is not valid."
         case AccountErrorCode.inviteExpired: "That invite code has expired."
         case AccountErrorCode.inviteUsedUp: "That invite code has been used up."
+        case AccountErrorCode.selfDevice: "This device cannot be removed."
+        case AccountErrorCode.noSuchDevice: "That device is no longer on the account."
         case AccountErrorCode.appStoreTokenInvalid: "The App Store receipt could not be verified."
         case AccountErrorCode.appStoreProductMismatch: "That subscription is not the one this app offers."
         case AccountErrorCode.appStoreAccountMismatch: "This subscription is linked to another account."

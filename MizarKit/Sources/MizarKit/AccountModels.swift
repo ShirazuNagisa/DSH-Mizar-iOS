@@ -537,6 +537,10 @@ public enum AccountErrorCode {
     public static let inviteUsedUp = "INVITE_USED_UP"
     /// This account already collected what that code gives.
     public static let inviteAlreadyUsed = "INVITE_ALREADY_USED"
+    /// The device being removed is the one presenting the token.
+    public static let selfDevice = "SELF_DEVICE"
+    /// The account has no device with that id, or it was already removed.
+    public static let noSuchDevice = "NO_SUCH_DEVICE"
     /// Surveys are not configured on the relay, or it could not reach the store.
     public static let surveyUnavailable = "SURVEY_UNAVAILABLE"
     public static let surveyNotFound = "SURVEY_NOT_FOUND"

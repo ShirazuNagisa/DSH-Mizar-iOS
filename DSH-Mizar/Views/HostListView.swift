@@ -29,6 +29,8 @@ struct HostListView: View {
     @State private var path: [HostRoute] = []
     /// The account computer whose local name is being edited.
     @State private var renamingAccount: AccountDesktop?
+    /// The account computer whose removal is waiting for confirmation.
+    @State private var pendingRemoval: AccountDesktop?
     /// Whether the computer list is being read again.
     @State private var refreshing = false
 
@@ -62,9 +64,17 @@ struct HostListView: View {
             } label: {
                 Label("Rename…", systemImage: "pencil")
             }
+            Button(role: .destructive) {
+                pendingRemoval = desktop
+            } label: {
+                Label("Delete Device…", systemImage: "trash")
+            }
         }
         .accessibilityAction(named: Text("Rename…")) {
             renamingAccount = desktop
+        }
+        .accessibilityAction(named: Text("Delete Device…")) {
+            pendingRemoval = desktop
         }
     }
 
@@ -99,6 +109,24 @@ struct HostListView: View {
             await model.chooseAgent(target, for: desktop.deviceId)
         } catch {
             model.reportAccountFailure(error)
+        }
+    }
+
+    /// Remove one of the account's computers, and drop this phone's socket to it.
+    ///
+    /// The account owns no connection; ``AppModel`` owns it, so the teardown
+    /// runs here, where both are in scope. `forget` is the app's existing rule
+    /// for a computer that is gone: it closes the socket, discards the stored
+    /// credential and moves the selection by the same rule as unpairing.
+    private func remove(_ desktop: AccountDesktop) async {
+        if await model.account.removeDevice(desktop) {
+            if model.host?.hostId == desktop.deviceId {
+                await model.forget(hostId: desktop.deviceId)
+            }
+        } else if let message = model.account.lastError {
+            // This screen has no account footer; a failed removal belongs on the
+            // app's one banner, next to a failed connect.
+            model.reportAccountFailure(AccountError(code: "DEVICE_REMOVAL", message: message))
         }
     }
 
@@ -231,6 +259,21 @@ struct HostListView: View {
                 AccountRenameForm(desktop: desktop, current: model.accountLabel(for: desktop.deviceId)) { name in
                     Task { await model.renameAccountComputer(deviceId: desktop.deviceId, to: name) }
                 }
+            }
+            .alert(
+                "Delete Device?",
+                isPresented: Binding(
+                    get: { pendingRemoval != nil },
+                    set: { if !$0 { pendingRemoval = nil } },
+                ),
+                presenting: pendingRemoval,
+            ) { desktop in
+                Button("Delete", role: .destructive) {
+                    Task { await remove(desktop) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("That device will be signed out immediately and will need to sign in again.")
             }
         }
     }
