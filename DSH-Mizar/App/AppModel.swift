@@ -1436,44 +1436,47 @@ final class AppModel {
     /// A screen that kept a live stream across a reconnect must know that the
     /// frames it is about to read belong to a new socket; the journal replay is
     /// keyed on this.
-    var connectionGeneration: Int { connectionEpoch }
+    var connectionGeneration: Int { connectionCoordinator.generation }
 
+    @ObservationIgnored private let connectionCoordinator = ConnectionCoordinator()
 
-    private var connection: MizarConnection? {
-        didSet {
-            if connection !== oldValue { deepSeekBalance.configure(tag: nil) }
-            // Stamped here, the one place every socket passes through, so "how
-            // long has this been up" cannot disagree with the socket in use.
-            if connection == nil {
-                connectedSince = nil
-                // The capability was a fact about this socket's host.info
-                // answer. What is on screen stays -- a cache read is still the
-                // last thing the computer said -- but the socket-scoped half of
-                // the skill state does not survive it.
-                forgetAgentSkillConnection()
-            } else if connection !== oldValue {
-                connectedSince = Date()
-                latencySamples = []
-                forgetAgentSkillConnection()
-            }
-        }
+    private var connection: MizarConnection? { connectionCoordinator.activeConnection }
+
+    private func installConnection(_ next: MizarConnection) {
+        let old = connection
+        connectionCoordinator.install(next)
+        guard old !== next else { return }
+        deepSeekBalance.configure(tag: nil)
+        connectedSince = Date()
+        latencySamples = []
+        forgetAgentSkillConnection()
     }
 
-    /// How many sockets this run has opened.
-    ///
-    /// Half of ``HostTag``. The host id says *which computer* a value is about; this
-    /// says *which conversation with it*. Both halves matter: a read started over
-    /// a socket that has since been replaced was answered by a host the app is no
-    /// longer talking to, and a host id alone cannot tell that from the same
-    /// machine still answering.
-    private var nextConnectionEpoch = 0
+    private func clearConnection() {
+        let old = connection
+        connectionCoordinator.clear()
+        if old != nil { deepSeekBalance.configure(tag: nil) }
+        resetConnectionScopedState()
+    }
 
-    /// Which socket is open now, as an epoch, or `0` when none is.
+    @discardableResult
+    private func clearConnection(ifMatching closed: MizarConnection) -> Bool {
+        guard connectionCoordinator.clear(ifMatching: closed) else { return false }
+        deepSeekBalance.configure(tag: nil)
+        resetConnectionScopedState()
+        return true
+    }
+
+    private func resetConnectionScopedState() {
+        connectedSince = nil
+        forgetAgentSkillConnection()
+    }
+
+    /// 0 until the first install; the latest value is retained while detached.
     ///
-    /// Kept here rather than derived from the connection object: a tag is
-    /// compared and never dereferenced, so nothing may depend on the socket
-    /// still being alive to answer a question about itself.
-    private var connectionEpoch = 0
+    /// Detaching keeps the last generation so views can distinguish a reconnect
+    /// from the still-open socket that preceded it.
+    private var connectionEpoch: Int { connectionCoordinator.generation }
 
     /// Explicit selection changes expire history work even if the operator
     /// later returns to the same host id during that pass.
@@ -2698,7 +2701,7 @@ final class AppModel {
         // connection instead of the old one, and a second pairing failed to
         // connect with "Socket is not connected" before it had said hello.
         let closing = connection
-        connection = nil
+        clearConnection()
         engineScope = nil
         if let closing { Task { await closing.disconnect() } }
         welcome = nil
@@ -3165,8 +3168,7 @@ final class AppModel {
     private func noteSocketClosed(_ closed: MizarConnection) async {
         // A reconnect may already have replaced it; only the socket that is
         // still the model's is this method's to forget.
-        guard connection === closed else { return }
-        connection = nil
+        guard clearConnection(ifMatching: closed) else { return }
         scheduleLiveActivityDisconnectSweep()
         log.add(.connection, "the socket closed; the next read reconnects")
 
@@ -5131,7 +5133,7 @@ final class AppModel {
         interactionPoll?.cancel()
         eventListener?.cancel()
         await connection?.disconnect()
-        connection = nil
+        clearConnection()
         welcome = nil
         sessions = []
         selectedSessionId = nil
@@ -5466,7 +5468,7 @@ final class AppModel {
                 eventListener?.cancel()
                 interactionPoll?.cancel()
                 await connection?.disconnect()
-                connection = nil
+                clearConnection()
                 let message = String(
                     localized: "No route is allowed: the local network and the direct connection are both off, and this pairing has no relay address. Turn one back on to reconnect.",
                 )
@@ -5728,9 +5730,7 @@ final class AppModel {
         // It answered. Adopt it before closing the relay, so there is no
         // instant with neither socket: the same order every reconnect uses,
         // only without the teardown in front.
-        nextConnectionEpoch += 1
-        connectionEpoch = nextConnectionEpoch
-        connection = candidate
+        installConnection(candidate)
         welcome = candidateWelcome
         activeEndpoint = .direct(authority: authority)
         self.host = moved
@@ -6199,7 +6199,7 @@ final class AppModel {
         eventListener?.cancel()
         interactionPoll?.cancel()
         let closing = connection
-        connection = nil
+        clearConnection()
         await closing?.disconnect()
         guard historyValidity?() ?? true else { return false }
 
@@ -6266,7 +6266,7 @@ final class AppModel {
                     await next.disconnect()
                     return false
                 }
-                connection = next
+                installConnection(next)
                 // The route that actually answered is the route the app is on:
                 // a scan or a foreground return may have chosen a different one
                 // from the last, and the footer, the entitlement and the next
@@ -6280,8 +6280,6 @@ final class AppModel {
                 // still answering. Without this, a read started before the drop
                 // and delivered after the new socket opened passed every tag
                 // check and was published as current.
-                nextConnectionEpoch += 1
-                connectionEpoch = nextConnectionEpoch
                 lastError = nil
                 connectionError = nil
                 linkFailure = nil
@@ -7930,28 +7928,8 @@ final class AppModel {
     /// the operator is waiting for.
     private static let launchDirectHeadStart: Duration = .milliseconds(400)
 
-    /// One route's answer in the launch race.
-    private struct Answered: Sendable {
-        let endpoint: PairedHost.Endpoint
-        let connection: MizarConnection
-        let welcome: WelcomeFrame
-    }
-
-    /// Every route that failed, in the order the answers arrived.
-    ///
-    /// Carries the routes, not only the errors: which sentence the failure
-    /// deserves depends on whether the route went through the relay, and that is
-    /// known here and nowhere downstream.
-    private struct LaunchFailure: Error, Sendable {
-        let attempts: [(route: PairedHost.Endpoint, error: any Error)]
-    }
-
-    /// What one racing route came back with.
-    private enum LaunchDial: Sendable {
-        case answered(Answered)
-        case failed(route: PairedHost.Endpoint, error: any Error)
-        case skipped
-    }
+    private typealias Answered = ConnectionCoordinator.Answered
+    private typealias LaunchFailure = ConnectionCoordinator.Failure
 
     /// Put a connection failure on screen, and keep it apart from request errors.
     ///
@@ -8190,76 +8168,17 @@ final class AppModel {
     private func firstAnswer(
         in dials: [(endpoint: PairedHost.Endpoint, connection: MizarConnection, delay: Duration)],
     ) async throws -> Answered {
-        var failures: [(route: PairedHost.Endpoint, error: any Error)] = []
-        var winner: Answered?
-
-        await withTaskGroup(of: LaunchDial.self) { group in
-            for dial in dials {
-                group.addTask {
-                    if dial.delay > .zero {
-                        do {
-                            try await Task.sleep(for: dial.delay)
-                        } catch {
-                            // Cancelled before it started: the head start was
-                            // still running when another route answered.
-                            return .skipped
-                        }
-                    }
-                    if Task.isCancelled { return .skipped }
-                    do {
-                        let welcome = try await dial.connection.connect()
-                        return .answered(
-                            Answered(
-                                endpoint: dial.endpoint,
-                                connection: dial.connection,
-                                welcome: welcome,
-                            ),
-                        )
-                    } catch {
-                        // A route that lost the race was cancelled rather than
-                        // answered. Its socket goes with it: a half-open one is
-                        // a socket nobody reads and nobody closes.
-                        await dial.connection.disconnect()
-                        return Task.isCancelled
-                            ? .skipped
-                            : .failed(route: dial.endpoint, error: error)
-                    }
-                }
-            }
-            for await result in group {
-                switch result {
-                case .answered(let answer):
-                    guard winner == nil else {
-                        // A second route finished in the same tick. The first
-                        // one answered first, so this one is closed.
-                        await answer.connection.disconnect()
-                        continue
-                    }
-                    winner = answer
-                    // Cancels the sleepers and aborts the handshakes still
-                    // waiting; each of those closes its own socket as it unwinds.
-                    group.cancelAll()
-                case .failed(let route, let error):
-                    // After a winner these are cancellations, not answers.
-                    guard winner == nil else { continue }
-                    failures.append((route, error))
-                    log.add(
-                        .connection,
-                        "route \(Self.routeName(route)) failed: "
-                            + Self.describe(
-                                error,
-                                authority: Self.routeDescription(route).address,
-                                throughServer: ReconnectPlan.isRelay(route),
-                            ),
-                    )
-                case .skipped:
-                    break
-                }
-            }
+        try await connectionCoordinator.firstAnswer(in: dials) { endpoint, error in
+            self.log.add(
+                .connection,
+                "route \(Self.routeName(endpoint)) failed: "
+                    + Self.describe(
+                        error,
+                        authority: Self.routeDescription(endpoint).address,
+                        throughServer: ReconnectPlan.isRelay(endpoint),
+                    ),
+            )
         }
-
-        guard let winner else { throw LaunchFailure(attempts: failures) }
-        return winner
     }
 
     /// Make an answered route the app's connection, and load the first screen.
@@ -8275,9 +8194,7 @@ final class AppModel {
         // A new subject, before the state below rather than after it:
         // everything here reads and writes host-scoped state, and the epoch is
         // what says which socket that state belongs to.
-        nextConnectionEpoch += 1
-        connectionEpoch = nextConnectionEpoch
-        connection = answer.connection
+        installConnection(answer.connection)
         welcome = answer.welcome
         log.add(
             .connection,
@@ -8306,9 +8223,7 @@ final class AppModel {
     private func adoptLocal(_ started: LocalAgentController.Started) async {
         // A new subject, exactly as a socket is: the epoch is what says whose
         // answers the host-scoped state belongs to.
-        nextConnectionEpoch += 1
-        connectionEpoch = nextConnectionEpoch
-        connection = started.connection
+        installConnection(started.connection)
         welcome = started.welcome
         log.add(
             .connection,
