@@ -222,7 +222,7 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
     /// card with no way in. Switch between the fixture's two short sessions and
     /// require readable content and a still frame each time.
     func testSwitchingShortSessionsAlwaysLandsOnTheNewestTurn() {
-        let app = launch(session: "first", running: false)
+        let app = launch(session: "first", pending: false, running: false)
 
         let demo = app.buttons["workspace./Users/you/projects/demo"]
         let mock = sessionRow(in: app, titled: "Mock session", in: "demo")
