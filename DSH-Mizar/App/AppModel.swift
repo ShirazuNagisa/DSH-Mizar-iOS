@@ -75,7 +75,10 @@ final class AppModel {
     /// The host this device is paired with, once known.
     private(set) var host: PairedHost? {
         didSet {
-            if host?.hostId != oldValue?.hostId { historySyncInvalidation &+= 1 }
+            if host?.hostId != oldValue?.hostId {
+                historySyncInvalidation &+= 1
+                reconnectInvalidation &+= 1
+            }
             guard host?.hostId != oldValue?.hostId else { return }
             // The skills belong to the machine, and the palette switches with
             // it. Read here rather than after the socket opens: a launch that
@@ -592,7 +595,7 @@ final class AppModel {
     private var startTask: Task<Void, Never>?
 
     /// Whether a reconnect is in flight, so the UI can say so.
-    private(set) var reconnecting = false
+    var reconnecting: Bool { reconnectCoordinator.isRunning }
 
     /// DSH's own title for a session, by id.
     ///
@@ -1439,6 +1442,7 @@ final class AppModel {
     var connectionGeneration: Int { connectionCoordinator.generation }
 
     @ObservationIgnored private let connectionCoordinator = ConnectionCoordinator()
+    @ObservationIgnored private let reconnectCoordinator = ReconnectCoordinator()
 
     private var connection: MizarConnection? { connectionCoordinator.activeConnection }
 
@@ -1477,6 +1481,17 @@ final class AppModel {
     /// Detaching keeps the last generation so views can distinguish a reconnect
     /// from the still-open socket that preceded it.
     private var connectionEpoch: Int { connectionCoordinator.generation }
+
+    /// A host selection supersedes every reconnect run that started before it.
+    private var reconnectInvalidation: UInt64 = 0
+
+    private var currentReconnectIdentity: ReconnectCoordinator.RunIdentity? {
+        guard !isLocalAgentMode, let host else { return nil }
+        return ReconnectCoordinator.RunIdentity(
+            hostId: host.hostId,
+            invalidation: reconnectInvalidation,
+        )
+    }
 
     /// Explicit selection changes expire history work even if the operator
     /// later returns to the same host id during that pass.
@@ -2384,6 +2399,10 @@ final class AppModel {
     /// - Parameter hostId: the machine to open.
     func open(hostId: String) async {
         guard let next = hosts.first(where: { $0.hostId == hostId }) else { return }
+        // An explicit open supersedes every reconnect decided for the host
+        // selection that came before it, including a switch away and back to
+        // the same id while an old handshake is still suspended.
+        reconnectInvalidation &+= 1
         // Leaving the on-device agent is its own act: a running local turn is
         // stopped rather than left executing behind a screen that can no longer
         // show it (the kernel would still call the model, and an approval that
@@ -4148,7 +4167,9 @@ final class AppModel {
     /// `NOT_IMPLEMENTED` and is left alone. The pairing's stored base URL is
     /// updated from the answer so the next reconnect dials the right relay, and
     /// a relayed socket is redialled once the host has had time to move.
-    func syncRelayTier() async {
+    func syncRelayTier(
+        validity: (@MainActor () -> Bool)? = nil,
+    ) async {
         // A relay tier is a fact about a computer's tunnel. The on-device agent
         // has no tunnel, and asking it would read `host.info` for an answer it
         // does not have.
@@ -4156,19 +4177,17 @@ final class AppModel {
         // A self-hosted relay is where it is because the operator configured
         // it, not because a plan moved. There is no other tier to move to.
         guard !isSelfHosted else { return }
-        guard let connection, phase == .ready else { return }
+        guard let connection, phase == .ready, let tag = currentTag else { return }
         // Captured before the round trip: the operator can switch computers
         // while it is in flight, and this answer is only about this socket.
-        let tag = currentTag
         guard let info = try? await connection.call("host.info", as: HostInfo.self) else { return }
+        guard relayTierIsCurrent(tag, validity: validity) else { return }
         // The skills sync needs the same plugin report, and this is already the
         // once-per-connection read of it. Caching it here keeps a refresh from
         // paying a second `host.info`; `syncAgentSkills` still reads one itself
         // when this path is skipped (a self-hosted relay).
-        if let tag, tag == currentTag {
-            agentSkillPlugin = info.plugin
-            agentSkillPluginTag = tag
-        }
+        agentSkillPlugin = info.plugin
+        agentSkillPluginTag = tag
         // The direct-path line is what a cable-attached test reads when the
         // punched route is planned and never attempted: "nil" here is the whole
         // answer, and it is otherwise invisible from the outside.
@@ -4183,6 +4202,7 @@ final class AppModel {
         // because `.p2p` is derived from this field and disappears with it.
         if let endpointId = info.netEndpointId, !endpointId.isEmpty {
             await rememberDirectPathIdentity(endpointId)
+            guard relayTierIsCurrent(tag, validity: validity) else { return }
         }
         // The computer list draws these under the machine's name. Learned on
         // every ready socket for the same reason as the direct-path identity:
@@ -4190,6 +4210,7 @@ final class AppModel {
         // written into the pairing so an offline computer keeps its labels.
         if let desktop = info.desktop, !desktop.isEmpty {
             await rememberDesktopIdentity(desktop)
+            guard relayTierIsCurrent(tag, validity: validity) else { return }
         }
         // Which agents this computer serves, and which one this socket is bound
         // to. Read on every ready socket, like the identity and the desktop
@@ -4197,7 +4218,9 @@ final class AppModel {
         // three agents without the phone being re-paired.
         if let engines = info.engines {
             await rememberEngines(engines.map(\.id))
+            guard relayTierIsCurrent(tag, validity: validity) else { return }
             await adoptEngineScope(info.engine.flatMap(AgentEngine.init(rawValue:)))
+            guard relayTierIsCurrent(tag, validity: validity) else { return }
         }
         guard let relay = info.relay else { return }
         let desired = RelayTier.baseURL(paid: account.isPaid)
@@ -4207,21 +4230,29 @@ final class AppModel {
             // alternate -- so repair that from the host's own answer.
             if let baseURL = relay.baseURL, baseURL != host?.baseURL {
                 await rememberRelayBaseURL(baseURL)
+                guard relayTierIsCurrent(tag, validity: validity) else { return }
             }
             return
         }
+        guard relayTierIsCurrent(tag, validity: validity) else { return }
         do {
             let result = try await connection.call(
                 "relay.set",
                 payload: .object(["url": .string(desired)]),
                 as: RelaySetResult.self,
             )
+            guard relayTierIsCurrent(tag, validity: validity) else { return }
             let baseURL = result.baseURL
                 ?? host?.baseURL.flatMap { RelayTier.rebased($0, onto: result.url) }
-            if let baseURL { await rememberRelayBaseURL(baseURL) }
+            if let baseURL {
+                await rememberRelayBaseURL(baseURL)
+                guard relayTierIsCurrent(tag, validity: validity) else { return }
+            }
             log.add(.connection, "relay: host moved to \(result.url)")
+            guard relayTierIsCurrent(tag, validity: validity) else { return }
             scheduleRelayReconnect(to: baseURL)
         } catch {
+            guard relayTierIsCurrent(tag, validity: validity) else { return }
             // An older host answers NOT_IMPLEMENTED: it predates relay tiers and
             // is already where its configuration says, so there is nothing to
             // report. Anything else is a connection failure the next request
@@ -4233,6 +4264,13 @@ final class AppModel {
                     + Self.describe(error, authority: desired),
             )
         }
+    }
+
+    private func relayTierIsCurrent(
+        _ tag: HostTag,
+        validity: (@MainActor () -> Bool)?,
+    ) -> Bool {
+        (validity?() ?? true) && tag == currentTag
     }
 
     /// Remember which agents this computer said it serves.
@@ -4491,12 +4529,18 @@ final class AppModel {
     /// host waits a beat before moving. Dialling exactly the new room avoids
     /// first trying the relay the host just left.
     private func scheduleRelayReconnect(to baseURL: String?) {
-        guard let activeEndpoint, case .relay = activeEndpoint, let baseURL else { return }
+        guard let activeEndpoint,
+              case .relay = activeEndpoint,
+              let baseURL,
+              let identity = currentReconnectIdentity else {
+            return
+        }
         relaySwitchTask?.cancel()
         relaySwitchTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled else { return }
+            guard self.currentReconnectIdentity == identity else { return }
             guard await self.reconnect(over: .relay(baseURL: baseURL)) else { return }
             await self.refreshSessions(reconnectingIfNeeded: false)
             await self.refreshInteractions()
@@ -6135,209 +6179,146 @@ final class AppModel {
         historyValidity: (@MainActor () -> Bool)? = nil,
     ) async -> Bool {
         guard historyValidity?() ?? true else { return false }
-        guard let host else { return connection != nil }
-        if reconnecting {
-            // Someone else is already bringing the socket back; wait for them.
-            //
-            // This used to `return connection != nil`, which reports "still
-            // down" rather than "wait" -- because the attempt already in flight
-            // clears `connection` at its top, so during the whole of a reconnect
-            // every concurrent caller was told there was no connection and threw.
-            //
-            // Two reads run together on the session screen, usage and the
-            // conversation, and they share one socket: one dropped request made
-            // them fail as a pair. That is the reported symptom exactly -- the
-            // Usage tab empty and the message list sitting at a strange offset,
-            // together, and only sometimes.
-            // Wait for the attempt in flight -- but never on itself, and never
-            // without end.
-            //
-            // This loop deadlocked the whole app. `reconnect` used to refresh
-            // the session list before releasing the flag, and that refresh can
-            // itself fail and call `reconnect`: the inner call arrived while the
-            // flag was still held, waited here for the outer one to finish, and
-            // the outer one was blocked waiting for the inner. Neither ever
-            // returned, `reconnecting` stayed true for the life of the process,
-            // and from then on every failed request waited here forever -- which
-            // is why every conversation sat on a spinner while the connection
-            // underneath was healthy and answering. The refresh no longer
-            // happens inside the lock; the deadline and the cancellation check
-            // are so that a future mistake of the same shape stalls a request
-            // instead of the app.
-            let deadline = ContinuousClock.now.advanced(by: .seconds(20))
-            while reconnecting, ContinuousClock.now < deadline {
-                do {
-                    try await Task.sleep(for: .milliseconds(50))
-                } catch {
-                    break
-                }
-            }
-            // An exact route is a question about one address, not "is there any
-            // socket". Returning the relay connection here reported a LAN move
-            // as successful without ever dialling it -- the footer went back to
-            // "via relay" on the next event and the local socket was never
-            // opened. Wait for the in-flight attempt to finish, then make the
-            // exact dial it was asked for.
-            if let exactRoute, !reconnecting {
-                return await reconnect(
-                    patient: patient,
-                    tryingEveryRoute: tryingEveryRoute,
-                    preferringRelay: preferringRelay,
-                    over: exactRoute,
-                    historyValidity: historyValidity,
-                )
-            }
-            return connection != nil
-        }
-        reconnecting = true
-        defer { reconnecting = false }
-        log.add(
-            .connection,
-            "reconnecting\(patient ? " (patient)" : "")\(tryingEveryRoute ? " (every route)" : "")",
-        )
+        guard host != nil else { return connection != nil }
 
-        eventListener?.cancel()
-        interactionPoll?.cancel()
-        let closing = connection
-        clearConnection()
-        await closing?.disconnect()
-        guard historyValidity?() ?? true else { return false }
-
-        // Which routes to dial, in order, and how many attempts they get. Both
-        // decisions live in `ReconnectPlan` so they are tested without a socket:
-        // the last working route first, every other route behind it, and -- when
-        // a local link has just died -- the relay first, because the network the
-        // local address lives on is the thing that broke.
-        // One question, asked of every route: do the switches allow it. An
-        // exact route is not an exception -- a LAN scan that is moving the
-        // pairing, and a pairing that has just completed over the LAN, both
-        // arrive here with a route that the operator may have switched off.
-        let allowed = { (endpoint: PairedHost.Endpoint) in
-            RoutePolicy.allows(
-                endpoint,
-                localNetworkFirst: self.settings.localNetworkFirst,
-                directConnection: self.settings.directConnection,
-            )
-        }
-        let routes: [PairedHost.Endpoint]
-        if let exactRoute, allowed(exactRoute) {
-            routes = [exactRoute]
-        } else {
-            routes = ReconnectPlan.routes(
-                endpoints: host.endpoints,
-                active: activeEndpoint,
-                tryingEveryRoute: tryingEveryRoute,
-                preferringRelay: preferringRelay,
-                // The two switches, in one place: the direct route is planned
-                // only while 局域网优先 is on, and the punched route only while
-                // 直连 is.
-                allowingLocalNetwork: settings.localNetworkFirst,
-                allowingDirectPath: settings.directConnection,
-            )
-        }
-        guard !routes.isEmpty else {
-            log.add(
-                .connection,
-                "reconnect: no route the switches allow "
-                    + "(local network first \(settings.localNetworkFirst ? "on" : "off"), "
-                    + "direct connection \(settings.directConnection ? "on" : "off"))",
-            )
-            return false
-        }
-        let attempts = ReconnectPlan.attempts(routeCount: routes.count, patient: patient)
-        log.add(
-            .connection,
-            "routes: " + routes.map(Self.routeName).joined(separator: " -> "),
-        )
-        // The failure worth showing, kept across attempts. See the catch below.
+        // The failure ranking stays local to this call: it decides which
+        // diagnostic the AppModel writes, while the coordinator owns when each
+        // attempt starts and stops.
         var shown: RouteFailure?
-        for attempt in 0..<attempts {
-            guard historyValidity?() ?? true else { return false }
-            if attempt > 0 {
-                let pause = patient ? min(4_000, 400 << attempt) : 400 * attempt
-                try? await Task.sleep(for: .milliseconds(pause))
-            }
-            guard historyValidity?() ?? true else { return false }
-            let route = routes[attempt % routes.count]
-            let next = makeConnection(host: host, endpoint: route)
-            do {
-                _ = try await next.connect()
-                guard historyValidity?() ?? true else {
-                    await next.disconnect()
-                    return false
-                }
-                installConnection(next)
-                // The route that actually answered is the route the app is on:
-                // a scan or a foreground return may have chosen a different one
-                // from the last, and the footer, the entitlement and the next
-                // reconnect all read this.
-                activeEndpoint = route
-                // A reconnect is a new conversation with the same machine, and
-                // the epoch says so. Everything scoped to the old socket -- the
-                // catalogues, the pending set, an answer still on its way --
-                // was answered by a host this app is no longer talking to, and
-                // a host id alone cannot tell that apart from the same machine
-                // still answering. Without this, a read started before the drop
-                // and delivered after the new socket opened passed every tag
-                // check and was published as current.
-                lastError = nil
-                connectionError = nil
-                linkFailure = nil
-                log.add(.connection, "reconnected after \(attempt + 1) attempt(s)")
-                startInteractionPoll()
-                // `phase` decides which screen is on. This never touched it, so
-                // a retry that *succeeded* left the operator looking at "Cannot
-                // reach the computer" with a working connection behind it -- the
-                // button did its job and the screen never said so. That was the
-                // bug: "Try again does nothing" was true on the only screen
-                // where it could be seen.
-                phase = .ready
-                // The alternate relay may be the one that answered while the
-                // stored URL was stale; keep the pairing in step with reality.
-                if case .relay(let baseURL) = route, self.host?.baseURL != baseURL {
-                    await rememberRelayBaseURL(baseURL)
-                    guard historyValidity?() ?? true else { return false }
-                }
-                // The account's tier is the phone's fact, not the host's. A
-                // reconnect is the first moment after an offline plan change
-                // that this side can align the tunnel's relay.
-                await syncRelayTier()
-                // The session list is *not* refreshed here. It used to be, and
-                // that call is what closed the deadlock above; every caller
-                // either refreshes for itself or is about to.
-                return true
-            } catch {
+        let operations = ReconnectCoordinator.Operations(
+            identity: { self.currentReconnectIdentity },
+            snapshot: {
+                guard let host = self.host else { return nil }
+                return ReconnectCoordinator.Snapshot(
+                    host: host,
+                    activeEndpoint: self.activeEndpoint,
+                    localNetworkFirst: self.settings.localNetworkFirst,
+                    directConnection: self.settings.directConnection,
+                )
+            },
+            isConnected: { self.connection != nil },
+            prepare: {
+                self.eventListener?.cancel()
+                self.interactionPoll?.cancel()
+                let closing = self.connection
+                self.clearConnection()
+                await closing?.disconnect()
+            },
+            makeCandidate: { _, host, route in
+                ReconnectSocketCandidate(
+                    connection: self.makeConnection(host: host, endpoint: route),
+                )
+            },
+            adopt: { identity, host, route, attempt, attemptCount, candidate, isCurrent in
+                await self.adoptReconnect(
+                    candidate,
+                    identity: identity,
+                    host: host,
+                    route: route,
+                    attempt: attempt,
+                    attemptCount: attemptCount,
+                    isCurrent: isCurrent,
+                )
+            },
+            noteFailure: { context in
                 let failed = RouteFailure(
-                    isRelay: ReconnectPlan.isRelay(route),
-                    address: Self.routeDescription(route).address,
-                    error: error,
+                    isRelay: ReconnectPlan.isRelay(context.route),
+                    address: Self.routeDescription(context.route).address,
+                    error: context.error,
                 )
                 let message = Self.describe(failed)
-                log.add(
+                self.log.add(
                     .connection,
-                    "reconnect attempt \(attempt + 1)/\(attempts) over \(Self.routeName(route)) failed: \(message)",
+                    "reconnect attempt \(context.attempt + 1)/\(context.attemptCount) over "
+                        + "\(Self.routeName(context.route)) failed: \(message)",
                 )
-                // The most informative failure so far, not the latest. With two
-                // routes the last one is usually the direct address timing out
-                // six seconds after the relay already answered, and the relay's
-                // answer is the one that explains the screen.
-                if shown == nil || Self.weight(failed) >= Self.weight(shown!) { shown = failed }
+                if shown == nil || Self.weight(failed) >= Self.weight(shown!) {
+                    shown = failed
+                }
                 let reported = shown.map { Self.describe($0) } ?? message
-                connectionError = reported.isEmpty ? nil : reported
-                lastError = reported.isEmpty ? nil : reported
-                // The bar ranks the same way the sentence does: the most
-                // informative attempt decides which segment carries the cross.
-                linkFailure = shown.map {
+                self.connectionError = reported.isEmpty ? nil : reported
+                self.lastError = reported.isEmpty ? nil : reported
+                self.linkFailure = shown.map {
                     LinkStatus.failure($0.error, authority: $0.address, isRelay: $0.isRelay)
                 }
-                // Keep the screen's text current. A retry that fails for a new
-                // reason -- no internet rather than the computer being unreachable --
-                // should say so instead of repeating the line from before.
-                if case .failed = phase, !reported.isEmpty { phase = .failed(reported) }
+                if case .failed = self.phase, !reported.isEmpty {
+                    self.phase = .failed(reported)
+                }
+            },
+            noRoutes: { _, snapshot in
+                self.log.add(
+                    .connection,
+                    "reconnect: no route the switches allow "
+                        + "(local network first \(snapshot.localNetworkFirst ? "on" : "off"), "
+                        + "direct connection \(snapshot.directConnection ? "on" : "off"))",
+                )
+            },
+            routeName: { Self.routeName($0) },
+            log: { self.log.add(.connection, $0) },
+        )
+
+        return await reconnectCoordinator.reconnect(
+            patient: patient,
+            tryingEveryRoute: tryingEveryRoute,
+            preferringRelay: preferringRelay,
+            over: exactRoute,
+            historyValidity: historyValidity,
+            using: operations,
+        )
+    }
+
+    private func adoptReconnect(
+        _ candidate: any ReconnectCoordinator.Candidate,
+        identity: ReconnectCoordinator.RunIdentity,
+        host: PairedHost,
+        route: PairedHost.Endpoint,
+        attempt: Int,
+        attemptCount: Int,
+        isCurrent: @escaping ReconnectCoordinator.Validity,
+    ) async -> Bool {
+        guard isCurrent(),
+              let socket = candidate as? ReconnectSocketCandidate else {
+            return false
+        }
+
+        installConnection(socket.connection)
+        guard isCurrent() else {
+            await discardStaleReconnect(socket)
+            return false
+        }
+
+        activeEndpoint = route
+        lastError = nil
+        connectionError = nil
+        linkFailure = nil
+        log.add(.connection, "reconnected after \(attempt + 1) attempt(s)")
+        startInteractionPoll()
+        phase = .ready
+
+        if case .relay(let baseURL) = route, host.baseURL != baseURL {
+            await rememberRelayBaseURL(baseURL)
+            guard isCurrent() else {
+                await discardStaleReconnect(socket)
+                return false
             }
         }
-        log.add(.connection, "reconnect gave up after \(attempts) attempts")
-        return false
+        await syncRelayTier(validity: isCurrent)
+        guard isCurrent() else {
+            await discardStaleReconnect(socket)
+            return false
+        }
+        return true
+    }
+
+    private func discardStaleReconnect(_ candidate: ReconnectSocketCandidate) async {
+        if clearConnection(ifMatching: candidate.connection) {
+            interactionPoll?.cancel()
+            activeEndpoint = nil
+            if phase == .ready {
+                phase = .connecting
+            }
+        }
+        await candidate.disconnect()
     }
 
     /// Fetch the page before the oldest one held, and fold it in.
@@ -7821,6 +7802,7 @@ final class AppModel {
             // value scoped to the old host stayed in memory. Dropping the
             // connection first makes "what belongs to one computer" the same rule on
             // the launch-pairing path as it is on the host list.
+            reconnectInvalidation &+= 1
             disconnectCurrent()
             modelChoice = [:]
             host = paired
@@ -8778,5 +8760,22 @@ final class AppModel {
         if failure.error is WebSocketUpgradeRefused { return 4 }
         if let mizar = failure.error as? MizarError, mizar.known != nil { return 4 }
         return failure.isRelay ? 2 : 1
+    }
+}
+
+@MainActor
+private final class ReconnectSocketCandidate: ReconnectCoordinator.Candidate {
+    let connection: MizarConnection
+
+    init(connection: MizarConnection) {
+        self.connection = connection
+    }
+
+    func connect() async throws {
+        _ = try await connection.connect()
+    }
+
+    func disconnect() async {
+        await connection.disconnect()
     }
 }

@@ -73,9 +73,27 @@
 		CC0000000000000000000001 /* DSH-MizarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "DSH-MizarTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA00000000000000000000A1 /* Exceptions for "DSH-Mizar" folder in "DSH-Mizar" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+			);
+			target = AA0000000000000000000004 /* DSH-Mizar */;
+		};
+		CC00000000000000000000B1 /* Exceptions for "DSH-MizarTests" folder in "DSH-MizarTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+			);
+			target = CC0000000000000000000003 /* DSH-MizarTests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AA0000000000000000000009 /* DSH-Mizar */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA00000000000000000000A1 /* Exceptions for "DSH-Mizar" folder in "DSH-Mizar" target */,
+			);
 			path = "DSH-Mizar";
 			sourceTree = "<group>";
 		};
@@ -96,6 +114,9 @@
 		};
 		CC0000000000000000000002 /* DSH-MizarTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CC00000000000000000000B1 /* Exceptions for "DSH-MizarTests" folder in "DSH-MizarTests" target */,
+			);
 			path = "DSH-MizarTests";
 			sourceTree = "<group>";
 		};
