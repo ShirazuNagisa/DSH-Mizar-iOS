@@ -75,6 +75,7 @@ final class AppModel {
     /// The host this device is paired with, once known.
     private(set) var host: PairedHost? {
         didSet {
+            if host?.hostId != oldValue?.hostId { historySyncInvalidation &+= 1 }
             guard host?.hostId != oldValue?.hostId else { return }
             // The skills belong to the machine, and the palette switches with
             // it. Read here rather than after the socket opens: a launch that
@@ -736,38 +737,10 @@ final class AppModel {
     /// A refresh used to be a spinner with no end and no idea how far along it
     /// was, over a link that can be a phone on cellular. Saying which session of
     /// how many is the difference between waiting and wondering.
-    private(set) var syncProgress: SyncProgress?
+    private let conversationSyncCoordinator = ConversationSyncCoordinator()
+    var syncProgress: SyncProgress? { conversationSyncCoordinator.progress }
 
-    /// How a sync is going.
-    struct SyncProgress: Sendable, Equatable {
-        /// What is being fetched.
-        var current: String
-        /// How many sessions are done.
-        var completed: Int
-        /// How many there are to do, or `0` while that is not known yet.
-        var total: Int
-        /// When this pass began, which is what an estimate is measured from.
-        var startedAt: Date = Date()
-
-        var fraction: Double { total == 0 ? 0 : Double(completed) / Double(total) }
-
-        /// How much longer, once a rate can be measured at all.
-        ///
-        /// `nil` until at least one session has finished, and the restraint is
-        /// the point: an estimate from no samples is not a small estimate, it is
-        /// no estimate, and a countdown that starts at a made-up number and then
-        /// changes is worse than a progress bar on its own.
-        ///
-        /// Measured per *session* rather than per byte, because the size of a
-        /// conversation is not known before it is fetched and the number of them
-        /// is.
-        var remaining: TimeInterval? {
-            guard completed > 0, total > completed else { return nil }
-            let elapsed = Date().timeIntervalSince(startedAt)
-            guard elapsed > 0 else { return nil }
-            return (elapsed / Double(completed)) * Double(total - completed)
-        }
-    }
+    typealias SyncProgress = ConversationSyncCoordinator.Progress
 
     /// Whether a sync is running.
     var isSyncing: Bool { syncProgress != nil }
@@ -805,7 +778,7 @@ final class AppModel {
     /// conversation on this computer is stored on this phone." -- which is a claim
     /// about the operator's data, made out of a request that was never sent.
     /// Tapping refresh with the computer unreachable said it.
-    private(set) var syncProblem: String?
+    var syncProblem: String? { conversationSyncCoordinator.problem }
 
     /// Whether there is a stored session list for the current machine.
     ///
@@ -1501,6 +1474,20 @@ final class AppModel {
     /// compared and never dereferenced, so nothing may depend on the socket
     /// still being alive to answer a question about itself.
     private var connectionEpoch = 0
+
+    /// Explicit selection changes expire history work even if the operator
+    /// later returns to the same host id during that pass.
+    private var historySyncInvalidation: UInt64 = 0
+
+    private var currentHistorySyncIdentity: ConversationSyncCoordinator.RunIdentity? {
+        let hostId = isLocalAgentMode ? Self.localHostId : host?.hostId
+        guard let hostId else { return nil }
+        return ConversationSyncCoordinator.RunIdentity(hostId: hostId, invalidation: historySyncInvalidation)
+    }
+
+    private func historySyncIsCurrent(_ identity: ConversationSyncCoordinator.RunIdentity) -> Bool {
+        !Task.isCancelled && currentHistorySyncIdentity == identity
+    }
 
     /// The subject every host-scoped value is read and written for.
     ///
@@ -2692,6 +2679,7 @@ final class AppModel {
 
     /// Tear the live connection down without touching what is stored.
     private func disconnectCurrent(preserveSelection: Bool = false) {
+        if !preserveSelection { historySyncInvalidation &+= 1 }
         if connection != nil { log.add(.connection, "closing the connection") }
         // Every path that drops a connection drops the mode with it: a pairing,
         // a forget and a switch all end whatever this phone was connected to,
@@ -5595,7 +5583,8 @@ final class AppModel {
     /// - Returns: whether the scan dialled a local route and is now connected
     ///   over it.
     @discardableResult
-    func scanForLocalNetwork() async -> Bool {
+    func scanForLocalNetwork(historyValidity: (@MainActor () -> Bool)? = nil) async -> Bool {
+        guard historyValidity?() ?? true else { return false }
         // The transfer switch is the budget decision. With LAN priority off
         // there is no question to ask, and asking it would add a probe timeout
         // to every reconnect for an answer the operator said they would rather
@@ -5618,6 +5607,7 @@ final class AppModel {
             // Best effort: an older host answers without `addresses`, and the
             // stored authority is still probed.
             if let info = try? await connection.call("host.info", as: HostInfo.self) {
+                guard historyValidity?() ?? true else { return false }
                 candidates.append(contentsOf: (info.addresses ?? []).filter { !$0.isEmpty })
             }
         }
@@ -5643,6 +5633,7 @@ final class AppModel {
         let probe = PairingClient(transport: URLSessionHTTPTransport(timeout: Self.lanProbeTimeout))
         var answered: Set<String> = []
         await withTaskGroup(of: (authority: String, matched: Bool).self) { group in
+            guard historyValidity?() ?? true else { return }
             for authority in ordered {
                 group.addTask {
                     guard let answer = try? await probe.hello(authority: authority) else {
@@ -5657,6 +5648,7 @@ final class AppModel {
                 answered.insert(result.authority)
             }
         }
+        guard historyValidity?() ?? true else { return false }
         log.add(.connection, "LAN scan: \(answered.count) of \(ordered.count) address(es) answered as this computer")
         guard let authority = ordered.first(where: answered.contains) else {
             log.add(.connection, "LAN scan: no local address answered")
@@ -5668,7 +5660,7 @@ final class AppModel {
             // wants its redial, so this is not a switch.
             return false
         }
-        return await moveToLocalRoute(authority: authority)
+        return await moveToLocalRoute(authority: authority, historyValidity: historyValidity)
     }
 
     /// Move the pairing to a direct address that has just answered.
@@ -5681,7 +5673,11 @@ final class AppModel {
     ///
     /// - Parameter authority: the `host:port` that answered as this computer.
     /// - Returns: whether the app is now connected over it.
-    private func moveToLocalRoute(authority: String) async -> Bool {
+    private func moveToLocalRoute(
+        authority: String,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async -> Bool {
+        guard historyValidity?() ?? true else { return false }
         // The scan is the only caller and already refuses when the switch is
         // off; this is the same question asked where the dial happens, because
         // a future caller must not be able to route around the setting.
@@ -5704,14 +5700,28 @@ final class AppModel {
         let candidateWelcome: WelcomeFrame
         do {
             candidateWelcome = try await candidate.connect()
+            guard historyValidity?() ?? true else {
+                await candidate.disconnect()
+                return false
+            }
             // A handshake proves the listener, not a usable path. Ask the
             // cheapest question on this socket before taking the relay down.
             _ = try await candidate.call("ping", as: PingResult.self)
+            guard historyValidity?() ?? true else {
+                await candidate.disconnect()
+                return false
+            }
         } catch {
             await candidate.disconnect()
             log.add(.connection, "LAN scan: \(authority) did not answer after the handshake; keeping the previous route")
-            self.host = previousHost
-            activeEndpoint = previousEndpoint
+            if historyValidity?() ?? true {
+                self.host = previousHost
+                activeEndpoint = previousEndpoint
+            }
+            return false
+        }
+        guard historyValidity?() ?? true else {
+            await candidate.disconnect()
             return false
         }
 
@@ -5727,7 +5737,6 @@ final class AppModel {
         if let index = hosts.firstIndex(where: { $0.hostId == moved.hostId }) {
             hosts[index] = moved
         }
-        try? await credentials.save(moved)
         eventListener?.cancel()
         interactionPoll?.cancel()
         startInteractionPoll()
@@ -5736,8 +5745,11 @@ final class AppModel {
         linkFailure = nil
         lastError = nil
         log.add(.connection, "LAN scan: switched to the local network at \(authority)")
+        try? await credentials.save(moved)
         await previousConnection?.disconnect()
-        await refreshSessions(reconnectingIfNeeded: false)
+        guard historyValidity?() ?? true else { return false }
+        await refreshSessions(reconnectingIfNeeded: false, historyValidity: historyValidity)
+        guard historyValidity?() ?? true else { return false }
         await refreshInteractions()
         return true
     }
@@ -5830,13 +5842,20 @@ final class AppModel {
     /// the recovery the list's old yellow Retry button performed by hand, and
     /// with that button gone it has to live in the refresh the operator already
     /// has: pull to refresh, and the toolbar's refresh, both land here.
-    func refreshSessions(reconnectingIfNeeded: Bool) async {
+    func refreshSessions(
+        reconnectingIfNeeded: Bool = true,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async {
+        guard historyValidity?() ?? true else { return }
         if connection == nil {
-            guard reconnectingIfNeeded, await reconnect() else { return }
+            guard reconnectingIfNeeded,
+                  await reconnect(historyValidity: historyValidity),
+                  historyValidity?() ?? true else { return }
         }
         guard connection != nil, let tag = currentTag else { return }
         do {
-            let result = try await call("session.list", as: SessionListResult.self)
+            let result = try await call("session.list", as: SessionListResult.self, historyValidity: historyValidity)
+            guard historyValidity?() ?? true else { return }
             guard tag == currentTag else {
                 log.add(.cache, "session list for \(tag.hostId) dropped, the machine changed under it")
                 return
@@ -5847,17 +5866,22 @@ final class AppModel {
             // keeps the sidebar from asking `session.stats` once per row just to
             // learn a name the host sent in the list it already read.
             adoptTitles(from: sessions)
-            await refreshWorkspaces()
+            await refreshWorkspaces(historyValidity: historyValidity)
+            guard historyValidity?() ?? true else { return }
             lastError = nil
             // Written after the workspaces, so the two halves of one answer land
             // together rather than as a list with the previous workspace set.
             await persistIndex()
+            guard historyValidity?() ?? true else { return }
             // Which sessions are running is half of what the island shows, and
             // this is the read that knows.
             await refreshLiveActivity()
         } catch {
-            if reconnectingIfNeeded, await reconnect() {
-                await refreshSessions(reconnectingIfNeeded: false)
+            guard historyValidity?() ?? true else { return }
+            if reconnectingIfNeeded,
+               await reconnect(historyValidity: historyValidity),
+               historyValidity?() ?? true {
+                await refreshSessions(reconnectingIfNeeded: false, historyValidity: historyValidity)
                 return
             }
             // Reported, not fatal. The pairing is still good and most of the
@@ -5882,16 +5906,17 @@ final class AppModel {
     /// what "the operator deleted their last workspace" looks like. Treating an
     /// empty answer as no answer is precisely how deleted workspaces stayed on
     /// this screen: the phone kept the old list and drew it forever.
-    private func refreshWorkspaces() async {
+    private func refreshWorkspaces(historyValidity: (@MainActor () -> Bool)? = nil) async {
         // `connection.call`, not `call`: the shared helper reconnects the whole
         // socket when a request fails, and this is a best-effort read of a
         // method an older host does not implement. Going through it meant one
         // unimplemented method tore down the connection every time the session
         // list refreshed -- which the context figure above the composer noticed
         // before anything else did.
-        guard let connection, let tag = currentTag else { return }
+        guard let connection, let tag = currentTag, historyValidity?() ?? true else { return }
         do {
             let result = try await loggedCall("workspace.list", on: connection, as: WorkspaceListResult.self)
+            guard historyValidity?() ?? true else { return }
             guard result.complete else { return }
             // The stored list is *this* computer's registry: "the host has no such
             // workspace" is only an answer about the host that said it.
@@ -5921,7 +5946,9 @@ final class AppModel {
         _ method: String,
         payload: JSONValue? = nil,
         as type: T.Type,
+        historyValidity: (@MainActor () -> Bool)? = nil,
     ) async throws -> T {
+        guard historyValidity?() ?? true else { throw CancellationError() }
         guard let connection else {
             let failure = MizarError(code: "NO_CONNECTION", message: "not connected to the computer")
             logRequest(method, payload: payload, since: .now, error: failure)
@@ -5930,20 +5957,24 @@ final class AppModel {
         let started = ContinuousClock.now
         do {
             let result = try await connection.call(method, payload: payload, as: type)
+            guard historyValidity?() ?? true else { throw CancellationError() }
             logRequest(method, payload: payload, since: started, error: nil)
             return result
         } catch {
+            guard historyValidity?() ?? true else { throw CancellationError() }
             guard Self.isAboutTheConnection(error) else {
                 logRequest(method, payload: payload, since: started, error: error)
                 throw error
             }
-            guard await reconnect() else {
+            guard await reconnect(historyValidity: historyValidity) else {
                 logRequest(method, payload: payload, since: started, error: error)
                 throw error
             }
+            guard historyValidity?() ?? true else { throw CancellationError() }
             guard let fresh = self.connection else { throw error }
             do {
                 let result = try await fresh.call(method, payload: payload, as: type)
+                guard historyValidity?() ?? true else { throw CancellationError() }
                 logRequest(method, payload: payload, since: started, error: nil)
                 return result
             } catch {
@@ -6101,7 +6132,9 @@ final class AppModel {
         tryingEveryRoute: Bool = false,
         preferringRelay: Bool = false,
         over exactRoute: PairedHost.Endpoint? = nil,
+        historyValidity: (@MainActor () -> Bool)? = nil,
     ) async -> Bool {
+        guard historyValidity?() ?? true else { return false }
         guard let host else { return connection != nil }
         if reconnecting {
             // Someone else is already bringing the socket back; wait for them.
@@ -6151,6 +6184,7 @@ final class AppModel {
                     tryingEveryRoute: tryingEveryRoute,
                     preferringRelay: preferringRelay,
                     over: exactRoute,
+                    historyValidity: historyValidity,
                 )
             }
             return connection != nil
@@ -6164,8 +6198,10 @@ final class AppModel {
 
         eventListener?.cancel()
         interactionPoll?.cancel()
-        await connection?.disconnect()
+        let closing = connection
         connection = nil
+        await closing?.disconnect()
+        guard historyValidity?() ?? true else { return false }
 
         // Which routes to dial, in order, and how many attempts they get. Both
         // decisions live in `ReconnectPlan` so they are tested without a socket:
@@ -6216,25 +6252,26 @@ final class AppModel {
         // The failure worth showing, kept across attempts. See the catch below.
         var shown: RouteFailure?
         for attempt in 0..<attempts {
+            guard historyValidity?() ?? true else { return false }
             if attempt > 0 {
                 let pause = patient ? min(4_000, 400 << attempt) : 400 * attempt
                 try? await Task.sleep(for: .milliseconds(pause))
             }
+            guard historyValidity?() ?? true else { return false }
             let route = routes[attempt % routes.count]
             let next = makeConnection(host: host, endpoint: route)
             do {
                 _ = try await next.connect()
+                guard historyValidity?() ?? true else {
+                    await next.disconnect()
+                    return false
+                }
                 connection = next
                 // The route that actually answered is the route the app is on:
                 // a scan or a foreground return may have chosen a different one
                 // from the last, and the footer, the entitlement and the next
                 // reconnect all read this.
                 activeEndpoint = route
-                // The alternate relay may be the one that answered while the
-                // stored URL was stale; keep the pairing in step with reality.
-                if case .relay(let baseURL) = route, self.host?.baseURL != baseURL {
-                    await rememberRelayBaseURL(baseURL)
-                }
                 // A reconnect is a new conversation with the same machine, and
                 // the epoch says so. Everything scoped to the old socket -- the
                 // catalogues, the pending set, an answer still on its way --
@@ -6257,6 +6294,12 @@ final class AppModel {
                 // bug: "Try again does nothing" was true on the only screen
                 // where it could be seen.
                 phase = .ready
+                // The alternate relay may be the one that answered while the
+                // stored URL was stale; keep the pairing in step with reality.
+                if case .relay(let baseURL) = route, self.host?.baseURL != baseURL {
+                    await rememberRelayBaseURL(baseURL)
+                    guard historyValidity?() ?? true else { return false }
+                }
                 // The account's tier is the phone's fact, not the host's. A
                 // reconnect is the first moment after an offline plan change
                 // that this side can align the tunnel's relay.
@@ -6311,11 +6354,17 @@ final class AppModel {
     ///   all. The caller must not treat `nil` as the end of the conversation:
     ///   every early exit here is a condition that can clear on its own.
     @discardableResult
-    func loadOlder(sessionId: String, force: Bool = false) async -> Int? {
+    func loadOlder(
+        sessionId: String,
+        force: Bool = false,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async -> Int? {
+        guard historyValidity?() ?? true else { return nil }
         guard connection != nil else { return nil }
         guard let cached = await conversations.load(sessionId: sessionId),
               let before = cached.historyCursor ?? cached.oldestSeq
         else { return nil }
+        guard historyValidity?() ?? true else { return nil }
         // Nothing older to ask for. Without this the scroll-to-top would fire a
         // request on every appearance for a page that cannot change. This one is
         // definitive: the host said so, not a transient failure of ours.
@@ -6328,7 +6377,9 @@ final class AppModel {
             let result = try await messages(
                 sessionId: sessionId,
                 beforeSeq: before,
+                historyValidity: historyValidity,
             )
+            guard historyValidity?() ?? true else { return nil }
             let fresh = result.conversationItems()
             // The host answers with the tail before `beforeSeq`, so the same
             // raw cursor coming back means there is nothing further; stopping
@@ -6342,12 +6393,14 @@ final class AppModel {
 
             // Folded in as one step, so a reload landing at the same moment
             // cannot have its write undone by this one.
+            guard historyValidity?() ?? true else { return nil }
             let stored = await conversations.update(sessionId: sessionId) { current in
                 // `current` rather than the `cached` read before the request:
                 // that one is several round trips old by now, and anything the
                 // time it took fetched would be thrown away.
                 Self.folding(older: result, into: current ?? cached, sessionId: sessionId)
             }
+            guard historyValidity?() ?? true else { return nil }
             lastError = nil
             log.add(
                 .cache,
@@ -6359,6 +6412,7 @@ final class AppModel {
             // is what says there is more to read.
             return added > 0 ? added : 1
         } catch {
+            guard historyValidity?() ?? true else { return nil }
             let message = Self.describe(error, authority: host?.authority ?? host?.baseURL)
             if !message.isEmpty { lastError = message }
             return nil
@@ -6476,16 +6530,6 @@ final class AppModel {
     /// only the day's bytes do -- so this is a courtesy bound, not a limit.
     private static let conversationFetchConcurrency = 6
 
-    /// How many conversation pages one window holds before they are folded in.
-    ///
-    /// Four rounds of ``conversationFetchConcurrency``. The two numbers answer
-    /// different questions: the concurrency keeps the round trip overlapped, the
-    /// window keeps memory bounded. A first sync is tens of megabytes of pages,
-    /// and decoding all of them before writing any of them to the cache is how a
-    /// faster sync gets a phone killed for memory -- what is in flight here is a
-    /// few megabytes, not the whole history.
-    private static let conversationFetchWindow = conversationFetchConcurrency * 4
-
     /// What a session's cache says the next read should ask for.
     ///
     /// Extracted so the history sync's batch and the single read in
@@ -6509,203 +6553,65 @@ final class AppModel {
     /// freshness of one screen, which is the lesson the two-megabyte page
     /// taught.
     func syncAllConversations() async {
-        // One pass at a time, and the flag is released on every exit.
-        //
-        // This has no other guard: the button that starts it is disabled while
-        // `isSyncing`, but `syncProgress` was only set after the session list
-        // came back, so a second tap in that window started a second full pass
-        // over every session. Measured on a real run, seven passes' worth of
-        // pages were fetched for one refresh -- about five megabytes each, over
-        // a relay, on a phone.
-        //
-        // The `defer` matters more than the guard. `syncProgress` was assigned
-        // nil at the end of the happy path only, so any early return or
-        // cancellation left `isSyncing` true for good, with the refresh button
-        // spinning and disabled and no way back.
-        guard syncProgress == nil else {
-            log.add(.sync, "history sync: already running, second request ignored")
-            return
-        }
-        syncProblem = nil
-        // One clock for the whole pass, carried across the two assignments
-        // below: the estimate is measured from when the operator asked, not from
-        // whenever the session list happened to come back.
-        let startedAt = Date()
-        log.add(.sync, "history sync: starting")
-        syncProgress = SyncProgress(current: "", completed: 0, total: sessions.count, startedAt: startedAt)
-        defer { syncProgress = nil }
-
-        // The refresh opens a socket when there is none -- that is where the
-        // old Retry button's reconnect now lives -- so the connection is
-        // checked after it rather than before it. The LAN question comes first
-        // for the same reason a plain refresh asks it: this is a manual update,
-        // and a manual update is the operator saying "get current", which
-        // includes being on the right network.
-        await scanForLocalNetwork()
-        await refreshSessions()
-        guard connection != nil else {
-            log.add(.sync, "history sync: skipped, not connected to the computer")
-            // Reported rather than silently skipped. The window is already up
-            // by the time this runs, and doing nothing looks exactly like having
-            // nothing to do.
-            // The connection's own reason first: a pass that never started is
-            // explained by why there is no socket, not by the read that noticed.
-            syncProblem = connectionError ?? lastError ?? "Not connected to the computer."
-            return
-        }
-        guard !sessions.isEmpty else {
-            log.add(.sync, "history sync: the computer listed no sessions, or the list could not be read")
-            // Either the computer listed nothing or the read failed. Both are worth
-            // saying out loud; neither is "up to date".
-            syncProblem = connectionError ?? lastError ?? "The computer listed no sessions."
-            return
-        }
-
-        // Every top-level conversation, and only those. A forked conversation
-        // ("branch in a new conversation") is a top-level one and its history
-        // belongs on the phone; only a delegated child has no page the operator
-        // would ever open here, and `isSubagent` is the host's own mark for it.
-        let runnable = sessions.filter { !$0.isSubagent }
-        log.add(.sync, "history sync: \(runnable.count) sessions to fetch")
-        syncProgress = SyncProgress(current: "", completed: 0, total: runnable.count, startedAt: startedAt)
-
-        // Phase 1 -- decide on the phone, then ask in parallel.
-        //
-        // The pass used to run one conversation at a time, two round trips each.
-        // On a machine with a few hundred sessions that is the whole cost of the
-        // button: the relay's servers sat idle while the phone spent a hundred
-        // milliseconds per session waiting for an answer that was usually a few
-        // kilobytes. Nothing about a history sync needs session N to have landed
-        // before N+1 is asked for -- they are independent pages -- so the reads
-        // are issued together, bounded (see `conversationFetchConcurrency`) and
-        // keyed by session id.
-        var unchanged: Set<String> = []
-        var pending: [PendingSync] = []
-        for session in runnable {
-            // A session's row moves when anything a history pass would fetch
-            // moves: a new record, a rename, a model change. If the stored
-            // conversation already covers that instant, the request would
-            // return nothing; with hundreds of sessions those empty round trips
-            // are the whole cost of the button.
-            let known = await conversations.load(sessionId: session.sessionId)
-            if HistorySyncPolicy.isCurrent(known, updatedAt: session.updatedAt) {
-                unchanged.insert(session.sessionId)
-                continue
-            }
-            pending.append(
-                PendingSync(
-                    session: session,
-                    cursor: Self.nextCursor(for: known),
-                    // What the stored filter actually covers, not the row's
-                    // instant: the host compares *this* against its row to
-                    // decide whether a read can be skipped, and a fresh row
-                    // with a stale cache must never look covered.
-                    coveredAt: known?.syncedUpdatedAt ?? 0,
-                ),
-            )
-        }
-        // Sessions that need nothing are done for the purposes of the bar: no
-        // request will ever be made for them.
-        syncProgress?.completed = unchanged.count
-        for session in runnable where unchanged.contains(session.sessionId) {
-            log.add(.sync, "history sync: \(session.sessionId) unchanged")
-        }
-
-        // Phase 2 -- ask in batches, fold each answer in one session at a time.
-        //
-        // The batch is the point: `session.sync` answers a whole window of
-        // sessions in one frame, so a machine with hundreds of sessions costs a
-        // handful of round trips instead of one per session. The real cost of
-        // this button was never the bytes -- it was one public round trip per
-        // session through two hops.
-        //
-        // A host that does not know the method answers `NOT_IMPLEMENTED`; the
-        // fallback below is the per-session fan-out this app shipped before, so
-        // an older computer keeps working and simply stays slower.
-        //
-        // The fold stays serial and windowed on purpose: a page is merged into a
-        // cache, paged back, repaired and reflected in the island, and those
-        // steps read and write one session's stored conversation in order. The
-        // window is also the memory bound -- decoding a whole first sync's pages
-        // before writing any of them is how a faster sync gets a phone killed.
-        var completed = unchanged.count
-        var queue = pending
-        var batchUnsupported = false
-        var rounds = 0
-        while !queue.isEmpty {
-            // Re-read the socket per round: `refreshSessions` above (and a
-            // reconnect during the pass) can replace it, and a request sent to
-            // the closed one would fail for a reason that is not the session's.
-            guard let connection else {
-                log.add(.sync, "history sync: stopped with \(queue.count) session(s) unread, not connected")
-                break
-            }
-            // A host that answers nothing must not make this loop spin: every
-            // round either settles at least one session or drops one from the
-            // queue, so a working host never reaches this ceiling.
-            rounds += 1
-            if rounds > runnable.count * 3 + 16 {
-                log.add(.sync, "history sync: stopped after \(rounds) rounds, \(queue.count) session(s) unread")
-                break
-            }
-            let window = Array(queue.prefix(Self.conversationFetchWindow))
-            let rest = Array(queue.dropFirst(window.count))
-
-            var handled: Set<String> = []
-            if !batchUnsupported {
-                switch await requestSyncBatch(window, over: connection) {
-                case .answered(let batch):
-                    for item in batch.items where !handled.contains(item.sessionId) {
-                        guard let entry = window.first(where: { $0.session.sessionId == item.sessionId }) else {
-                            continue
-                        }
-                        handled.insert(item.sessionId)
-                        completed += 1
-                        syncProgress?.current = Self.label(for: entry.session)
-                        await applySyncItem(item, for: entry)
-                        syncProgress?.completed = completed
-                        log.add(.sync, "history sync: \(completed)/\(runnable.count) \(item.sessionId)")
-                    }
-                    // Whatever the host did not answer goes back to the front of
-                    // the queue, in the order it was asked. A batch that answered
-                    // nothing falls through to the single-call path below so one
-                    // bad answer cannot stall the whole pass.
-                    if handled.isEmpty {
-                        log.add(.sync, "history sync: the batch answered no sessions; reading this window one by one")
-                    } else {
-                        queue = window.filter { !handled.contains($0.session.sessionId) } + rest
-                        continue
-                    }
-                case .unsupported:
-                    batchUnsupported = true
-                    log.add(.sync, "history sync: this computer does not answer batched reads; one request per session")
-                case .failed(let reason):
-                    log.add(.sync, "history sync: batch read failed (\(reason)); reading this window one by one")
+        let operations = ConversationSyncCoordinator.Operations(
+            identity: { [weak self] in self?.currentHistorySyncIdentity },
+            initialTotal: { [weak self] in self?.sessions.count ?? 0 },
+            isConnected: { [weak self] in self?.connection != nil },
+            preflight: { [weak self] identity in
+                guard let self, self.historySyncIsCurrent(identity) else { return .stale }
+                await self.scanForLocalNetwork(historyValidity: { self.historySyncIsCurrent(identity) })
+                guard !Task.isCancelled, self.historySyncIsCurrent(identity) else { return .stale }
+                await self.refreshSessions(historyValidity: { self.historySyncIsCurrent(identity) })
+                guard !Task.isCancelled, self.historySyncIsCurrent(identity) else { return .stale }
+                guard self.connection != nil else {
+                    return .disconnected(self.connectionError ?? self.lastError ?? "Not connected to the computer.")
                 }
-            }
-
-            // Per-session fallback for one window (older host, or a batch that
-            // failed). Pages are fetched concurrently and folded serially.
-            let pages = await fetchConversationPages(window, over: connection)
-            for entry in window {
-                syncProgress?.current = Self.label(for: entry.session)
-                completed += 1
-                await applySyncedPage(pages[entry.session.sessionId], for: entry)
-                syncProgress?.completed = completed
-                log.add(.sync, "history sync: \(completed)/\(runnable.count) \(entry.session.sessionId)")
-            }
-            queue = rest
-        }
-        let elapsed = Date().timeIntervalSince(startedAt)
-        log.add(.sync, String(format: "history sync: finished in %.1f s", elapsed))
-        await persistIndex()
-        // A pass over every session can see a session stop running without that
-        // session being the one whose page was just fetched, which is the one
-        // case the per-page refresh above cannot notice.
-        await refreshLiveActivity()
-        // The pass ran to the end. Whatever went wrong inside it is already
-        // recorded, and this is the line that lets the window stop saying it.
-        syncProblem = connectionError ?? lastError
+                guard !self.sessions.isEmpty else {
+                    return .empty(self.connectionError ?? self.lastError ?? "The computer listed no sessions.")
+                }
+                return .ready(self.sessions)
+            },
+            load: { [weak self] sessionId in
+                guard let self, !Task.isCancelled else { return nil }
+                return await self.conversations.load(sessionId: sessionId)
+            },
+            nextCursor: Self.nextCursor(for:),
+            batch: { [weak self] identity, entries in
+                guard let self else { return .failed("not connected") }
+                return await self.requestSyncBatch(entries, historyValidity: {
+                    self.historySyncIsCurrent(identity)
+                })
+            },
+            fallback: { [weak self] identity, entries in
+                guard let self, !Task.isCancelled, self.historySyncIsCurrent(identity),
+                      let connection = self.connection else { return [:] }
+                return await self.fetchConversationPages(entries, over: connection, historyValidity: {
+                    !Task.isCancelled && self.historySyncIsCurrent(identity)
+                })
+            },
+            applyPage: { [weak self] entry, page, valid in
+                guard let self, valid() else { return }
+                await self.applySyncedPage(page, for: entry, historyValidity: valid)
+            },
+            markUnchanged: { [weak self] entry, valid in
+                guard let self, valid() else { return }
+                await self.markConversationSynced(
+                    entry.session.sessionId,
+                    updatedAt: entry.session.updatedAt,
+                    historyValidity: valid,
+                )
+            },
+            finish: { [weak self] identity, valid in
+                guard let self, valid() else { return nil }
+                await self.persistIndex()
+                guard valid() else { return nil }
+                await self.refreshLiveActivity()
+                guard valid() else { return nil }
+                return self.connectionError ?? self.lastError
+            },
+            log: { [weak self] message in self?.log.add(.sync, message) },
+        )
+        await conversationSyncCoordinator.sync(using: operations)
     }
 
     /// Fetch one window of conversation pages at once.
@@ -6722,9 +6628,11 @@ final class AppModel {
     ///   - connection: the socket to ask. Read per window by the caller.
     /// - Returns: the pages that arrived, keyed by session id.
     private func fetchConversationPages(
-        _ entries: [PendingSync],
+        _ entries: [ConversationSyncCoordinator.Entry],
         over connection: MizarConnection,
+        historyValidity: (@MainActor () -> Bool)? = nil,
     ) async -> [String: SessionMessagesResult] {
+        guard historyValidity?() ?? true else { return [:] }
         let requests = entries.map { entry in
             (
                 id: entry.session.sessionId,
@@ -6742,6 +6650,7 @@ final class AppModel {
             requests,
             concurrency: Self.conversationFetchConcurrency,
         )
+        guard historyValidity?() ?? true else { return [:] }
         var pages: [String: SessionMessagesResult] = [:]
         pages.reserveCapacity(outcomes.count)
         for (sessionId, outcome) in outcomes {
@@ -6758,34 +6667,6 @@ final class AppModel {
         return pages
     }
 
-    /// One session the history sync still has to read.
-    ///
-    /// `coveredAt` is the cache's own coverage (`syncedUpdatedAt`), not the
-    /// row's instant. The host compares it against its row to decide whether the
-    /// read can be skipped; sending the row's own timestamp instead would ask
-    /// "is my row newer than my row", which is always true and would make the
-    /// host skip a page this phone does not actually hold.
-    private struct PendingSync {
-        let session: SessionRow
-        let cursor: SessionMessagesCursor
-        let coveredAt: Double
-    }
-
-    /// What one `session.sync` attempt produced.
-    private enum SyncBatchOutcome {
-        case answered(SessionSyncResult)
-        /// The host does not know the method (an older computer).
-        case unsupported
-        /// The call failed for another reason; the window falls back to
-        /// one request per session rather than stalling the pass.
-        case failed(String)
-    }
-
-    /// The row's short name, for the progress line.
-    private static func label(for session: SessionRow) -> String {
-        session.cwd.map { ($0 as NSString).lastPathComponent } ?? session.sessionId
-    }
-
     /// Ask the host for a whole window of conversation pages in one frame.
     ///
     /// - Parameters:
@@ -6794,9 +6675,10 @@ final class AppModel {
     ///   - connection: the socket to ask.
     /// - Returns: the answer, or why there is none.
     private func requestSyncBatch(
-        _ entries: [PendingSync],
-        over connection: MizarConnection,
-    ) async -> SyncBatchOutcome {
+        _ entries: [ConversationSyncCoordinator.Entry],
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async -> ConversationSyncCoordinator.Batch {
+        guard historyValidity?() ?? true else { return .failed("history pass expired") }
         var items: [JSONValue] = []
         items.reserveCapacity(entries.count)
         for entry in entries {
@@ -6818,10 +6700,11 @@ final class AppModel {
                     // Under the relay's 900 KiB frame cap; the host also clamps
                     // this, so a client that asks for more does not get a frame
                     // the phone would drop.
-                    "maxBytes": .number(600_000),
-                    "maxItems": .number(Double(Self.conversationFetchWindow)),
+                    "maxBytes": .number(Double(ConversationSyncCoordinator.maxBytes)),
+                    "maxItems": .number(Double(ConversationSyncCoordinator.windowSize)),
                 ]),
                 as: SessionSyncResult.self,
+                historyValidity: historyValidity,
             )
             return .answered(result)
         } catch let error as MizarError where error.code == "NOT_IMPLEMENTED" {
@@ -6831,32 +6714,6 @@ final class AppModel {
         }
     }
 
-    /// Fold one answered batch item in.
-    ///
-    /// - Parameters:
-    ///   - item: what the host said about this session.
-    ///   - entry: the row and cursor it was asked with.
-    private func applySyncItem(_ item: SessionSyncItem, for entry: PendingSync) async {
-        if item.unchanged == true {
-            // The host's row has not moved past what this cache covers: no page
-            // is missing, and the row instant is now covered.
-            await markConversationSynced(entry.session.sessionId, updatedAt: entry.session.updatedAt)
-            return
-        }
-        if let page = item.messages {
-            await applySyncedPage(page, for: entry)
-            return
-        }
-        // A per-item error or an empty answer: retry this one on the path that
-        // knows how to reconnect. A permanent refusal fails the same way and
-        // costs one request.
-        log.add(
-            .sync,
-            "history sync: \(entry.session.sessionId) in the batch failed: \(item.error?.message ?? "no answer")",
-        )
-        await applySyncedPage(nil, for: entry)
-    }
-
     /// Merge one page into the cache and record that the row instant is covered.
     ///
     /// - Parameters:
@@ -6864,12 +6721,19 @@ final class AppModel {
     ///   - entry: the row and cursor this session was asked with.
     /// - Returns: whether the read landed (and the watermark advanced).
     @discardableResult
-    private func applySyncedPage(_ page: SessionMessagesResult?, for entry: PendingSync) async -> Bool {
+    private func applySyncedPage(
+        _ page: SessionMessagesResult?,
+        for entry: ConversationSyncCoordinator.Entry,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async -> Bool {
+        guard historyValidity?() ?? true else { return false }
         let synced = await syncConversation(
             for: entry.session.sessionId,
             page: page,
             delta: entry.cursor.isDelta,
+            historyValidity: historyValidity,
         )
+        guard historyValidity?() ?? true else { return false }
         // The title rides on the session row now. `adoptTitles` already took it
         // from the fresh list; writing it again only when it actually differs
         // keeps an observed dictionary from notifying the sidebar once per
@@ -6878,8 +6742,11 @@ final class AppModel {
             titles[entry.session.sessionId] = title
         }
         if synced.succeeded {
-            await markConversationSynced(entry.session.sessionId, updatedAt: entry.session.updatedAt)
-            return true
+            return await markConversationSynced(
+                entry.session.sessionId,
+                updatedAt: entry.session.updatedAt,
+                historyValidity: historyValidity,
+            )
         }
         return false
     }
@@ -6903,8 +6770,15 @@ final class AppModel {
     }
 
     /// Remember which session-row instant this conversation covers.
-    private func markConversationSynced(_ sessionId: String, updatedAt: Double) async {
-        guard let stored = await conversations.load(sessionId: sessionId) else { return }
+    @discardableResult
+    private func markConversationSynced(
+        _ sessionId: String,
+        updatedAt: Double,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async -> Bool {
+        guard historyValidity?() ?? true else { return false }
+        guard let stored = await conversations.load(sessionId: sessionId) else { return false }
+        guard historyValidity?() ?? true else { return false }
         await conversations.update(sessionId: sessionId) { current in
             let base = current ?? stored
             return CachedConversation(
@@ -6920,6 +6794,7 @@ final class AppModel {
                 syncedUpdatedAt: updatedAt,
             )
         }
+        return historyValidity?() ?? true
     }
 
     /// Walk the page window back until the history reaches its start or the
@@ -6935,13 +6810,20 @@ final class AppModel {
     /// Bounded per pass: a conversation with years of history should become
     /// complete over a few passes, not hold a request loop for minutes.
     @discardableResult
-    private func backfillHistory(for sessionId: String, maxPages: Int = 16) async -> Int {
+    private func backfillHistory(
+        for sessionId: String,
+        maxPages: Int = 16,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async -> Int {
         var added = 0
         for _ in 0..<maxPages {
+            guard historyValidity?() ?? true else { break }
             guard let cached = await conversations.load(sessionId: sessionId), cached.hasMore else {
                 break
             }
-            guard let count = await loadOlder(sessionId: sessionId), count > 0 else { break }
+            guard historyValidity?() ?? true else { break }
+            guard let count = await loadOlder(sessionId: sessionId, historyValidity: historyValidity), count > 0 else { break }
+            guard historyValidity?() ?? true else { break }
             added += count
         }
         return added
@@ -6957,8 +6839,10 @@ final class AppModel {
         for sessionId: String,
         page: SessionMessagesResult? = nil,
         delta: Bool? = nil,
+        historyValidity: (@MainActor () -> Bool)? = nil,
     ) async -> SyncedConversation {
         do {
+            guard historyValidity?() ?? true else { throw CancellationError() }
             // A page already in hand -- the history sync fetched a batch of them
             // together -- is used as it is. Asking again would put back the round
             // trip the fan-out just removed.
@@ -6973,10 +6857,12 @@ final class AppModel {
                 // had every record and paid for them again on every pull,
                 // reconnect and poll.
                 let known = await conversations.load(sessionId: sessionId)
+                guard historyValidity?() ?? true else { throw CancellationError() }
                 let cursor = Self.nextCursor(for: known)
                 isDelta = cursor.isDelta
-                result = try await messages(sessionId: sessionId, afterSeq: cursor)
+                result = try await messages(sessionId: sessionId, afterSeq: cursor, historyValidity: historyValidity)
             }
+            guard historyValidity?() ?? true else { throw CancellationError() }
             let fresh = result.conversationItems()
             let freshTurns = result.conversationTurns()
             let older = result.oldestSeq
@@ -6985,6 +6871,7 @@ final class AppModel {
             // this conversation runs against a returning-to-foreground reload --
             // two overlapping read-modify-writes of one file lose one of them,
             // and what is lost is a page somebody just asked for.
+            guard historyValidity?() ?? true else { throw CancellationError() }
             let stored = await conversations.update(sessionId: sessionId) { cached in
                 CachedConversation(
                     sessionId: sessionId,
@@ -7022,6 +6909,7 @@ final class AppModel {
                         .max(),
                 )
             }
+            guard historyValidity?() ?? true else { throw CancellationError() }
             lastError = nil
             conversationError = nil
             log.add(.cache, "session \(sessionId): stored \(stored.items.count) items")
@@ -7031,7 +6919,8 @@ final class AppModel {
             // no later incremental read would ever ask for the skipped history.
             // This is the read scrolling to the top makes, without making the
             // operator discover that the history is missing.
-            let backfilled = await backfillHistory(for: sessionId)
+            let backfilled = await backfillHistory(for: sessionId, historyValidity: historyValidity)
+            guard historyValidity?() ?? true else { throw CancellationError() }
             if backfilled > 0 {
                 log.add(
                     .cache,
@@ -7043,19 +6932,22 @@ final class AppModel {
             // `turn/end` among the skipped ones leaves a turn the screen draws
             // as still running above turns that finished. See
             // ``repairStaleRunningTurns(for:)``.
-            let repaired = await repairStaleRunningTurns(for: sessionId)
+            let repaired = await repairStaleRunningTurns(for: sessionId, historyValidity: historyValidity)
+            guard historyValidity?() ?? true else { throw CancellationError() }
             // The other half of what the island shows just arrived: the running
             // turn's own clock and the instruction it is working on. Refreshed
             // here rather than at the end of a full pass so that the first page
             // fetched -- normally the session the operator opened -- is enough to
             // put a real figure on the card instead of a clock started at zero.
-            await refreshLiveActivity()
+            if historyValidity?() ?? true { await refreshLiveActivity() }
+            guard historyValidity?() ?? true else { throw CancellationError() }
             // A repair folded older records in, and the screen draws the cache:
             // return what is on disk now rather than the page before the repair,
             // so "what is on screen and what is stored" stay the same answer.
             let refreshed = backfilled > 0 || repaired
                 ? await conversations.load(sessionId: sessionId)
                 : nil
+            guard historyValidity?() ?? true else { throw CancellationError() }
             return SyncedConversation(
                 items: refreshed?.items ?? stored.items,
                 stats: refreshed?.stats ?? stored.stats,
@@ -7068,7 +6960,7 @@ final class AppModel {
             // screen. Left in, the operator coming back would find "The computer did
             // not answer" waiting for a computer that answered perfectly well the
             // moment the app could ask again.
-            if Task.isCancelled {
+            if Task.isCancelled || !(historyValidity?() ?? true) {
                 log.add(.cache, "session \(sessionId): read cancelled; nothing changed")
                 return SyncedConversation(items: [], stats: nil, succeeded: false)
             }
@@ -7145,19 +7037,24 @@ final class AppModel {
     ///   it then, because the page needed to repair an end is also older
     ///   conversation the screen should now hold.
     @discardableResult
-    private func repairStaleRunningTurns(for sessionId: String) async -> Bool {
+    private func repairStaleRunningTurns(
+        for sessionId: String,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async -> Bool {
         var changed = false
         for _ in 0..<Self.staleRunRepairRounds {
+            guard historyValidity?() ?? true else { return changed }
             guard let cached = await conversations.load(sessionId: sessionId),
                   let stale = staleRunningTurn(in: cached.turns ?? [])
             else { return changed }
+            guard historyValidity?() ?? true else { return changed }
             if let before = stale.beforeSeq {
                 var ceiling = before
                 var repaired = false
                 for _ in 0..<Self.staleRunRepairPages {
                     // Without a socket the next round trip cannot land, and the
                     // turns below are settled rather than left counting.
-                    guard connection != nil else { break }
+                    guard historyValidity?() ?? true, connection != nil else { break }
                     // A background refresh is spending an assertion it must not
                     // outlive; the page below is a request like any other.
                     if let deadline = backgroundDeadline,
@@ -7165,7 +7062,12 @@ final class AppModel {
                         break
                     }
                     do {
-                        let page = try await messages(sessionId: sessionId, beforeSeq: ceiling)
+                        let page = try await messages(
+                            sessionId: sessionId,
+                            beforeSeq: ceiling,
+                            historyValidity: historyValidity,
+                        )
+                        guard historyValidity?() ?? true else { return changed }
                         // A page with nothing in it, or one that did not move
                         // back, is the host saying there is nothing older here;
                         // asking again would loop.
@@ -7173,6 +7075,7 @@ final class AppModel {
                               let oldest = page.oldestSeq,
                               oldest < ceiling
                         else { break }
+                        guard historyValidity?() ?? true else { return changed }
                         let stored = await conversations.update(sessionId: sessionId) { existing in
                             let known = existing ?? CachedConversation(
                                 sessionId: sessionId,
@@ -7182,6 +7085,7 @@ final class AppModel {
                             )
                             return Self.folding(older: page, into: known, sessionId: sessionId)
                         }
+                        guard historyValidity?() ?? true else { return changed }
                         if staleRunningTurn(in: stored.turns ?? []) == nil {
                             repaired = true
                             break
@@ -7193,7 +7097,7 @@ final class AppModel {
                         if let start = stale.turn.orderSeq, oldest <= start { break }
                         ceiling = oldest
                     } catch {
-                        if !Task.isCancelled {
+                        if !Task.isCancelled, historyValidity?() ?? true {
                             log.add(
                                 .cache,
                                 "session \(sessionId): could not repair a turn end a page stepped over",
@@ -7215,8 +7119,9 @@ final class AppModel {
             // running out; it must not keep doing disk work, and a settlement
             // logged as a decision nobody made would be the same mistake in the
             // log. The draw-time rule still settles it on screen.
-            if Task.isCancelled { return changed }
-            await settleStaleRunningTurns(for: sessionId)
+            if Task.isCancelled || !(historyValidity?() ?? true) { return changed }
+            await settleStaleRunningTurns(for: sessionId, historyValidity: historyValidity)
+            guard historyValidity?() ?? true else { return changed }
             log.add(
                 .cache,
                 "session \(sessionId): settled a turn a later turn proved is over; its end record is missing",
@@ -7226,10 +7131,12 @@ final class AppModel {
         // The bound was reached with a stale run still held: one skipped window
         // lost more endings than the rounds allow. Settle what is left rather
         // than leave the screen counting it.
-        if !Task.isCancelled,
+        if !Task.isCancelled, historyValidity?() ?? true,
            let cached = await conversations.load(sessionId: sessionId),
            staleRunningTurn(in: cached.turns ?? []) != nil {
-            await settleStaleRunningTurns(for: sessionId)
+            guard historyValidity?() ?? true else { return changed }
+            await settleStaleRunningTurns(for: sessionId, historyValidity: historyValidity)
+            guard historyValidity?() ?? true else { return changed }
             log.add(
                 .cache,
                 "session \(sessionId): settled the turns a later turn proved are over; their end records are missing",
@@ -7243,11 +7150,15 @@ final class AppModel {
     /// over. See ``repairStaleRunningTurns(for:)``.
     ///
     /// - Parameter sessionId: the session to settle.
-    private func settleStaleRunningTurns(for sessionId: String) async {
+    private func settleStaleRunningTurns(
+        for sessionId: String,
+        historyValidity: (@MainActor () -> Bool)? = nil,
+    ) async {
         // Nothing to settle into a cache that no longer exists: the update would
         // write an empty conversation back, which is the opposite of what the
         // operator asked for when the cache went away.
-        guard await conversations.load(sessionId: sessionId) != nil else { return }
+        guard await conversations.load(sessionId: sessionId) != nil,
+              historyValidity?() ?? true else { return }
         await conversations.update(sessionId: sessionId) { known in
             CachedConversation(
                 sessionId: sessionId,
@@ -7351,9 +7262,11 @@ final class AppModel {
         beforeSeq: Int? = nil,
         afterSeq: SessionMessagesCursor = .unstated,
         maxMessages: Int = 200,
+        historyValidity: (@MainActor () -> Bool)? = nil,
     ) async throws -> SessionMessagesResult {
         var ask = maxMessages
         while true {
+            guard historyValidity?() ?? true else { throw CancellationError() }
             let fields = messagesFields(
                 sessionId: sessionId,
                 beforeSeq: beforeSeq,
@@ -7365,6 +7278,7 @@ final class AppModel {
                     "session.messages",
                     payload: .object(fields),
                     as: SessionMessagesResult.self,
+                    historyValidity: historyValidity,
                 )
             } catch let error as MizarError {
                 guard let smaller = error.smallerPage(than: ask) else { throw error }
