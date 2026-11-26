@@ -114,6 +114,181 @@ struct ConnectionCoordinatorTests {
         }
     }
 
+    // MARK: Launch plan
+
+    @Test("the plan is the allowed routes, with the preferred one in front")
+    func planFollowsRoutePolicyAndPreference() {
+        let coordinator = ConnectionCoordinator()
+
+        #expect(plan(coordinator).routes == [direct, p2p, relay])
+        // The route that just answered leads the rest of the pairing.
+        #expect(plan(coordinator, active: relay).routes == [relay, direct, p2p])
+        #expect(plan(coordinator, active: p2p).routes == [p2p, direct, relay])
+        // 局域网优先 off forbids the direct address entirely.
+        #expect(plan(coordinator, allowingLocalNetwork: false).routes == [p2p, relay])
+        // 直连 off forbids the punched route.
+        #expect(plan(coordinator, allowingDirectPath: false).routes == [direct, relay])
+        #expect(plan(coordinator, allowingLocalNetwork: false, allowingDirectPath: false).routes == [relay])
+        // An active route the switches no longer allow stops leading: the
+        // punched route is dropped, so the direct address leads again.
+        #expect(plan(coordinator, active: p2p, allowingDirectPath: false).routes == [direct, relay])
+        // A still-allowed active relay does keep leading, even with the punched
+        // route switched off.
+        #expect(plan(coordinator, active: relay, allowingDirectPath: false).routes == [relay, direct])
+    }
+
+    @Test("start delays are a property of the route kind, not of list order")
+    func planStaggersByRouteKind() {
+        let coordinator = ConnectionCoordinator()
+
+        // Direct alone: no one to wait for.
+        #expect(delay(of: direct, in: plan(coordinator, endpoints: [direct])) == Duration.zero)
+
+        // Direct plus relay: the relay waits one head start.
+        let directRelay = plan(coordinator, endpoints: [direct, relay])
+        #expect(delay(of: direct, in: directRelay) == Duration.zero)
+        #expect(delay(of: relay, in: directRelay) == Duration.milliseconds(400))
+
+        // Direct, punched route and relay: 0 / 400 / 800 ms.
+        let full = plan(coordinator, endpoints: [direct, p2p, relay])
+        #expect(delay(of: direct, in: full) == Duration.zero)
+        #expect(delay(of: p2p, in: full) == Duration.milliseconds(400))
+        #expect(delay(of: relay, in: full) == Duration.milliseconds(800))
+
+        // No direct address: the punched route starts at once, the relay one
+        // head start behind it.
+        let punch = plan(coordinator, endpoints: [p2p, relay])
+        #expect(delay(of: p2p, in: punch) == Duration.zero)
+        #expect(delay(of: relay, in: punch) == Duration.milliseconds(400))
+
+        // A lone punched route, and a relay with nothing to wait behind.
+        #expect(delay(of: p2p, in: plan(coordinator, endpoints: [p2p])) == Duration.zero)
+        #expect(delay(of: relay, in: plan(coordinator, endpoints: [relay])) == Duration.zero)
+        // An alternate relay is not another kind: neither waits.
+        let twoRelays = plan(coordinator, endpoints: [relay, relayOther])
+        #expect(twoRelays.dials.map(\.delay) == [Duration.zero, Duration.zero])
+    }
+
+    @Test("a preferred route leads the list but keeps its own kind's delay")
+    func planSeparatesListOrderFromStartDelay() {
+        let coordinator = ConnectionCoordinator()
+
+        // Preferred relay: first in the list, still waiting behind the direct
+        // address, which is second in the list and starts at once.
+        let relayFirst = plan(coordinator, endpoints: [direct, relay], active: relay)
+        #expect(relayFirst.routes == [relay, direct])
+        #expect(delay(of: relay, in: relayFirst) == Duration.milliseconds(400))
+        #expect(delay(of: direct, in: relayFirst) == Duration.zero)
+
+        // Preferred punched route with no direct address: leads and starts at
+        // once; the relay keeps its one-head-start wait.
+        let punchFirst = plan(coordinator, endpoints: [p2p, relay], active: p2p)
+        #expect(punchFirst.routes == [p2p, relay])
+        #expect(delay(of: p2p, in: punchFirst) == Duration.zero)
+        #expect(delay(of: relay, in: punchFirst) == Duration.milliseconds(400))
+    }
+
+    @Test("p2p-only filtering is a flag, not a process global")
+    func planKeepsOnlyThePunchedRouteWhenAsked() {
+        let coordinator = ConnectionCoordinator()
+
+        #expect(plan(coordinator, p2pOnly: true).routes == [p2p])
+        #expect(delay(of: p2p, in: plan(coordinator, p2pOnly: true)) == Duration.zero)
+        // Filtering happens before the delays are computed, so the punched
+        // route no longer waits for a direct address that is gone.
+        #expect(delay(of: p2p, in: plan(coordinator, endpoints: [direct, p2p], p2pOnly: true)) == Duration.zero)
+        // A pairing with no punched route has nothing left to dial.
+        #expect(plan(coordinator, endpoints: [direct, relay], p2pOnly: true).isEmpty)
+        #expect(plan(coordinator, endpoints: [direct, relay], p2pOnly: false).isEmpty == false)
+    }
+
+    @Test("a plan with no allowed route is empty, not a one-route guess")
+    func planIsEmptyWhenEveryRouteIsForbidden() {
+        let coordinator = ConnectionCoordinator()
+
+        let empty = plan(
+            coordinator,
+            endpoints: [direct, p2p],
+            allowingLocalNetwork: false,
+            allowingDirectPath: false,
+        )
+        #expect(empty.isEmpty)
+        #expect(empty.routes.isEmpty)
+        #expect(empty.dials.isEmpty)
+        // The same pairing with nothing in it at all.
+        #expect(plan(coordinator, endpoints: []).isEmpty)
+    }
+
+    @Test("a launch opens one socket per planned route through the caller's factory")
+    func launchDialsEveryPlannedRouteThroughFactory() async throws {
+        let coordinator = ConnectionCoordinator()
+        let firstSocket = GatedConnectionTransport()
+        let secondSocket = GatedConnectionTransport()
+        let first = connection(transport: firstSocket)
+        let second = connection(transport: secondSocket)
+        let recorder = EndpointRecorder()
+        // Two relays: distinct routes, and neither kind waits behind the other,
+        // so both dials start without a sleep.
+        let firstRoute = relay
+        let secondRoute = relayOther
+        let launch = plan(coordinator, endpoints: [firstRoute, secondRoute])
+
+        let race = Task {
+            try await coordinator.launch(
+                launch,
+                makeConnection: { endpoint in
+                    recorder.note(endpoint)
+                    return endpoint == firstRoute ? first : second
+                },
+            )
+        }
+
+        await firstSocket.waitUntilReceiving()
+        await secondSocket.waitUntilReceiving()
+        await secondSocket.answerHandshake()
+        let answer = try await race.value
+
+        // The factory was asked for both planned routes, in plan order, before
+        // the race had a winner; the loser was closed on the way out.
+        #expect(recorder.endpoints == [firstRoute, secondRoute])
+        #expect(answer.endpoint == secondRoute)
+        #expect(answer.connection === second)
+        #expect(await firstSocket.didClose)
+
+        await second.disconnect()
+    }
+
+    // MARK: Launch-plan fixtures
+
+    private var direct: PairedHost.Endpoint { .direct(authority: "10.0.0.2:19395") }
+    private var p2p: PairedHost.Endpoint { .p2p(relayBaseURL: "https://relay.example", endpointId: "endpoint-1") }
+    private var relay: PairedHost.Endpoint { .relay(baseURL: "https://relay.example") }
+    private var relayOther: PairedHost.Endpoint { .relay(baseURL: "https://relay-2.example") }
+
+    private func plan(
+        _ coordinator: ConnectionCoordinator,
+        endpoints: [PairedHost.Endpoint]? = nil,
+        active: PairedHost.Endpoint? = nil,
+        allowingLocalNetwork: Bool = true,
+        allowingDirectPath: Bool = true,
+        p2pOnly: Bool = false,
+    ) -> ConnectionCoordinator.LaunchPlan {
+        coordinator.launchPlan(
+            endpoints: endpoints ?? [direct, p2p, relay],
+            active: active,
+            allowingLocalNetwork: allowingLocalNetwork,
+            allowingDirectPath: allowingDirectPath,
+            p2pOnly: p2pOnly,
+        )
+    }
+
+    private func delay(
+        of endpoint: PairedHost.Endpoint,
+        in plan: ConnectionCoordinator.LaunchPlan,
+    ) -> Duration? {
+        plan.dials.first { $0.endpoint == endpoint }?.delay
+    }
+
     private func connection(transport: GatedConnectionTransport = GatedConnectionTransport()) -> MizarConnection {
         MizarConnection(
             configuration: .init(
@@ -124,6 +299,19 @@ struct ConnectionCoordinatorTests {
             ),
             makeTransport: { transport },
         )
+    }
+}
+
+/// Collects the endpoints a launch's connection factory is asked for.
+///
+/// Main-actor isolated because construction, factory writes and assertions all
+/// stay on the suite's actor.
+@MainActor
+private final class EndpointRecorder {
+    private(set) var endpoints: [PairedHost.Endpoint] = []
+
+    func note(_ endpoint: PairedHost.Endpoint) {
+        endpoints.append(endpoint)
     }
 }
 

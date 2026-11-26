@@ -5396,8 +5396,8 @@ final class AppModel {
     /// asks the local network first, because that is where the phone usually is.
     ///
     /// The order is the operator's: **scan the LAN, and only if nothing answers
-    /// start the other routes**, with the punched route and the relay both held
-    /// back by the same head start (see ``connect(using:preferring:)``). That is
+    /// start the other routes**, whose waits the launch plan owns (see
+    /// ``connect(using:preferring:)``). That is
     /// cheaper than the sequential redial this used to do: a dead LAN address
     /// no longer costs its whole leash before the relay is even started.
     ///
@@ -7750,15 +7750,6 @@ final class AppModel {
         return account.identity.headers
     }
 
-    /// How long the relay waits while a direct route is being dialled.
-    ///
-    /// The launch race's only ordering rule. A computer on the same network
-    /// answers a WebSocket upgrade in tens of milliseconds, so this is generous
-    /// enough that a direct route which *can* answer always wins -- and short
-    /// enough that a direct address which cannot answer stops being the thing
-    /// the operator is waiting for.
-    private static let launchDirectHeadStart: Duration = .milliseconds(400)
-
     private typealias Answered = ConnectionCoordinator.Answered
     private typealias LaunchFailure = ConnectionCoordinator.Failure
 
@@ -7828,38 +7819,17 @@ final class AppModel {
         return .direct
     }
 
-    /// Open the socket and load the first screen's data.
+    /// Open the socket, then adopt the first route that answers.
     ///
-    /// Every route the pairing knows about is dialled **at the same time**, and
-    /// the first one to answer wins. That is the fix for a launch that felt
-    /// broken on a phone that had left its own network: the routes used to be
-    /// tried one after another, so a dead LAN address was paid for in full --
-    /// the direct leash, six seconds -- before the relay that would have
-    /// answered in one was even started, and the operator watched the sum of
-    /// two attempts when only one of them could ever have worked.
-    ///
-    /// The order still means something, and this is now the only thing it
-    /// means: **the local network gets a head start, alone**. The punched route
-    /// and every relay are held back by ``launchDirectHeadStart``, so a computer
-    /// on the same network answers first and the phone stays off the relay --
-    /// faster, and unmetered. When the direct address is dead the other routes
-    /// are already dialling by the time the first packet would have been lost, so
-    /// the fallback costs the head start instead of the direct timeout.
-    ///
-    /// Starting the punched route at the same time as the relay is deliberate:
-    /// the two are alternatives to the same lost LAN, not a sequence, and making
-    /// P2P wait behind the relay would hand the slower of the two every race.
-    ///
-    /// A loser is cancelled and closed, never left half-open: a race that leaked
-    /// a socket would leave the host with a second device session for every
-    /// launch.
-    ///
-    /// A pairing that has just completed passes the route it paired over as
-    /// `preferred`, so it races in front of the rest of the pairing.
+    /// Three things happen in order: the cached index is loaded before any
+    /// switch is read, so the first screen has a list as soon as a link exists;
+    /// the route list, with each route's wait, is
+    /// ``ConnectionCoordinator/launchPlan(endpoints:active:allowingLocalNetwork:allowingDirectPath:p2pOnly:)``'s
+    /// decision; and the winner is installed only after the race resolves.
     ///
     /// - Parameters:
     ///   - host: the pairing to connect with.
-    ///   - preferred: the route that just paired, when this connect follows a
+    ///   - preferred: the route that just answered, when this connect follows a
     ///     pairing; `nil` opens the pairing's own order.
     private func connect(
         using host: PairedHost,
@@ -7884,34 +7854,25 @@ final class AppModel {
         // every launch.
         await loadIndex(for: host.hostId)
         // The pairing's order when nothing is preferred; the route that just
-        // answered in front of it when something is.
+        // answered in front of it when something is. Which routes may be dialled
+        // and in what order is the coordinator's decision, so a launch, an open
+        // and a reconnect cannot disagree about it.
         log.add(.connection, "connecting with token \(host.deviceToken.count) chars")
-        var endpoints = ReconnectPlan.routes(
+        let launch = connectionCoordinator.launchPlan(
             endpoints: host.endpoints,
             active: preferred,
             allowingLocalNetwork: settings.localNetworkFirst,
             allowingDirectPath: settings.directConnection,
+            p2pOnly: Self.p2pOnlyDialRequested,
         )
-        #if DEBUG
-        // A cable-attached test can ask for the punched route alone. The launch
-        // race otherwise lets the relay win whenever its handshake is a few
-        // milliseconds faster, which makes "the app connected over P2P"
-        // impossible to observe even when the punch landed.
-        if ProcessInfo.processInfo.arguments.contains("-mizarP2POnly") {
-            endpoints = endpoints.filter { endpoint in
-                if case .p2p = endpoint { return true }
-                return false
-            }
-        }
-        #endif
         log.add(
             .connection,
-            "connect: routes \(endpoints.isEmpty ? "none" : endpoints.map(Self.routeName).joined(separator: ","))"
+            "connect: routes \(launch.isEmpty ? "none" : launch.routes.map(Self.routeName).joined(separator: ","))"
                 + " · switches lan \(settings.localNetworkFirst ? "on" : "off")"
                 + " p2p \(settings.directConnection ? "on" : "off")"
                 + " · key \(host.netEndpointId == nil ? "none" : "present")",
         )
-        guard !endpoints.isEmpty else {
+        guard !launch.isEmpty else {
             // Two different silences, told apart: a pairing with no address at
             // all, and one whose every address the operator has switched off.
             // The second is fixable from the settings screen and says so.
@@ -7927,50 +7888,44 @@ final class AppModel {
             throw error
         }
 
-        // LAN first, then the punched route, then the relay. The relay used to
-        // start beside the punch, and on a network where the punch worked it
-        // still lost every race: a relay handshake is a couple of round trips
-        // and a punch is a few hundred milliseconds. A head start gives the
-        // route the operator asked for a chance to win, and costs the fallback
-        // only that head start -- the relay dial is already in flight if the
-        // punch fails.
-        //
-        // A pairing with no direct address and no punched route has nothing to
-        // prefer, so its relay starts at once.
-        let hasDirect = endpoints.contains { if case .direct = $0 { return true } else { return false } }
-        let hasP2P = endpoints.contains { if case .p2p = $0 { return true } else { return false } }
-        let directDelay: Duration = hasDirect ? Self.launchDirectHeadStart : .zero
-        let p2pDelay = directDelay
-        let relayDelay = directDelay + (hasP2P ? Self.launchDirectHeadStart : .zero)
-        let dials = endpoints.map { endpoint in
-            let delay: Duration
-            switch endpoint {
-            case .direct: delay = .zero
-            case .p2p: delay = p2pDelay
-            case .relay: delay = relayDelay
-            }
-            return (
-                endpoint: endpoint,
-                connection: makeConnection(host: host, endpoint: endpoint),
-                delay: delay,
-            )
-        }
-
-        // One line for the whole race, in the order the dials start: the log
-        // used to carry a "dialling" line per attempt, and with the attempts
-        // overlapping that is now a plan rather than a sequence.
-        let plan = dials.map { dial in
+        // The waits themselves are the coordinator's schedule; this only says
+        // them out loud. One line for the whole race, listing the plan's routes
+        // in list order -- which is not always start order: a preferred relay
+        // leads the list and still waits behind a direct address later in it.
+        // The log used to carry a "dialling" line per attempt; with the attempts
+        // overlapping that is now a plan rather than a sequence. `makeConnection`
+        // neither awaits nor logs, so opening the sockets after this line does
+        // not move anything visible.
+        let dialPlan = launch.dials.map { dial in
             dial.delay > .zero
                 ? "\(Self.routeName(dial.endpoint)) after \(dial.delay)"
                 : Self.routeName(dial.endpoint)
         }
-        log.add(.connection, "dialling " + plan.joined(separator: " and "))
+        log.add(.connection, "dialling " + dialPlan.joined(separator: " and "))
 
         let answer: Answered
         do {
-            answer = try await firstAnswer(in: dials)
+            // The coordinator owns the race; the transport policy stays here, so
+            // it receives nothing but a way to make one socket per route.
+            answer = try await connectionCoordinator.launch(
+                launch,
+                makeConnection: { endpoint in
+                    makeConnection(host: host, endpoint: endpoint)
+                },
+                onFailure: { endpoint, error in
+                    self.log.add(
+                        .connection,
+                        "route \(Self.routeName(endpoint)) failed: "
+                            + Self.describe(
+                                error,
+                                authority: Self.routeDescription(endpoint).address,
+                                throughServer: ReconnectPlan.isRelay(endpoint),
+                            ),
+                    )
+                },
+            )
         } catch let failure as LaunchFailure {
-            log.add(.connection, "no route reached \(host.hostName); \(endpoints.count) tried")
+            log.add(.connection, "no route reached \(host.hostName); \(launch.dials.count) tried")
             // The failure is thrown rather than its last error: the caller may
             // have to describe it again, and only the plan knows which route
             // each reason came from.
@@ -7983,33 +7938,18 @@ final class AppModel {
         await adopt(answer, host: host)
     }
 
-    /// Dial every route at once and return the first one that answers.
+    /// Whether a cable-attached test asked for the punched route alone.
     ///
-    /// The winner is decided by arrival, not by list position -- the list only
-    /// decides who starts first (see ``connect(using:preferring:)``). Losing
-    /// routes are cancelled the moment the winner is known, and each closes its
-    /// own socket on the way out, so the group drains at the speed of a
-    /// cancellation rather than at the speed of a timeout.
-    ///
-    /// - Parameter dials: the routes, each with the connection to dial it on and
-    ///   how long to wait before starting.
-    /// - Returns: the first route to complete its handshake.
-    /// - Throws: ``LaunchFailure`` carrying one reason per route when none
-    ///   answered.
-    private func firstAnswer(
-        in dials: [(endpoint: PairedHost.Endpoint, connection: MizarConnection, delay: Duration)],
-    ) async throws -> Answered {
-        try await connectionCoordinator.firstAnswer(in: dials) { endpoint, error in
-            self.log.add(
-                .connection,
-                "route \(Self.routeName(endpoint)) failed: "
-                    + Self.describe(
-                        error,
-                        authority: Self.routeDescription(endpoint).address,
-                        throughServer: ReconnectPlan.isRelay(endpoint),
-                    ),
-            )
-        }
+    /// Read here because the launch argument is a condition of this process,
+    /// applied by the coordinator because it filters the route plan. Keeping the
+    /// read out of the coordinator is what lets the plan be tested with the flag
+    /// passed in rather than mutated globally.
+    private static var p2pOnlyDialRequested: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-mizarP2POnly")
+        #else
+        false
+        #endif
     }
 
     /// Make an answered route the app's connection, and load the first screen.
