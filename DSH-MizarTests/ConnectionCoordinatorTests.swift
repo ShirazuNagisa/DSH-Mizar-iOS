@@ -34,14 +34,17 @@ struct ConnectionCoordinatorTests {
         let old = connection()
         let current = connection()
         let reopened = connection()
+        let currentIdentity: AnyObject = current
+        let unrelatedIdentity: AnyObject = NSObject()
 
         let oldGeneration = coordinator.install(old)
         let currentGeneration = coordinator.install(current)
         #expect(currentGeneration > oldGeneration)
         #expect(!coordinator.clear(ifMatching: old))
+        #expect(!coordinator.clear(ifMatching: unrelatedIdentity))
         #expect(coordinator.activeConnection === current)
 
-        #expect(coordinator.clear(ifMatching: current))
+        #expect(coordinator.clear(ifMatching: currentIdentity))
         #expect(coordinator.activeConnection == nil)
         let reopenedGeneration = coordinator.install(reopened)
         #expect(reopenedGeneration > currentGeneration)

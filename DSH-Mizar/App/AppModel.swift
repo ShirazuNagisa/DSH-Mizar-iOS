@@ -1010,29 +1010,6 @@ final class AppModel {
 
     /// The poll that watches for pending interactions.
     private var interactionPoll: Task<Void, Never>?
-    /// The poll that follows a session while something is running.
-    ///
-    /// One task for the whole app, not one per screen. The bug it answers was
-    /// reported with the conversation left open: a turn finished on the computer and
-    /// the phone went on saying "DeepSeeking" until somebody pulled to refresh,
-    /// because the only poll was the one after a send, which ends when the send
-    /// settles. Views observe ``runningPollTicks``; none of them starts anything.
-    private var runningPoll: Task<Void, Never>?
-    /// The rules the task above is started and stopped by.
-    ///
-    /// A value rather than three separate `Bool`s because "is one already up"
-    /// is part of the decision: a list read that still says a session is running
-    /// must not reset the ten-second clock.
-    private var runningPollState = RunningPoll()
-    /// The rules that decide when a poll that cannot read should rebuild the
-    /// socket.
-    ///
-    /// The poll is the only reader on a screen nobody has touched. Without this,
-    /// a socket that died while the list says a turn is running left that row
-    /// saying "running" until the operator pulled to refresh -- the next tick
-    /// asked the same dead socket, and the one after that asked it again. See
-    /// ``PollRecovery`` for why it takes two failures and waits thirty seconds.
-    private var runningPollRecovery = PollRecovery()
     /// Whether the app is on screen, as far as the poll is concerned.
     ///
     /// False until the root view says otherwise, so a background launch -- a
@@ -1049,15 +1026,6 @@ final class AppModel {
     /// ``noteConversationTurns(_:for:)``); the list cannot overrule it until a
     /// read of the page says the turn has ended.
     private var openConversationTurnIsRunning = false
-    /// Bumped after every running-poll tick.
-    ///
-    /// The view's half of the poll. The tick itself only knows about the model:
-    /// the conversation's rows live in `@State` on the screen, so that screen has
-    /// to be told a read has landed before it can re-read the cache. It observes
-    /// this number and refreshes under its own single-flight lock; an integer
-    /// rather than a callback so the model never holds a view.
-    private(set) var runningPollTicks = 0
-
     // MARK: - Prompts held for the end of a turn
 
     /// Prompts the phone is keeping back, one per session.
@@ -1120,17 +1088,6 @@ final class AppModel {
     /// useful. Nothing here touches the screen -- the switch it makes is the same
     /// one a manual refresh makes, and its record is the log.
     private var lanWatch: Task<Void, Never>?
-
-    /// The resident ping that notices a socket Apple still calls "connected".
-    ///
-    /// A TCP socket does not fail when the network carrying it disappears; it
-    /// goes quiet. The event stream is only a signal if the transport closes,
-    /// so a phone that lost the LAN sat on "connecting" with a dead socket and
-    /// no request ever reached the reconnect path. This asks the cheapest
-    /// question the host answers (`ping`) with its own deadline, independent of
-    /// the 60 s request timeout, and drops a socket that missed twice.
-    private var linkWatchdog: Task<Void, Never>?
-    private var linkWatchdogMisses = 0
 
     /// Host events that mean the pending set moved.
     ///
@@ -1443,6 +1400,8 @@ final class AppModel {
 
     @ObservationIgnored private let connectionCoordinator = ConnectionCoordinator()
     @ObservationIgnored private let reconnectCoordinator = ReconnectCoordinator()
+    @ObservationIgnored private let linkWatchdogCoordinator = LinkWatchdogCoordinator()
+    @ObservationIgnored private let runningPollCoordinator = RunningPollCoordinator()
 
     private var connection: MizarConnection? { connectionCoordinator.activeConnection }
 
@@ -1464,7 +1423,7 @@ final class AppModel {
     }
 
     @discardableResult
-    private func clearConnection(ifMatching closed: MizarConnection) -> Bool {
+    private func clearConnection(ifMatching closed: any LinkWatchdogCoordinator.Connection) -> Bool {
         guard connectionCoordinator.clear(ifMatching: closed) else { return false }
         deepSeekBalance.configure(tag: nil)
         resetConnectionScopedState()
@@ -1791,8 +1750,6 @@ final class AppModel {
     /// ``latencyHistory`` of them -- measured with `ping` only while somebody
     /// is looking at them, so a phone in a pocket sends nothing.
     private(set) var latencySamples: [Double] = []
-    /// When the running poll last read the session list.
-    private(set) var lastPollTickAt: Date?
     /// How many round trips are kept for the connection window's trace.
     static let latencyHistory = 24
 
@@ -1964,7 +1921,15 @@ final class AppModel {
     }
 
     /// Whether the poll that follows a running turn is up.
-    var runningPollIsActive: Bool { runningPoll != nil }
+    var runningPollIsActive: Bool { runningPollCoordinator.isActive }
+    /// Bumped after every running-poll tick.
+    ///
+    /// Views observe this number and re-read their cached page under their own
+    /// single-flight lock. An integer rather than a callback keeps the model
+    /// from holding a view.
+    var runningPollTicks: Int { runningPollCoordinator.ticks }
+    /// When the running poll last read the session list.
+    var lastPollTickAt: Date? { runningPollCoordinator.lastTickAt }
     /// How often it asks.
     ///
     /// Ten seconds on a relayed link -- the interval exists because of the
@@ -1980,8 +1945,8 @@ final class AppModel {
         if !pendingPrompts.isEmpty { return RunningPoll.heldPromptInterval }
         return isLocalCommunication ? RunningPoll.localInterval : RunningPoll.interval
     }
-    /// Ticks in a row that could not read; the poll rebuilds the socket after two.
-    var runningPollFailures: Int { runningPollRecovery.failures }
+    /// Consecutive connection-shaped read failures; two earn a reconnect attempt.
+    var runningPollFailures: Int { runningPollCoordinator.failures }
     /// Whether the host's pushed events are being listened to.
     var listensForHostEvents: Bool { eventListener != nil }
     /// How often pending requests are re-read when nothing has been pushed.
@@ -2021,7 +1986,7 @@ final class AppModel {
     }
 
     /// The host's answer to `ping`: its own clock, which is not needed here.
-    private struct PingResult: Decodable, Sendable {
+    fileprivate struct PingResult: Decodable, Sendable {
         let time: Double?
     }
 
@@ -2861,9 +2826,9 @@ final class AppModel {
         updateRunningPoll()
         updateLanWatch()
         if active {
-            startLinkWatchdog()
+            linkWatchdogCoordinator.start(using: linkWatchdogOperations)
         } else {
-            stopLinkWatchdog()
+            linkWatchdogCoordinator.stop()
         }
         // A prompt held while the app was in the background is due the moment
         // the operator is back: the turn may have ended ten minutes ago and the
@@ -2969,62 +2934,46 @@ final class AppModel {
     /// task is already in the right state, which is what keeps a manual refresh
     /// from restarting the tick clock.
     private func updateRunningPoll() {
-        switch runningPollState.observe(
+        runningPollCoordinator.observe(
             anySessionRunning: RunningPoll.anySessionRunning(in: sessions),
             conversationTurnIsRunning: openConversationTurnIsRunning,
             appIsActive: appIsActive,
-        ) {
-        case .start:
-            startRunningPoll()
-        case .stop:
-            stopRunningPoll()
-        case .none:
-            break
-        }
+            using: runningPollOperations,
+        )
     }
 
-    /// Start the one background task that keeps asking while something runs.
-    ///
-    /// The shape is the pending-interactions poll's: one task property, a sleep
-    /// first, and a loop that ends when the task is cancelled. The sleep is first
-    /// on purpose -- the read that found the running session has just happened,
-    /// so asking again immediately would be traffic for an answer ten seconds
-    /// old at most.
-    private func startRunningPoll() {
-        // The state machine and this guard say the same thing; the guard is what
-        // makes it true even if a cancelled task has not been deallocated yet.
-        guard runningPoll == nil else { return }
-        log.add(.sync, "running poll: started, a session is running")
-        runningPoll = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    // Read each tick rather than captured once: the route can
-                    // change under a poll (a manual refresh that finds the LAN),
-                    // and the next sleep is the first place that can act on it.
-                    try await Task.sleep(for: self?.runningPollInterval ?? RunningPoll.interval)
-                } catch {
-                    // Cancellation is the stop path; there is nothing to report.
-                    return
-                }
-                guard !Task.isCancelled, let self else { return }
-                await self.runningPollTick()
-            }
-        }
+    private var runningPollOperations: RunningPollCoordinator.Operations {
+        RunningPollCoordinator.Operations(
+            interval: { [weak self] in self?.runningPollInterval ?? RunningPoll.interval },
+            isAppActive: { [weak self] in self?.appIsActive ?? false },
+            connectionMissing: { [weak self] in self?.connection == nil },
+            reconnect: { [weak self] in
+                guard let self else { return false }
+                return await self.reconnect()
+            },
+            readSessionList: { [weak self] in
+                guard let self else { return .ignored }
+                return await self.refreshRunningSessionList()
+            },
+            log: { [weak self] message in self?.log.add(.sync, message) },
+        )
     }
 
-    /// Stop the running poll, if one is up.
-    private func stopRunningPoll() {
-        guard let runningPoll else { return }
-        runningPoll.cancel()
-        self.runningPoll = nil
-        // A stopped poll starts over: the next one begins from a clean count
-        // rather than inheriting failures from a turn that has since ended.
-        runningPollRecovery.reset()
-        log.add(
-            .sync,
-            appIsActive
-                ? "running poll: stopped, nothing is running"
-                : "running poll: stopped, the app is not on screen",
+    private var linkWatchdogOperations: LinkWatchdogCoordinator.Operations {
+        LinkWatchdogCoordinator.Operations(
+            isAppActive: { [weak self] in self?.appIsActive ?? false },
+            isReconnecting: { [weak self] in self?.reconnecting ?? false },
+            currentConnection: { [weak self] in self?.connection },
+            isLocalRoute: { [weak self] in self?.activeEndpoint?.isLocalNetwork == true },
+            ping: { connection, timeout in
+                await connection.watchdogPing(within: timeout)
+            },
+            dropDisconnectedSocket: { [weak self] connection in
+                guard let self else { return }
+                await connection.watchdogDisconnect()
+                await self.noteSocketClosed(connection)
+            },
+            log: { [weak self] message in self?.log.add(.connection, message) },
         )
     }
 
@@ -3046,55 +2995,23 @@ final class AppModel {
     /// controller call the foreground refresh makes, because a finished turn
     /// should end the activity through one path, not two.
     ///
-    /// The tick is counted after the read even when the read found nothing
-    /// running: that is the read the open conversation needs to see in order to
-    /// draw the finished row, and by then this task is already being cancelled
-    /// by the observer above -- the counter is the last thing it does.
-    private func runningPollTick() async {
-        guard appIsActive, runningPollState.isPolling else { return }
-        // A tick that cannot read is not retried on the socket it just failed
-        // on. The poll is the only thing still asking on a screen nobody has
-        // touched, so a dead socket here is the difference between "the turn
-        // finished" and a list that says it is still running until somebody
-        // pulls to refresh. The policy is deliberately cheap: two failures earn
-        // one attempt, and attempts are half a minute apart.
-        if runningPollRecovery.reconnectIsDue(
-            connectionMissing: connection == nil,
-            now: ContinuousClock.now,
-        ) {
-            runningPollRecovery.noteAttempt(at: ContinuousClock.now)
-            if await reconnect() {
-                runningPollRecovery.recordSuccess()
-            }
-        }
-        await refreshRunningSessionList()
-        lastPollTickAt = Date()
-        runningPollTicks &+= 1
-    }
-
     /// The poll's one request: what is running, as the host answers now.
     ///
     /// Silent on failure by design. A failed tick is not a new problem for the
     /// operator -- the banner over the list already carries the last failure
     /// they can act on -- and a poll that flashed an error every ten seconds
     /// while the computer slept would be the app complaining about its own timer.
-    private func refreshRunningSessionList() async {
-        guard let tag = currentTag else { return }
+    private func refreshRunningSessionList() async -> RunningPollCoordinator.ReadOutcome {
+        guard let tag = currentTag else { return .ignored }
         guard let connection else {
-            // No socket at all: there is nothing to ask, and the operator's
-            // screen is the thing going stale. Counted so the next tick may
-            // rebuild it rather than asking nothing for ever.
-            runningPollRecovery.recordFailure()
-            return
+            return .ignored
         }
         do {
             let result = try await loggedCall("session.list", on: connection, as: SessionListResult.self)
             guard tag == currentTag else {
                 log.add(.cache, "running poll: list for \(tag.hostId) dropped, the machine changed under it")
-                return
+                return .ignored
             }
-            // The socket answered: whatever failed before is not failing now.
-            runningPollRecovery.recordSuccess()
             sessions = Self.scoped(result.items, to: engineScope)
             sessionsAreKnown = true
             lastError = nil
@@ -3103,11 +3020,12 @@ final class AppModel {
             // is the read that knows. It is the controller's existing entry
             // point, not a second decision path.
             await refreshLiveActivity()
+            return .answered
         } catch {
             // Cancellation is this poll being stopped, not a failure: the app
             // was backgrounded, or another read found nothing running. Leave the
             // screen alone and let the loop end.
-            if Task.isCancelled { return }
+            if Task.isCancelled { return .ignored }
             // Only failures a fresh socket could fix count towards a reconnect.
             // An answer the host chose to send would be the same answer over a
             // new socket, and rebuilding the connection for it is real seconds
@@ -3116,8 +3034,9 @@ final class AppModel {
             // No banner either way: the failure is already in the request log by
             // `loggedCall`, which is where "did the poll keep asking" is asked.
             if Self.isAboutTheConnection(error) {
-                runningPollRecovery.recordFailure()
+                return .connectionFailure
             }
+            return .ignored
         }
     }
 
@@ -3133,7 +3052,7 @@ final class AppModel {
                 // This is the slow safety net; the host's session.changed
                 // event is the fast path.
                 if self.appIsActive {
-                    await self.refreshRunningSessionList()
+                    _ = await self.refreshRunningSessionList()
                 }
                 try? await Task.sleep(for: Self.interactionPollSeconds)
             }
@@ -3170,7 +3089,7 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             await self.noteSocketClosed(opened)
         }
-        startLinkWatchdog()
+        linkWatchdogCoordinator.start(using: linkWatchdogOperations)
     }
 
     /// Note that the socket behind the current connection has gone.
@@ -3184,7 +3103,7 @@ final class AppModel {
     /// socket, which is the recovery every refresh path already has.
     ///
     /// - Parameter closed: the connection whose event stream ended.
-    private func noteSocketClosed(_ closed: MizarConnection) async {
+    private func noteSocketClosed(_ closed: any LinkWatchdogCoordinator.Connection) async {
         // A reconnect may already have replaced it; only the socket that is
         // still the model's is this method's to forget.
         guard clearConnection(ifMatching: closed) else { return }
@@ -3194,7 +3113,8 @@ final class AppModel {
         // The one close the operator must see rather than infer: the relay
         // refuses more bytes once the day's allowance is gone, and closes this
         // socket with that sentence as the reason.
-        if let reason = await closed.closeReason(), reason.contains("traffic allowance spent") {
+        if let reason = await closed.watchdogCloseReason(),
+           reason.contains("traffic allowance spent") {
             log.add(.connection, "the relay closed the socket: the daily traffic allowance is spent")
             trafficNotice = true
         }
@@ -3237,77 +3157,6 @@ final class AppModel {
                 guard self.appIsActive, attempt < 3 else { return }
                 try? await Task.sleep(for: .seconds(1 << attempt))
             }
-        }
-    }
-
-    /// Start the resident link watchdog for the current socket.
-    ///
-    /// Replaced on every connection and stopped when the app leaves the screen.
-    /// A watchdog from the previous socket is harmless -- it checks identity --
-    /// but replacing it is what keeps one task per process.
-    private func startLinkWatchdog() {
-        stopLinkWatchdog()
-        guard appIsActive, connection != nil else { return }
-        linkWatchdogMisses = 0
-        linkWatchdog = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(5))
-                } catch {
-                    return
-                }
-                guard let self, self.appIsActive, !self.reconnecting,
-                      let watched = self.connection else { return }
-                let answered = await self.pingAnswered(watched, within: .seconds(3))
-                guard !Task.isCancelled, self.connection === watched else { return }
-                if answered {
-                    self.linkWatchdogMisses = 0
-                    continue
-                }
-                self.linkWatchdogMisses += 1
-                // A local address is one hop away; one miss is already a lost
-                // network, and waiting for a second adds ten seconds to the
-                // operator's "connecting" screen. The relay is a longer path,
-                // so it gets two misses before the socket is declared dead.
-                let missesNeeded = self.activeEndpoint?.isLocalNetwork == true ? 1 : 2
-                if self.linkWatchdogMisses < missesNeeded { continue }
-                self.log.add(.connection, "link watchdog: the link stopped answering; dropping the socket")
-                self.linkWatchdogMisses = 0
-                await watched.disconnect()
-                await self.noteSocketClosed(watched)
-                return
-            }
-        }
-    }
-
-    private func stopLinkWatchdog() {
-        linkWatchdog?.cancel()
-        linkWatchdog = nil
-        linkWatchdogMisses = 0
-    }
-
-    /// One ping with a deadline of its own, not the request timeout.
-    ///
-    /// A dead TCP socket accepts a write and never answers. Racing the call
-    /// against a sleep is what turns that silence into a decision; the pending
-    /// continuation is cleaned up when the socket is closed immediately after.
-    private func pingAnswered(_ connection: MizarConnection, within timeout: Duration) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                do {
-                    _ = try await connection.call("ping", as: PingResult.self)
-                    return true
-                } catch {
-                    return false
-                }
-            }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return false
-            }
-            let answered = await group.next() ?? false
-            group.cancelAll()
-            return answered
         }
     }
 
@@ -8777,5 +8626,40 @@ private final class ReconnectSocketCandidate: ReconnectCoordinator.Candidate {
 
     func disconnect() async {
         await connection.disconnect()
+    }
+}
+
+extension MizarConnection: LinkWatchdogCoordinator.Connection {
+    /// One ping with a deadline of its own, not the request timeout.
+    ///
+    /// A dead TCP socket accepts a write and never answers. Racing the call
+    /// against a sleep is what turns that silence into a decision. The pending
+    /// continuation is cleaned up when the watchdog closes the socket.
+    func watchdogPing(within timeout: Duration) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    _ = try await self.call("ping", as: AppModel.PingResult.self)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let answered = await group.next() ?? false
+            group.cancelAll()
+            return answered
+        }
+    }
+
+    func watchdogDisconnect() async {
+        await disconnect()
+    }
+
+    func watchdogCloseReason() async -> String? {
+        closeReason()
     }
 }

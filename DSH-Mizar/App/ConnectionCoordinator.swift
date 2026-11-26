@@ -18,7 +18,7 @@ final class ConnectionCoordinator {
 
     /// Clears only the socket that is still active. Detaching never rewinds generation.
     @discardableResult
-    func clear(ifMatching connection: MizarConnection) -> Bool {
+    func clear(ifMatching connection: AnyObject) -> Bool {
         guard activeConnection === connection else { return false }
         activeConnection = nil
         return true
