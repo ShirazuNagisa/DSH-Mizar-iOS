@@ -63,9 +63,11 @@ struct ModelSelectionResolutionTests {
             in: "DSH-Mizar/Views/ComposerBar.swift",
             describing: "model resolution",
         )
+        // The picker that used to read this from `Pickers.swift` is the model
+        // drawer now; the contract moved with it rather than being dropped.
         try AppSourceContract.expectFragments(
             ["agreedModelSelection("],
-            in: "DSH-Mizar/Views/Pickers.swift",
+            in: "DSH-Mizar/Views/Composer/ModelDrawer.swift",
             describing: "model resolution",
         )
     }

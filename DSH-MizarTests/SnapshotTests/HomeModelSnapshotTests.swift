@@ -2,20 +2,19 @@
 //  HomeModelSnapshotTests.swift
 //  DSH-MizarTests
 //
-//  The home screen's model route: the pill that names what the next session
-//  will start on, and the picker row it opens -- the view half of
+//  The model route: the pill that names what a session will start on, and the
+//  drawer row that route is chosen from -- the view half of
 //  `AppFlowNavigationTests.testTheHomeScreenChoosesTheModelItsSessionStartsOn`,
 //  which keeps the request half (that the started session really runs on the
 //  chosen model) because that belongs to the host round-trip, not to pixels.
 //
 //  The pill is the app's own `ModelPill` fed by `modelPillLabel`'s exact
 //  composition, and the composition is asserted alongside the pixels. The
-//  picker sheet itself is not rendered: it reads its catalogue from the
-//  environment's `AppModel` -- a connection-scoped value a unit test has none
-//  of -- and draws in a `List`, which draws nothing under `ImageRenderer`.
-//  What renders instead is the row the sheet draws, `ModelPickerRow`, from a
-//  decoded `ModelCatalog` fixture, seeded the way the sheet seeds a chosen
-//  row: ticked, with its default effort revealed beneath.
+//  drawer itself is not rendered: it reads its catalogue from the environment's
+//  `AppModel` -- a connection-scoped value a unit test has none of -- and its
+//  rows need a `Namespace` only a view can hold. What renders instead is the
+//  row the drawer draws, `ModelDrawerRow`, from a decoded `ModelCatalog`
+//  fixture, seeded the way the drawer seeds a chosen row: ticked.
 //
 
 import MizarKit
@@ -76,46 +75,40 @@ struct HomeModelSnapshotTests {
     }
 
     @Test func modelPickerRowRevealsTheReasoningEffort() throws {
+        // The old picker's row is gone with its sheet; the drawer's row carries
+        // the same wire identifier, and that is what the UI suite taps.
         try AppSourceContract.expectFragments(
             [#".accessibilityIdentifier("model.row.\(option.id)")"#],
-            in: "DSH-Mizar/Views/Pickers.swift",
+            in: "DSH-Mizar/Views/Composer/ModelDrawer.swift",
             describing: "the model row's wire identifier",
         )
 
+        let model = try Self.catalogFixture().providers[0].models[0]
+
         let snapshot = try SnapshotHarness.assertSnapshot(
-            of: PickerRowFixture(catalog: try Self.catalogFixture()),
-            named: "HomeModelPickerRow-deepseek-v4-pro",
-            size: CGSize(width: 340, height: 140),
+            of: ModelDrawerRowFixture(option: model),
+            named: "ModelDrawerRow-deepseek-v4-pro",
+            size: CGSize(width: 340, height: 120),
         )
         #expect(snapshot.pixelWidth == 680)
-        #expect(snapshot.pixelHeight == 280)
+        #expect(snapshot.pixelHeight == 240)
     }
 }
 
-/// `ModelPickerView`'s chosen row, hosted without the sheet: the sheet's
-/// `List` draws nothing under `ImageRenderer`, so the row renders in a plain
-/// stack. Chosen and seeded with the catalogue's default effort, which is what
-/// the sheet does when a row is tapped -- the state the UI test walks through.
-private struct PickerRowFixture: View {
-    let catalog: ModelCatalog
+/// The drawer's chosen row, hosted on its own: the row needs the drawer's tick
+/// namespace, which only a view can hold, and the drawer itself reads the
+/// environment's catalogue.
+private struct ModelDrawerRowFixture: View {
+    let option: ModelOption
     @Namespace private var tick
-    @State private var chosenEffort: String? = "high"
 
     var body: some View {
-        let provider = catalog.providers[0]
-        let option = provider.models[0]
-        return VStack(alignment: .leading, spacing: 0) {
-            ModelPickerRow(
-                provider: provider,
-                option: option,
-                isChosen: true,
-                chosenEffort: $chosenEffort,
-                tick: tick,
-                onChoose: {},
-                onCommit: { _ in },
-            )
-        }
-        .padding(16)
-        .frame(width: 340, alignment: .leading)
+        ModelDrawerRow(
+            option: option,
+            isChosen: true,
+            isApplying: false,
+            tick: tick,
+            action: {},
+        )
     }
 }

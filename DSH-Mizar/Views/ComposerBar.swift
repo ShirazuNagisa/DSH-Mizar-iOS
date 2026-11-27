@@ -101,15 +101,15 @@ struct ComposerBar: View {
     }
 
     private var modelPill: some View {
-        ModelPill(label: modelLabel, compact: focused) { showingModel = true }
-            .layoutPriority(1)
-            // Each panel is a small window out of the control that opened it.
-            .mizarPopover(isPresented: $showingModel, arrowEdge: .bottom) {
-                ModelPickerView(sessionId: sessionId, stats: stats)
-                    .frame(width: PopoverSize.list.width, height: PopoverSize.list.height)
-            }
-            .accessibilityLabel("Model, \(modelLabel)")
-            .accessibilityIdentifier("composer.model")
+        // The capsule opens the thinking strip, which is an overlay inside the
+        // composer rather than a window out of it: one surface, blurred and
+        // dimmed where the field was.
+        ModelPill(label: modelLabel, compact: focused) {
+            withMizarAnimation(.mizarMorphIn) { showingModel = true }
+        }
+        .layoutPriority(1)
+        .accessibilityLabel("Model, \(modelLabel)")
+        .accessibilityIdentifier("composer.model")
     }
 
     // MARK: - Context

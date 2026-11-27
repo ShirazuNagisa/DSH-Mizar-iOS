@@ -100,6 +100,10 @@ struct SessionDetailView: View {
     @State private var statsSessionId: String?
     @State private var loading = true
     @State private var showingModelPicker = false
+    /// Whether the model drawer is up. Owned here like the other panels: it
+    /// covers the whole screen, and the composer it is opened from must not
+    /// outlive it.
+    @State private var showingModelDrawer = false
     @State private var showingContextDetail = false
     @State private var showingCommands = false
     /// Whether the on-device rewrite's intent window is out. Owned here, like
@@ -434,6 +438,25 @@ struct SessionDetailView: View {
                             .accessibilityHidden(true)
                     }
                 }
+                // The model drawer sits above the conversation and the composer
+                // but below the held message's menu: the dim has to cover both
+                // surfaces it is choosing between.
+                .overlay(alignment: .bottom) {
+                    if showingModelDrawer {
+                        ZStack(alignment: .bottom) {
+                            Theme.scrim
+                                .ignoresSafeArea()
+                                .onTapGesture { withMizarAnimation(.mizarSmooth) { showingModelDrawer = false } }
+                                .transition(.opacity)
+                            ModelDrawer(
+                                sessionId: sessionId,
+                                stats: shownStats,
+                                onClose: { withMizarAnimation(.mizarSmooth) { showingModelDrawer = false } },
+                            )
+                            .transition(.modelDrawer)
+                        }
+                    }
+                }
                 // The held message's menu sits above everything: the dim has
                 // to cover the composer too, and the lifted bubble is the only
                 // thing the operator is looking at.
@@ -622,6 +645,12 @@ struct SessionDetailView: View {
         }
         .onChange(of: sessionId) { _, _ in
             selectingMessageId = nil
+            // A panel outlived the conversation it was opened on: the strip,
+            // the drawer and the held message's menu are all about the session
+            // that was on screen, and none of them belongs to the next one.
+            showingModelPicker = false
+            showingModelDrawer = false
+            messageMenu = nil
         }
         .onChange(of: shownStats?.title) { _, title in
             turnIndex.publish(sessionId: sessionId, title: title, turns: shownTurns)
@@ -1246,189 +1275,213 @@ struct SessionDetailView: View {
     /// The dock, the way back to the newest message, and the composer.
     private func bottomStack(proxy: ScrollViewProxy) -> some View {
         GeometryReader { container in
-            VStack(spacing: 8) {
-                Spacer(minLength: 0)
-                // The way back is hidden while a jump plays -- the conversation
-                // is already on its way somewhere -- and while the composer is
-                // expanded or moving between its two sizes, when there is no
-                // conversation in view to return to. Also hidden while the
-                // initial placement runs: the page is at the top by
-                // construction until it is placed, and "far from bottom" then
-                // describes the placement, not the operator.
-                JumpToLatestChrome(
-                    chrome: chrome,
-                    isAvailable: placementRevealed && !jumping && !composerExpanded && !composerAnimating,
-                    action: { returnToLatest(proxy: proxy) },
-                )
-                VStack(spacing: 8) {
-                    // The dock leaves while the composer is expanded: the open
-                    // field is the whole height of the screen, and a queue of
-                    // pending requests above it is the opposite of the focus
-                    // the expansion is for.
-                    if !composerExpanded {
-                        InteractionsDock(
-                            composerFocused: composerFocused,
-                            onExpand: { composerFocused = false },
-                            maxHeight: max(160, container.size.height * 0.34),
-                            onQuestionAnswered: { text in showAnswerReceipt(text) },
-                        )
-                    }
-                    // The small facts that belong to this session, on one line
-                    // directly above the field: the working tree's figures, the
-                    // palette's door while a lone `/` is typed, and the receipt
-                    // that follows an answered question. They share a row
-                    // because they are the same kind of thing -- true for a
-                    // moment, about this conversation -- and because a column of
-                    // three capsules would push the field down the screen.
-                    //
-                    // The row is gone while the field is expanded: the open
-                    // field is the whole height of the screen, and these are
-                    // facts about what was typed, not what is being typed.
-                    if !composerExpanded, !composerStatusItems.isEmpty {
-                        ComposerStatusRow(items: composerStatusItems) {
-                            paletteReplacesSlash = true
-                            showingSkillPalette = true
-                        }
-                        .transition(.fromBelow)
-                    }
-                    // The message waiting for the running turn, directly above
-                    // the field and a little narrower than it. It leaves with
-                    // the expanded composer for the same reason the dock does,
-                    // and it comes and goes through the field's top edge --
-                    // see ``FromBelowTransition``.
-                    if !composerExpanded, let held = model.pendingPrompt(for: sessionId) {
-                        PendingPromptBar(
-                            prompt: held,
-                            onSend: { await sendHeldPrompt() },
-                            onReturn: { returnHeldPrompt() },
-                            onDelete: { deleteHeldPrompt() },
-                        )
-                        // Slightly narrower than the composer's own slab, which
-                        // insets itself by ten points on each side.
-                        .padding(.horizontal, 18)
-                        .transition(.fromBelow)
-                    }
-                    // The on-device entries' one quiet line: a rewrite that is
-                    // taking a moment, or a refusal that left the draft alone.
-                    if !composerExpanded, let notice = composerOnDevice.notice {
-                        ComposerOnDeviceNote(
-                            text: notice,
-                            onDismiss: { composerOnDevice.dismissNotice() },
-                        )
-                        .padding(.horizontal, 18)
-                        .transition(.fromBelow)
-                    }
-                    if !composerExpanded, composerOnDevice.isEnhancingSlow {
-                        ComposerOnDeviceNote(
-                            text: String(localized: "Rewriting the prompt…"),
-                            isBusy: true,
-                            onCancel: { composerOnDevice.cancelEnhancement() },
-                        )
-                        .padding(.horizontal, 18)
-                        .transition(.fromBelow)
-                    }
-                    ComposerView(
-                        sessionId: sessionId,
-                        stats: shownStats,
-                        text: $draft,
-                        focused: $composerFocused,
-                        expanded: $composerExpanded,
-                        showingModel: $showingModelPicker,
-                        showingContext: $showingContextDetail,
-                        showingCommands: $showingCommands,
-                        showingEnhance: $showingEnhance,
-                        showingPermission: $showingPermissionPicker,
-                        onPermissionApplied: { await refreshStatsFromCache() },
-                        onDevice: composerOnDevice,
-                        onWillSend: { text in launch(text) },
-                        onSent: { sent in await refreshAfterSend(sent) },
-                        onSendFailed: { text in withdraw(text) },
-                        onCollapsedHeightChanged: { height in
-                            collapsedComposerHeight = height
-                            if let extra = collapsedComposerExtra {
-                                composerReservedHeight = height + extra
-                            }
-                        },
-                        onContextChanged: {
-                            if let fresh = await model.stats(for: sessionId) {
-                                stats = fresh
-                                statsSessionId = sessionId
-                            }
-                        },
-                        knownTokenNames: composerTokenNames,
-                        insertion: composerInsertion,
-                        onInsertionApplied: { composerInsertion = nil },
-                        onSlashTokenChanged: { active in
-                            // Off while the palette is open: the hint under a
-                            // modal is a control nothing can tap.
-                            let wasActive = slashTokenActive
-                            slashTokenActive = active && !showingSkillPalette
-                            // A hint that comes back after the operator typed
-                            // on is a new appearance, so it joins the row on the
-                            // right like anything else. A hint hidden only
-                            // because the palette opened keeps its place: it is
-                            // the same door.
-                            if slashTokenActive, !wasActive {
-                                hintAppearedAt = .now
-                            }
-                        },
-                        onBrowseCommands: {
-                            // Not a replacement for a `/`: the field was empty
-                            // when the `+` window opened, so the chosen literal
-                            // goes in as ordinary text.
-                            paletteReplacesSlash = false
-                            showingSkillPalette = true
-                        },
-                    )
-                    // Expanded, the composer fills the overlay up to just under
-                    // the title; at rest it wraps its content.
-                    .frame(maxHeight: composerExpanded ? .infinity : nil)
+            ZStack(alignment: .bottom) {
+                // While the thinking strip is out the field is blurred and out
+                // of reach; a tap anywhere else puts the strip away, so the
+                // composer is a surface with an exit rather than a mode.
+                if showingModelPicker {
+                    Color.clear
+                        .contentShape(.rect)
+                        .ignoresSafeArea()
+                        .onTapGesture { withMizarAnimation(.mizarMorphOut) { showingModelPicker = false } }
+                        .accessibilityHidden(true)
                 }
-                // One animation for the held prompt's arrival and departure, and
-                // only that value drives it: the bar's height is part of this
-                // stack, so the room it takes and the room handed back move with
-                // the same spring as the surface itself.
-                .animation(Motion.pick(.mizarSmooth), value: model.pendingPrompt(for: sessionId)?.id)
-                // The row arrives and leaves through the field's top edge, like
-                // the held-prompt bar above it. Its own members are animated by
-                // `ComposerStatusRow`, which knows which of them changed.
-                .animation(Motion.pick(.mizarSmooth), value: composerStatusItems.isEmpty)
-                .overlayPreferenceValue(ComposerShellBoundsKey.self) { shellBounds in
-                    GeometryReader { stack in
-                        Color.clear
-                            .onGeometryChange(for: CGFloat?.self) { _ in
-                                guard !composerExpanded, !composerAnimating,
-                                      let shell = shellBounds.shell,
-                                      let chrome = shellBounds.chrome,
-                                      let fieldHeight = shellBounds.fieldHeight,
-                                      let insets = shellBounds.insets else { return nil }
-                                let shellHeight = stack[shell].height
-                                let target = fieldHeight + stack[chrome].height + insets
-                                guard target.isFinite, target > 0, shellHeight.isFinite,
-                                      abs(shellHeight - target) <= 0.5 else { return nil }
-                                let extra = stack.size.height - shellHeight
-                                return extra.isFinite && extra >= 0 ? extra : nil
-                            } action: { extra in
-                                guard !composerExpanded, !composerAnimating, let extra else { return }
-                                collapsedComposerExtra = extra
-                                if let height = collapsedComposerHeight {
+                VStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    // The way back is hidden while a jump plays -- the conversation
+                    // is already on its way somewhere -- and while the composer is
+                    // expanded or moving between its two sizes, when there is no
+                    // conversation in view to return to. Also hidden while the
+                    // initial placement runs: the page is at the top by
+                    // construction until it is placed, and "far from bottom" then
+                    // describes the placement, not the operator.
+                    JumpToLatestChrome(
+                        chrome: chrome,
+                        isAvailable: placementRevealed && !jumping && !composerExpanded && !composerAnimating,
+                        action: { returnToLatest(proxy: proxy) },
+                    )
+                    VStack(spacing: 8) {
+                        // The dock leaves while the composer is expanded: the open
+                        // field is the whole height of the screen, and a queue of
+                        // pending requests above it is the opposite of the focus
+                        // the expansion is for.
+                        if !composerExpanded {
+                            InteractionsDock(
+                                composerFocused: composerFocused,
+                                onExpand: { composerFocused = false },
+                                maxHeight: max(160, container.size.height * 0.34),
+                                onQuestionAnswered: { text in showAnswerReceipt(text) },
+                            )
+                        }
+                        // The small facts that belong to this session, on one line
+                        // directly above the field: the working tree's figures, the
+                        // palette's door while a lone `/` is typed, and the receipt
+                        // that follows an answered question. They share a row
+                        // because they are the same kind of thing -- true for a
+                        // moment, about this conversation -- and because a column of
+                        // three capsules would push the field down the screen.
+                        //
+                        // The row is gone while the field is expanded: the open
+                        // field is the whole height of the screen, and these are
+                        // facts about what was typed, not what is being typed.
+                        if !composerExpanded, !composerStatusItems.isEmpty {
+                            ComposerStatusRow(items: composerStatusItems) {
+                                paletteReplacesSlash = true
+                                showingSkillPalette = true
+                            }
+                            .transition(.fromBelow)
+                        }
+                        // The message waiting for the running turn, directly above
+                        // the field and a little narrower than it. It leaves with
+                        // the expanded composer for the same reason the dock does,
+                        // and it comes and goes through the field's top edge --
+                        // see ``FromBelowTransition``.
+                        if !composerExpanded, let held = model.pendingPrompt(for: sessionId) {
+                            PendingPromptBar(
+                                prompt: held,
+                                onSend: { await sendHeldPrompt() },
+                                onReturn: { returnHeldPrompt() },
+                                onDelete: { deleteHeldPrompt() },
+                            )
+                            // Slightly narrower than the composer's own slab, which
+                            // insets itself by ten points on each side.
+                            .padding(.horizontal, 18)
+                            .transition(.fromBelow)
+                        }
+                        // The on-device entries' one quiet line: a rewrite that is
+                        // taking a moment, or a refusal that left the draft alone.
+                        if !composerExpanded, let notice = composerOnDevice.notice {
+                            ComposerOnDeviceNote(
+                                text: notice,
+                                onDismiss: { composerOnDevice.dismissNotice() },
+                            )
+                            .padding(.horizontal, 18)
+                            .transition(.fromBelow)
+                        }
+                        if !composerExpanded, composerOnDevice.isEnhancingSlow {
+                            ComposerOnDeviceNote(
+                                text: String(localized: "Rewriting the prompt…"),
+                                isBusy: true,
+                                onCancel: { composerOnDevice.cancelEnhancement() },
+                            )
+                            .padding(.horizontal, 18)
+                            .transition(.fromBelow)
+                        }
+                        ComposerView(
+                            sessionId: sessionId,
+                            stats: shownStats,
+                            text: $draft,
+                            focused: $composerFocused,
+                            expanded: $composerExpanded,
+                            showingModel: $showingModelPicker,
+                            showingContext: $showingContextDetail,
+                            showingCommands: $showingCommands,
+                            showingEnhance: $showingEnhance,
+                            showingPermission: $showingPermissionPicker,
+                            onOpenModelDrawer: {
+                                // The strip goes back into the capsule, then the
+                                // drawer rises from the bottom edge. The beat
+                                // between them is the point: two surfaces
+                                // arriving at once read as one jump.
+                                withMizarAnimation(.mizarMorphOut) { showingModelPicker = false }
+                                composerFocused = false
+                                Task {
+                                    try? await Task.sleep(for: .milliseconds(90))
+                                    withMizarAnimation(.mizarSmooth) { showingModelDrawer = true }
+                                }
+                            },
+                            onPermissionApplied: { await refreshStatsFromCache() },
+                            onDevice: composerOnDevice,
+                            onWillSend: { text in launch(text) },
+                            onSent: { sent in await refreshAfterSend(sent) },
+                            onSendFailed: { text in withdraw(text) },
+                            onCollapsedHeightChanged: { height in
+                                collapsedComposerHeight = height
+                                if let extra = collapsedComposerExtra {
                                     composerReservedHeight = height + extra
                                 }
-                            }
+                            },
+                            onContextChanged: {
+                                if let fresh = await model.stats(for: sessionId) {
+                                    stats = fresh
+                                    statsSessionId = sessionId
+                                }
+                            },
+                            knownTokenNames: composerTokenNames,
+                            insertion: composerInsertion,
+                            onInsertionApplied: { composerInsertion = nil },
+                            onSlashTokenChanged: { active in
+                                // Off while the palette is open: the hint under a
+                                // modal is a control nothing can tap.
+                                let wasActive = slashTokenActive
+                                slashTokenActive = active && !showingSkillPalette
+                                // A hint that comes back after the operator typed
+                                // on is a new appearance, so it joins the row on the
+                                // right like anything else. A hint hidden only
+                                // because the palette opened keeps its place: it is
+                                // the same door.
+                                if slashTokenActive, !wasActive {
+                                    hintAppearedAt = .now
+                                }
+                            },
+                            onBrowseCommands: {
+                                // Not a replacement for a `/`: the field was empty
+                                // when the `+` window opened, so the chosen literal
+                                // goes in as ordinary text.
+                                paletteReplacesSlash = false
+                                showingSkillPalette = true
+                            },
+                        )
+                        // Expanded, the composer fills the overlay up to just under
+                        // the title; at rest it wraps its content.
+                        .frame(maxHeight: composerExpanded ? .infinity : nil)
                     }
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                    if !composerExpanded && !composerAnimating && collapsedComposerHeight == nil {
-                        composerReservedHeight = height
+                    // One animation for the held prompt's arrival and departure, and
+                    // only that value drives it: the bar's height is part of this
+                    // stack, so the room it takes and the room handed back move with
+                    // the same spring as the surface itself.
+                    .animation(Motion.pick(.mizarSmooth), value: model.pendingPrompt(for: sessionId)?.id)
+                    // The row arrives and leaves through the field's top edge, like
+                    // the held-prompt bar above it. Its own members are animated by
+                    // `ComposerStatusRow`, which knows which of them changed.
+                    .animation(Motion.pick(.mizarSmooth), value: composerStatusItems.isEmpty)
+                    .overlayPreferenceValue(ComposerShellBoundsKey.self) { shellBounds in
+                        GeometryReader { stack in
+                            Color.clear
+                                .onGeometryChange(for: CGFloat?.self) { _ in
+                                    guard !composerExpanded, !composerAnimating,
+                                          let shell = shellBounds.shell,
+                                          let chrome = shellBounds.chrome,
+                                          let fieldHeight = shellBounds.fieldHeight,
+                                          let insets = shellBounds.insets else { return nil }
+                                    let shellHeight = stack[shell].height
+                                    let target = fieldHeight + stack[chrome].height + insets
+                                    guard target.isFinite, target > 0, shellHeight.isFinite,
+                                          abs(shellHeight - target) <= 0.5 else { return nil }
+                                    let extra = stack.size.height - shellHeight
+                                    return extra.isFinite && extra >= 0 ? extra : nil
+                                } action: { extra in
+                                    guard !composerExpanded, !composerAnimating, let extra else { return }
+                                    collapsedComposerExtra = extra
+                                    if let height = collapsedComposerHeight {
+                                        composerReservedHeight = height + extra
+                                    }
+                                }
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                     }
-                    composerHeight = height
-                }
-                .onGeometryChange(for: CGRect.self) { geometry in
-                    geometry.frame(in: .named(Self.space))
-                } action: { frame in
-                    onComposerFrameChanged?(frame)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        if !composerExpanded && !composerAnimating && collapsedComposerHeight == nil {
+                            composerReservedHeight = height
+                        }
+                        composerHeight = height
+                    }
+                    .onGeometryChange(for: CGRect.self) { geometry in
+                        geometry.frame(in: .named(Self.space))
+                    } action: { frame in
+                        onComposerFrameChanged?(frame)
+                    }
                 }
             }
         }

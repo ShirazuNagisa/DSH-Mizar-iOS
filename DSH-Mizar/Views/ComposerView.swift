@@ -309,8 +309,26 @@ struct ComposerView: View {
 
     var body: some View {
         content
+        // The strip replaces the field while it is out: the field is still
+        // behind it, and what is left of it is a blurred surface rather than a
+        // second, dimmed control.
+        .blur(radius: showingModel ? 10 : 0)
+        .opacity(showingModel ? 0 : 1)
+        .allowsHitTesting(!showingModel)
+        .accessibilityHidden(showingModel)
+        .overlay {
+            if showingModel {
+                ComposerEffortStrip(
+                    sessionId: sessionId,
+                    stats: stats,
+                    onClose: { withMizarAnimation(.mizarMorphOut) { showingModel = false } },
+                    onOpenDrawer: onOpenModelDrawer,
+                )
+                .transition(.effortStrip)
+            }
+        }
         .contentShape(.rect)
-        .onTapGesture { focused = true }
+        .onTapGesture { if !showingModel { focused = true } }
         .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         .animation(.mizarSmooth, value: text.isEmpty)
         .animation(.mizarSmooth, value: attachments.count)
