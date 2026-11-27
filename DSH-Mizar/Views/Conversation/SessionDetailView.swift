@@ -118,6 +118,11 @@ struct SessionDetailView: View {
     @State private var conversationSessionId: String?
     /// The same conversation grouped into turns, when the host gave turn numbers.
     @State private var turns: [ConversationTurn] = []
+    /// The process text relay letters carried for this conversation, by turn.
+    ///
+    /// Read from the model each time the conversation is loaded, because the
+    /// pull that writes it happens at launch for sessions nobody is looking at.
+    @State private var stashProcess: [Int: StashedReplay] = [:]
 
     /// Answers this screen has already started typing (or chosen not to type).
     ///
@@ -552,6 +557,7 @@ struct SessionDetailView: View {
             streamTypingEnabled = false
             streamSawLive = false
             realized = RealizedTurns()
+            stashProcess = [:]
             // What was typed here last time and never sent. Read before the
             // first frame the field draws, so the paragraph is simply there
             // rather than appearing a moment after the screen does.
@@ -1052,6 +1058,7 @@ struct SessionDetailView: View {
             onLoadOlder: onLoadOlder,
             historyReady: canReadHistory,
             suppressedTurnId: showsStream ? streamTurnId : nil,
+            stashProcess: stashProcess,
             typingAnswerId: typingAnswerId,
             onAnswerTypingStarted: noteAnswerTypingStarted,
             onTurnRealized: { id, built, sequence in
@@ -3191,6 +3198,11 @@ struct SessionDetailView: View {
             // newest turn is in view.
             beginInitialPlacementIfNeeded()
         }
+        // The process text relay letters carried, read beside the history it
+        // belongs to. A turn that only ever arrived as a letter is already in
+        // the cache read above; this is the narration for turns the history
+        // also had, and it changes nothing about their answers.
+        stashProcess = await model.stashedProcess(for: sessionId)
         // The last known figures, drawn before the network is asked. Without
         // this the bar was blank until a read came back, and stayed blank
         // whenever one did not -- the model name and the context percentage

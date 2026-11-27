@@ -1122,6 +1122,24 @@ final class AppModel {
     /// that will not load is a list with no rows.
     private let indexStore: any SessionIndexStore
 
+    /// The process text of turns the relay delivered while the computer was
+    /// offline.
+    ///
+    /// A bundle is fetched at cold launch, before any screen exists, and is
+    /// acknowledged straight away, so the narration has to go somewhere
+    /// durable -- otherwise it would live only in whichever object happened to
+    /// be alive when the pull landed.
+    let stashReplays: StashReplayStore
+
+    /// When the last cold-launch stash pull started, for the throttle.
+    ///
+    /// A launch that lands on the relay asks once; a reconnect, or a second
+    /// `start()` after a scene became active again, does not ask again within
+    /// the minute. The letters are deleted on ACK, so a second pull inside the
+    /// window would only be a 404 anyway -- but it would still be a request,
+    /// and this is a feature that must cost nothing when it has nothing to do.
+    private var lastStashPullAt: Date?
+
     /// What the operator has switched on, and where it is written.
     ///
     /// The same object the notification delegate reads (`AppSettings.shared`) and
@@ -1491,6 +1509,7 @@ final class AppModel {
         credentials: any CredentialStore = KeychainCredentialStore(),
         conversations: any ConversationCache = FileConversationCache(),
         index: any SessionIndexStore = FileSessionIndexStore(),
+        stashReplays: StashReplayStore = StashReplayStore(),
         settings: AppSettings = .shared,
         log: ActivityLog = .shared,
         accountStore: any AccountStoring = KeychainAccountStore(),
@@ -1500,6 +1519,7 @@ final class AppModel {
         self.credentials = credentials
         self.conversations = conversations
         self.indexStore = index
+        self.stashReplays = stashReplays
         self.settings = settings
         self.log = log
         let account = AccountController(store: accountStore, client: accountClient)
@@ -2348,10 +2368,135 @@ final class AppModel {
             // Written back so an install from before this rule starts keeping
             // the memory from the machine it is opening now.
             LastOpenedHostStore.store(stored.hostId)
-            try await connect(using: stored)
+            // The stash pull starts *beside* the dial, not after it. Waiting for
+            // the connection would mean waiting for the very thing the pull is
+            // there to replace: a computer that is not answering costs a leash
+            // (6 s direct, 20 s relay) before a single letter is asked for, and
+            // the operator would stare at an empty conversation for exactly
+            // that long. Nothing here depends on the socket, and the pull is
+            // skipped by itself if the socket wins the race.
+            let stashPull = Task { [weak self] in
+                await self?.pullStash(for: stored)
+            }
+            do {
+                try await connect(using: stored)
+            } catch {
+                failConnection(error, authority: host?.authority)
+            }
+            // Joined rather than left running: the pull writes the conversation
+            // cache, and a bundle folded in after the launch had already put a
+            // conversation on screen would change it under the operator.
+            await stashPull.value
         } catch {
             failConnection(error, authority: host?.authority)
         }
+    }
+
+    /// Ask the relay for the letters written while this phone was away.
+    ///
+    /// Cheap by construction. The relay deletes a room's letters the moment the
+    /// computer's tunnel is seen alive again, so on a launch where the computer
+    /// is up this is one GET that returns 404 -- and the socket is already
+    /// dialling while it happens. Only cold launch asks: a reconnect means the
+    /// computer answered, which means there is nothing in the mailbox.
+    ///
+    /// Failures are silent. An old relay, a self-hosted one without the
+    /// feature, a room with no letters and a refused credential all mean the
+    /// same thing to the operator -- behave as before -- and none of them is a
+    /// connection problem worth a banner.
+    ///
+    /// - Parameter host: the computer the launch is opening.
+    private func pullStash(for host: PairedHost) async {
+        // A stash lives behind a relay room. A pairing with only a LAN address
+        // has no mailbox, and the on-device agent has no host at all.
+        guard !isLocalAgentMode, !isConnected, phase != .ready else { return }
+        guard let baseURL = host.baseURL, !baseURL.isEmpty else { return }
+        let startedAt = Date()
+        if let last = lastStashPullAt, startedAt.timeIntervalSince(last) < 60 { return }
+        lastStashPullAt = startedAt
+        // A closed relay answers a pull only for the account it carries, and the
+        // session header is the only thing that proves which one this is. Sent on
+        // exactly the hosts that are owed it -- never to an arbitrary relay.
+        let stashSessionHeaders =
+            !isSelfHosted && AccountClient.isAccountHost(baseURL)
+            ? account.identity.sessionHeaders
+            : [:]
+        guard let client = StashClient(
+            relayBaseURL: baseURL,
+            hostId: host.hostId,
+            deviceId: host.deviceId,
+            deviceToken: host.deviceToken,
+            sessionHeaders: stashSessionHeaders,
+        ) else { return }
+        do {
+            switch try await client.pull() {
+            case .notAvailable:
+                log.add(.sync, "stash: nothing waiting")
+            case .bundles(let pulled) where pulled.isEmpty:
+                log.add(.sync, "stash: nothing waiting")
+            case .bundles(let pulled):
+                var opened: [StashBundle] = []
+                for envelope in pulled {
+                    if let bundle = client.open(envelope) { opened.append(bundle) }
+                }
+                let applied = await ingestStash(opened, for: host)
+                log.add(
+                    .sync,
+                    "stash: \(pulled.count) pulled, \(opened.count) opened, \(applied) applied",
+                )
+                // Acknowledge everything that was pulled, including letters this
+                // build could not open: otherwise an unreadable one is fetched
+                // again on every launch until the relay expires it.
+                try? await client.ack(bundleIds: pulled.map(\.bundleId))
+            }
+        } catch {
+            // Not a connection failure: the socket is dialling at this very
+            // moment, and a stash that could not be read changes nothing the
+            // operator would otherwise see.
+            if !Task.isCancelled {
+                log.add(.sync, "stash: pull failed; nothing changed")
+            }
+        }
+    }
+
+    /// Fold pulled bundles into the conversation cache.
+    ///
+    /// - Parameters:
+    ///   - bundles: the decrypted bundles, in the order the relay returned them.
+    ///   - host: the computer they belong to.
+    /// - Returns: how many turns were synthesized into history.
+    private func ingestStash(_ bundles: [StashBundle], for host: PairedHost) async -> Int {
+        var applied = 0
+        for bundle in bundles {
+            let result = await StashIngest.apply(
+                bundle: bundle,
+                hostId: host.hostId,
+                conversations: conversations,
+                process: stashReplays,
+            )
+            applied += result.synthesized.count
+            for session in result.sessions {
+                log.add(
+                    .cache,
+                    "stash: session \(session) gained \(result.synthesized.count) replayed turns",
+                )
+            }
+        }
+        return applied
+    }
+
+    /// The replayed process text for one session, by turn number.
+    ///
+    /// Read when a conversation opens, not cached in the model: the records are
+    /// written by a launch-time pull for sessions nobody is looking at, and a
+    /// screen that asked once would miss a pull that landed after it.
+    ///
+    /// - Parameter sessionId: the session on screen.
+    /// - Returns: the records still inside their seven days, keyed by turn.
+    func stashedProcess(for sessionId: String) async -> [Int: StashedReplay] {
+        guard let hostId = host?.hostId else { return [:] }
+        let records = await stashReplays.load(hostId: hostId, sessionId: sessionId)
+        return Dictionary(records.map { ($0.turn, $0) }, uniquingKeysWith: { _, latest in latest })
     }
 
     /// Open a different machine from the list.
@@ -2499,6 +2644,9 @@ final class AppModel {
         // time somebody paired a machine that reused the id.
         await indexStore.remove(hostId: hostId)
         agentSkillStore.delete(hostId: hostId)
+        // Letters pulled for this machine describe turns of a pairing that no
+        // longer exists; the next host to reuse the id must not inherit them.
+        await stashReplays.remove(hostId: hostId)
         guard host?.hostId == hostId else { return }
         disconnectCurrent()
         if let next = hosts.last {
@@ -5047,6 +5195,8 @@ final class AppModel {
             // An id paired again later must start from the host's answer, not
             // from this phone's memory of a previous pairing.
             agentSkillStore.delete(hostId: forgotten)
+            // The same for what the offline stash left behind.
+            await stashReplays.remove(hostId: forgotten)
         }
         titles = [:]
         workspaces = nil

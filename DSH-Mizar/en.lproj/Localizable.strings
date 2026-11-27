@@ -60,6 +60,7 @@
 "system" = "system";
 
 /* Permissions */
+"Replayed" = "Replayed";
 "Read only" = "Read only";
 "Workspace write" = "Workspace write";
 "Full access" = "Full access";

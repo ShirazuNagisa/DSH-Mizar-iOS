@@ -19,6 +19,13 @@ import Foundation
 /// The protocol version this build speaks.
 public let mizarProtocolVersion = 1
 
+/// What this build advertises in `hello` beyond the version-1 baseline.
+///
+/// `stash.v1` is the offline stash: a computer that sees it knows this phone can
+/// read letters delivered while the phone was away, and only then is anything
+/// written for it. A build that speaks the baseline says nothing at all.
+public let mizarClientCapabilities = ["stash.v1"]
+
 /// Path of the authenticated WebSocket endpoint.
 public let mizarWebSocketPath = "/mizar/v1/ws"
 
@@ -223,6 +230,11 @@ public enum ClientFrame: Sendable, Equatable {
         deviceModel: String?,
         engine: String? = nil,
         accountId: String? = nil,
+        // What this build can do beyond the version-1 baseline. Additive: a host
+        // that predates the key ignores it, and one that reads it uses the list
+        // to decide what to send -- the offline stash is only written for a
+        // phone that says it can read it.
+        capabilities: [String] = [],
     )
     case request(id: String, type: String, payload: JSONValue?)
 }
@@ -230,7 +242,7 @@ public enum ClientFrame: Sendable, Equatable {
 extension ClientFrame: Encodable {
     private enum CodingKeys: String, CodingKey {
         case v, type, id, token, appVersion, deviceModel, protocolVersion, payload, engine
-        case accountId
+        case accountId, capabilities
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -238,7 +250,7 @@ extension ClientFrame: Encodable {
         try container.encode(mizarProtocolVersion, forKey: .v)
 
         switch self {
-        case .hello(let id, let token, let appVersion, let deviceModel, let engine, let accountId):
+        case .hello(let id, let token, let appVersion, let deviceModel, let engine, let accountId, let capabilities):
             try container.encode("hello", forKey: .type)
             try container.encodeIfPresent(id, forKey: .id)
             try container.encode(token, forKey: .token)
@@ -254,6 +266,12 @@ extension ClientFrame: Encodable {
             // in to another account refuses this socket -- which is the one
             // question neither the pairing code nor the device token answers.
             try container.encodeIfPresent(accountId, forKey: .accountId)
+            // Top level, beside `engine`, and omitted when empty rather than
+            // sent as `[]`: an older host should see exactly the frame it saw
+            // before this build had anything to advertise.
+            if !capabilities.isEmpty {
+                try container.encode(capabilities, forKey: .capabilities)
+            }
 
         case .request(let id, let type, let payload):
             try container.encode(type, forKey: .type)

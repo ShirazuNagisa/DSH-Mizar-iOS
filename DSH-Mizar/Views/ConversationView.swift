@@ -71,6 +71,15 @@ struct ConversationView: View {
     /// bubble the stream hangs under.
     var suppressedTurnId: String?
 
+    /// The process text the relay delivered for turns in this conversation.
+    ///
+    /// Keyed by turn number, from `StashReplayStore`. A turn the history already
+    /// had keeps its own answer and draws this narration underneath it; a turn
+    /// that only ever arrived as a letter is already a normal ended turn in
+    /// ``turns``, and this is the part of it the letter carried that history
+    /// never had.
+    var stashProcess: [Int: StashedReplay] = [:]
+
     /// The answer currently being typed, decided by the screen above.
     ///
     /// `nil` for every answer that was already part of the conversation when it
@@ -236,6 +245,7 @@ struct ConversationView: View {
                         typingAnswerId: typingAnswerId,
                         onAnswerTypingStarted: onAnswerTypingStarted,
                         suppressBody: turn.id == suppressedTurnId,
+                        stashProcess: turn.turn.flatMap { stashProcess[$0] },
                         onRealized: onTurnRealized,
                     )
                     // An explicit id, not merely the ForEach identity: the

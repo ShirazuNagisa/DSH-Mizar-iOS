@@ -41,6 +41,8 @@ struct TurnSection: View {
     var onAnswerTypingStarted: (String) -> Void = { _ in }
     /// Whether the live stream below the list owns this turn's body.
     var suppressBody = false
+    /// The process text the relay delivered for this turn, when it has some.
+    var stashProcess: StashedReplay?
     /// Whether this row is built, reported to the screen without the index.
     var onRealized: (String, Bool, Int) -> Void = { _, _, _ in }
 
@@ -169,6 +171,14 @@ struct TurnSection: View {
                         withMizarAnimation(.mizarSmooth) { showsProcess.toggle() }
                     },
                 )
+            }
+
+            if !suppressBody, let stashProcess {
+                // The narration the computer wrote while this phone was away.
+                // Drawn as history, not as a stream: there is no clock, no
+                // typewriter and no changing status line, because this is
+                // something that already happened.
+                ReplayedProcess(blocks: stashProcess.processBlocks)
             }
 
             if !suppressBody {
@@ -416,5 +426,36 @@ private struct TurnActivitySummary: View {
                 return
             }
         }
+    }
+}
+
+/// Narration a relay letter carried, drawn under the turn it belongs to.
+///
+/// Deliberately plain: one small line saying where it came from and the text
+/// blocks in order. No status lines, no typewriter, no duration -- a replayed
+/// turn is history, and the whole reason it is not fed through the live stream
+/// is so it cannot be mistaken for one.
+private struct ReplayedProcess: View {
+    let blocks: [StreamBlock]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // The label is drawn even when the letter carried no narration: it
+            // is also how the reader learns that this turn's answer arrived
+            // while the computer was offline.
+            Label("Replayed", systemImage: "tray.and.arrow.down")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            ForEach(blocks) { block in
+                MarkdownMessage(block.text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 680, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.leading, 2)
+        .accessibilityIdentifier("turn.replayed")
+        .accessibilityElement(children: .contain)
     }
 }

@@ -354,6 +354,7 @@ public actor MizarConnection {
             deviceModel: configuration.deviceModel,
             engine: configuration.engine,
             accountId: configuration.accountId,
+            capabilities: mizarClientCapabilities,
         )
         do {
             try await socket.send(text: try Self.encode(hello))

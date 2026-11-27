@@ -61,6 +61,7 @@
 "system" = "系统";
 
 /* Permissions */
+"Replayed" = "补发";
 "Read only" = "只读";
 "Workspace write" = "工作区写入";
 "Full access" = "完全访问";
