@@ -496,7 +496,7 @@ struct ComposerLanguageSnapshotTests {
     func failureCardFollowsTheLanguageButNotTheContent(_ language: Language) throws {
         try AppSourceContract.expectFragments(
             [#"Label("The turn ended without a response", systemImage: "exclamationmark.triangle.fill")"#],
-            in: "DSH-Mizar/Views/ConversationView.swift",
+            in: "DSH-Mizar/Views/Conversation/FailureCard.swift",
             describing: "the failure card's copy key",
         )
 

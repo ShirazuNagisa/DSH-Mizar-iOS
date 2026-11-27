@@ -424,7 +424,7 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         let usage = app.staticTexts["turn.1.usage"]
         for _ in 0..<5 where !usage.isHittable { app.swipeDown() }
         expect(usage, "completed response has no usage footer")
-        XCTAssertTrue(usage.label.contains("12345"), "whole-turn exact token count is missing")
+        XCTAssertEqual(usage.label, "12.3K tokens", "whole-turn compact token count is missing")
         XCTAssertFalse(app.buttons["turn.4.copy"].exists, "running response must not expose a completed footer")
         let branchGeometry = app.buttons["turn.1.branch"]
         let copyGeometry = app.buttons["turn.1.copy"]
