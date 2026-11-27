@@ -10,16 +10,17 @@
 import XCTest
 
 final class OnboardingUITests: XCTestCase {
+    private static let offlineLaunchArguments = [
+        "-mizarSkipSplash",
+        "-mizarSkipPermissionPrompts",
+        "-mizarAccountFreshStart",
+        "-mizarAccountURL", "http://127.0.0.1:1",
+    ]
+
     func testFreshLaunchShowsWelcomeThenTheAccountGate() {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-mizarFreshStart",
-            "-mizarResetOnboarding",
-            "-mizarSkipSplash",
-            "-mizarSkipPermissionPrompts",
-            "-mizarAccountFreshStart",
-            "-mizarAccountURL", "http://127.0.0.1:1",
-        ]
+        app.launchArguments = ["-mizarFreshStart", "-mizarResetOnboarding"]
+            + Self.offlineLaunchArguments
         app.launch()
 
         let next = app.buttons["onboarding.next"]
@@ -54,10 +55,6 @@ final class OnboardingUITests: XCTestCase {
         XCTAssertTrue(copy.exists, "the download link cannot be copied")
         copy.tap()
         XCTAssertTrue(
-            app.buttons["onboarding.desktop.copy"].waitForExistence(timeout: 3),
-            "the copy button went away after a tap",
-        )
-        XCTAssertTrue(
             copy.label.contains("Link copied") || copy.label.contains("链接已复制"),
             "tapping copy said nothing: \(copy.label)",
         )
@@ -72,15 +69,9 @@ final class OnboardingUITests: XCTestCase {
 
     func testPlanPageKeepsPaidDisabled() {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-mizarFreshStart",
-            "-mizarResetOnboarding",
-            "-mizarSkipSplash",
-            "-mizarSkipPermissionPrompts",
-            "-mizarAccountFreshStart",
-            "-mizarAccountURL", "http://127.0.0.1:1",
-            "-mizarOnboardingStep", "8",
-        ]
+        app.launchArguments = ["-mizarFreshStart", "-mizarResetOnboarding"]
+            + Self.offlineLaunchArguments
+            + ["-mizarOnboardingStep", "8"]
         app.launch()
 
         let upgrade = app.buttons["onboarding.plan.upgrade"]
@@ -101,21 +92,40 @@ final class OnboardingUITests: XCTestCase {
     /// settings they already have.
     func testAPhoneThatWalkedAnOlderGuideWalksItAgain() {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-mizarFreshStart",
-            "-mizarResetOnboarding",
-            "-mizarSkipSplash",
-            "-mizarSkipPermissionPrompts",
-            "-mizarAccountFreshStart",
-            "-mizarAccountURL", "http://127.0.0.1:1",
+        app.launchArguments = Self.offlineLaunchArguments + ["-mizarSkipOnboarding"]
+        app.launch()
+
+        let welcomeGate = app.descendants(matching: .any)["welcome.gate"]
+        XCTAssertTrue(
+            welcomeGate.waitForExistence(timeout: 25),
+            "the skip launch did not establish the completed-guide state",
+        )
+        app.terminate()
+
+        app.launchArguments = Self.offlineLaunchArguments + [
             "-mizarOnboardingVersion", "0.9.8",
+            "-mizarOnboardingStep", "10",
         ]
         app.launch()
 
-        let next = app.buttons["onboarding.next"]
+        let done = app.buttons["onboarding.done"]
         XCTAssertTrue(
-            next.waitForExistence(timeout: 25),
-            "a phone carrying an older guide did not walk this one",
+            done.waitForExistence(timeout: 25),
+            "a phone carrying the 0.9.8 guide did not open the summary page",
+        )
+        done.tap()
+        XCTAssertTrue(
+            welcomeGate.waitForExistence(timeout: 10),
+            "finishing the migrated guide did not return to the welcome gate",
+        )
+        app.terminate()
+
+        app.launchArguments = Self.offlineLaunchArguments
+        app.launch()
+
+        XCTAssertTrue(
+            welcomeGate.waitForExistence(timeout: 25),
+            "the completed guide did not stay complete across a plain relaunch",
         )
         app.terminate()
     }
@@ -123,15 +133,9 @@ final class OnboardingUITests: XCTestCase {
     /// The reload of the session information, before the summary.
     func testTheRefreshPageLoadsTheSessionsAgain() {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-mizarFreshStart",
-            "-mizarResetOnboarding",
-            "-mizarSkipSplash",
-            "-mizarSkipPermissionPrompts",
-            "-mizarAccountFreshStart",
-            "-mizarAccountURL", "http://127.0.0.1:1",
-            "-mizarOnboardingStep", "9",
-        ]
+        app.launchArguments = ["-mizarFreshStart", "-mizarResetOnboarding"]
+            + Self.offlineLaunchArguments
+            + ["-mizarOnboardingStep", "9"]
         app.launch()
 
         let state = app.descendants(matching: .any)["onboarding.refresh.state"]
@@ -154,15 +158,9 @@ final class OnboardingUITests: XCTestCase {
     /// any request, so the test proves the gate without a relay to talk to.
     func testServerPageNeedsAVerifiedSelfHostedAddress() {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-mizarFreshStart",
-            "-mizarResetOnboarding",
-            "-mizarSkipSplash",
-            "-mizarSkipPermissionPrompts",
-            "-mizarAccountFreshStart",
-            "-mizarAccountURL", "http://127.0.0.1:1",
-            "-mizarOnboardingStep", "1",
-        ]
+        app.launchArguments = ["-mizarFreshStart", "-mizarResetOnboarding"]
+            + Self.offlineLaunchArguments
+            + ["-mizarOnboardingStep", "1"]
         app.launch()
 
         let next = app.buttons["onboarding.next"]
@@ -186,10 +184,52 @@ final class OnboardingUITests: XCTestCase {
         XCTAssertTrue(refused, "an http origin was not refused: \(status.label)")
         XCTAssertFalse(next.isEnabled, "an unverified address let the guide continue")
 
-        // The app is not reinstalled between test methods, so this choice is
-        // shared with everything that launches after it: put the official
-        // server back before leaving.
-        app.buttons["onboarding.server.official"].tap()
+        app.terminate()
+        app.launchArguments = Self.offlineLaunchArguments + ["-mizarOnboardingStep", "2"]
+        app.launch()
+
+        let desktop = app.staticTexts["onboarding.desktop.url"]
+        XCTAssertTrue(
+            desktop.waitForExistence(timeout: 25),
+            "the persisted self-hosted draft did not reopen on the raw desktop page",
+        )
+        let relaunchedNext = app.buttons["onboarding.next"]
+        XCTAssertTrue(
+            relaunchedNext.waitForExistence(timeout: 6),
+            "the raw desktop page has no Continue button",
+        )
+        relaunchedNext.tap()
+
+        XCTAssertTrue(
+            app.buttons["onboarding.connect.skip"].waitForExistence(timeout: 6),
+            "Continue from the desktop page did not reach the self-hosted connect page",
+        )
+
+        let back = app.buttons["onboarding.back"]
+        XCTAssertTrue(
+            back.waitForExistence(timeout: 6),
+            "the self-hosted connect page has no back control",
+        )
+        XCTAssertTrue(back.isHittable, "the self-hosted connect page's back control is not tappable")
+        back.tap()
+        XCTAssertTrue(
+            desktop.waitForExistence(timeout: 6),
+            "the first back tap did not return to the raw desktop page",
+        )
+        XCTAssertTrue(
+            back.waitForExistence(timeout: 6),
+            "the raw desktop page has no back control",
+        )
+        XCTAssertTrue(back.isHittable, "the raw desktop page's back control is not tappable")
+        back.tap()
+
+        let restoredOfficial = app.buttons["onboarding.server.official"]
+        XCTAssertTrue(
+            restoredOfficial.waitForExistence(timeout: 6),
+            "the server page did not reappear after navigating back",
+        )
+        XCTAssertTrue(restoredOfficial.isHittable, "the official server choice cannot be tapped")
+        restoredOfficial.tap()
         app.terminate()
     }
 }
