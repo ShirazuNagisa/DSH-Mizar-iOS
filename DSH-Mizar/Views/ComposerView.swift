@@ -59,6 +59,13 @@ struct ComposerView: View {
     /// Whether the rewrite's intent window is out. Owned by the screen, like
     /// the other panels: a popover's content is rebuilt while it is up.
     @Binding var showingEnhance: Bool
+    /// Whether the permission picker is out, owned by the screen like the other
+    /// panels: a popover's content is rebuilt while it is up.
+    @Binding var showingPermission: Bool
+    /// Open the model drawer.
+    var onOpenModelDrawer: () -> Void = {}
+    /// Re-read the frame the permission key is drawn from after a switch.
+    var onPermissionApplied: () async -> Void = {}
     /// The two on-device entries' state, owned by the screen so a task survives
     /// the rebuids a scrolling conversation causes.
     let onDevice: ComposerOnDeviceInput
@@ -155,7 +162,7 @@ struct ComposerView: View {
     private static let buttonSize: CGFloat = 34
     private static let corner: CGFloat = Theme.Radius.xl
 
-    var body: some View {
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             // The key, not the Chinese: this string is already in the catalogue.
             //
@@ -260,10 +267,12 @@ struct ComposerView: View {
                         showingModel: $showingModel,
                         showingContext: $showingContext,
                         showingCommands: $showingCommands,
+                        showingPermission: $showingPermission,
                         showingPhotoPicker: $showingPhotoPicker,
                         showingFileImporter: $showingFileImporter,
                         onLockedAttachment: { showingPaywall = true },
                         onContextChanged: onContextChanged,
+                        onPermissionApplied: onPermissionApplied,
                         onBrowseCommands: onBrowseCommands,
                     )
                     Spacer(minLength: 4)
@@ -296,6 +305,10 @@ struct ComposerView: View {
                 ComposerShellMeasurement(chrome: $0)
             }
         }
+    }
+
+    var body: some View {
+        content
         .contentShape(.rect)
         .onTapGesture { focused = true }
         .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
@@ -413,6 +426,7 @@ struct ComposerView: View {
         .onChange(of: showingModel) { _, open in if open { showingEnhance = false } }
         .onChange(of: showingContext) { _, open in if open { showingEnhance = false } }
         .onChange(of: showingCommands) { _, open in if open { showingEnhance = false } }
+        .onChange(of: showingPermission) { _, open in if open { showingEnhance = false } }
         .animation(.mizarSnappy, value: onDevice.dictation.phase != .idle)
     }
 

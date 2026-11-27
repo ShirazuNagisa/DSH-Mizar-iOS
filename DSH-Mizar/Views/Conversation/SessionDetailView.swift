@@ -516,23 +516,6 @@ struct SessionDetailView: View {
                     RefreshUnreachableNote()
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingPermissionPicker = true
-                } label: {
-                    Label(permissionLabel, systemImage: permissionSymbol)
-                        .foregroundStyle(permissionTint)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .accessibilityIdentifier("session.permissions")
-                .mizarPopover(isPresented: $showingPermissionPicker, arrowEdge: .top) {
-                    PermissionPickerView(
-                        sessionId: sessionId,
-                        current: resolvedPermission,
-                        onApplied: { await refreshStatsFromCache() },
-                    )
-                }
-            }
         }
         .onAppear {
             // `onDisappear` withdraws the index. On return, restore the index
@@ -1258,7 +1241,6 @@ struct SessionDetailView: View {
                             paletteReplacesSlash = true
                             showingSkillPalette = true
                         }
-                        .padding(.horizontal, 18)
                         .transition(.fromBelow)
                     }
                     // The message waiting for the running turn, directly above
@@ -1307,6 +1289,8 @@ struct SessionDetailView: View {
                         showingContext: $showingContextDetail,
                         showingCommands: $showingCommands,
                         showingEnhance: $showingEnhance,
+                        showingPermission: $showingPermissionPicker,
+                        onPermissionApplied: { await refreshStatsFromCache() },
                         onDevice: composerOnDevice,
                         onWillSend: { text in launch(text) },
                         onSent: { sent in await refreshAfterSend(sent) },
@@ -3020,51 +3004,6 @@ struct SessionDetailView: View {
         #else
         false
         #endif
-    }
-
-    /// The permission preset in force, as the app and the host agree on it.
-    ///
-    /// The stats frame is what the host last *reported*, and after a switch this
-    /// phone has made it is older than the app's own record of what the host
-    /// accepted. `AppModel` resolves the two, so the shield in the bar and the
-    /// picker behind it cannot disagree -- and a refused switch leaves the old
-    /// preset in force on both.
-    private var resolvedPermission: String? {
-        model.permissionPreset(for: sessionId, reported: shownStats?.permissionPreset)
-    }
-
-    /// The permission preset, as a word rather than a raw value.
-    ///
-    /// Through the catalogue's own rows when the host has listed this preset,
-    /// so the bar and the picker behind it cannot disagree -- and through the
-    /// app's own names when the catalogue has not been read yet, which is the
-    /// case on the first frame of a session. A preset nobody has a name for
-    /// reads as its value, which is what the host called it.
-    private var permissionLabel: String {
-        guard let preset = resolvedPermission else { return String(localized: "Permissions") }
-        if let option = model.permissionCatalog?.options.first(where: { $0.value == preset }) {
-            return option.title
-        }
-        return PermissionOption.title(for: preset) ?? preset
-    }
-
-    /// The shield, shaped by how much the session may do.
-    private var permissionSymbol: String {
-        switch resolvedPermission {
-        case "read-only": "lock.shield"
-        case "danger-full-access": "exclamationmark.shield.fill"
-        default: "checkmark.shield"
-        }
-    }
-
-    /// Neutral for read-only, the accent for workspace writes, amber for full
-    /// access: the one place a dangerous setting stays visible.
-    private var permissionTint: Color {
-        switch resolvedPermission {
-        case "workspace-write": .accentColor
-        case "danger-full-access": Theme.waiting
-        default: .primary
-        }
     }
 
     /// Re-read the figures the toolbar is drawn from, after the permission

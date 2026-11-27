@@ -32,6 +32,13 @@ struct ComposerControlsSnapshotTests {
             in: "DSH-Mizar/Views/ComposerBar.swift",
         )
 
+        // The permission key moved from the toolbar into the bar in the same
+        // batch; its identifier is the one the UI tests tap.
+        try AppSourceContract.expectIdentifiers(
+            ["composer.permissions"],
+            in: "DSH-Mizar/Views/Composer/PermissionAppearance.swift",
+        )
+
         // The composition rule is copy, so assert it exactly rather than
         // trusting the snapshot to be legible.
         #expect(modelPillLabel(model: "deepseek-flash", effort: "high") == "deepseek-flash · High")

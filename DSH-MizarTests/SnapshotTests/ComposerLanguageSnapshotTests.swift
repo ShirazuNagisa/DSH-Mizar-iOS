@@ -595,6 +595,7 @@ private struct ComposerMotionHost: View {
                         expanded: $state.expanded,
                         showingModel: .constant(false), showingContext: .constant(false),
                         showingCommands: .constant(false), showingEnhance: $showingEnhance,
+                        showingPermission: .constant(false),
                         onDevice: onDevice, onSent: { _ in },
                         onCollapsedHeightChanged: { state.collapsedTarget = $0 }
                     )

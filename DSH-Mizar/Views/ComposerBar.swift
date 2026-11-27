@@ -39,6 +39,9 @@ struct ComposerBar: View {
     @Binding var showingModel: Bool
     @Binding var showingContext: Bool
     @Binding var showingCommands: Bool
+    /// Whether the permission picker is out, owned by the screen like the other
+    /// panels.
+    @Binding var showingPermission: Bool
     /// Open the photo picker. `ComposerView` owns the picker modifier; this is
     /// just the flag, because a `PhotosPicker` presented from inside a popover
     /// closes with the popover.
@@ -52,6 +55,9 @@ struct ComposerBar: View {
     /// Called after a compaction, so the screen that owns `stats` can re-read
     /// the frame behind the figure above the composer.
     var onContextChanged: () async -> Void = {}
+    /// Called once the host has taken a permission switch, so the screen can
+    /// re-read the frame the shield is drawn from.
+    var onPermissionApplied: () async -> Void = {}
     /// Open the command and skill palette. The `+` window closes first; the
     /// screen owns both flags because a popover's content is rebuilt while it
     /// is up, and a panel whose openness lives inside it closes itself.
@@ -60,6 +66,12 @@ struct ComposerBar: View {
     var body: some View {
         HStack(spacing: 6) {
             commandButton
+            ComposerPermissionButton(
+                sessionId: sessionId,
+                stats: stats,
+                isPresented: $showingPermission,
+                onApplied: onPermissionApplied,
+            )
             modelPill
                 .layoutPriority(1)
             contextPill
