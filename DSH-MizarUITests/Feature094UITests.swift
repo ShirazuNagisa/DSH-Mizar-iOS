@@ -72,7 +72,7 @@ final class Feature094UITests: XCTestCase {
         let app = launch(session: "first", pending: false)
         openSessionIfNeeded(app)
 
-        let opener = app.buttons["session.permissions"]
+        let opener = app.buttons["composer.permissions"]
         expect(opener, "there is no way to change the permission preset")
         // The fixture starts in workspace-write, so the bar has something to
         // hold before the switch and the change below is a change.

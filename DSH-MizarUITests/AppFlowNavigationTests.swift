@@ -271,6 +271,8 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         let opener = app.buttons["composer.model"]
         expect(opener, "there is no way to change the model")
         opener.tap()
+        expect(app.buttons["model.strip.title"], "the thinking strip did not open")
+        app.buttons["model.strip.title"].tap()
 
         // Rows are buttons, not static text: the row carries an identifier, and
         // an identifier makes the row one accessibility element with its label
@@ -278,7 +280,7 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         expect(app.buttons["model.row.deepseek-flash"], "the first model is missing")
         expect(app.buttons["model.row.deepseek-v4-pro"], "the second model is missing")
         // The provider heading is a standalone element, so it is still text.
-        expect(app.staticTexts["DeepSeek"], "the provider is missing from the picker")
+        expect(app.staticTexts["DeepSeek"], "the provider is missing from the drawer")
 
         // A provider that could not be listed is shown rather than hidden: its
         // models being absent is information. It sits below the models.
@@ -289,18 +291,15 @@ final class AppFlowNavigationTests: AppFlowTestBase {
     func testChoosingAModelRevealsItsReasoningLevels() {
         let app = launch()
         app.buttons["composer.model"].tap()
-        let model = app.buttons["model.row.deepseek-flash"]
-        expect(model, "the model row is missing")
-        model.tap()
-        // The four levels the host actually offers. The picker must not invent
-        // its own, and must not offer a level the model rejects.
-        expect(app.buttons["Off"], "the reasoning levels were not revealed")
-        expect(app.buttons["Max"], "the highest reasoning level is missing")
+        // The four levels the host actually offers, as stops on the strip. The strip
+        // must not invent its own, and must not offer a level the model rejects.
+        expect(app.buttons["effort.step.off"], "the reasoning levels were not revealed")
+        expect(app.buttons["effort.step.max"], "the highest reasoning level is missing")
     }
 
     func testThePermissionPickerWarnsBeforeFullAccess() {
         let app = launch()
-        let opener = app.buttons["session.permissions"]
+        let opener = app.buttons["composer.permissions"]
         expect(opener, "there is no way to change the permission preset")
         opener.tap()
         expect(app.buttons["permission.row.workspace-write"], "the presets are missing")
@@ -321,7 +320,7 @@ final class AppFlowNavigationTests: AppFlowTestBase {
     /// noticed.
     ///
     /// Both halves are asserted, because either one alone is a smaller bug than
-    /// the one reported: the picker goes back to the model that is actually in
+    /// the one reported: the drawer goes back to the model that is actually in
     /// force, and it says why the switch did not happen.
     func testARefusedModelSwitchGoesBackAndSaysSo() {
         // Opened by tapping rather than by `-mizarSelectSession`. That argument
@@ -341,65 +340,55 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         }
         XCTAssertTrue(opened, "the conversation never opened")
 
-        // Re-queried rather than held in a `let`: a sheet coming and going
+        // Re-queried rather than held in a `let`: an overlay coming and going
         // rebuilds the hierarchy under it, and an element captured before that is
         // a stale reference the second tap goes nowhere with.
-        app.buttons["composer.model"].tap()
-        XCTAssertTrue(
-            app.buttons["model.row.deepseek-flash"].waitForExistence(timeout: Self.patience),
-            "the picker did not open",
-        )
-
+        //
         // A switch the host takes, so that the refusal below is a change from
         // something and the value it goes back to is one the app has agreed with
         // rather than one a test assumed. `deepseek-flash` has reasoning levels,
-        // so this commits `Off`, and a taken switch closes the picker.
-        app.buttons["model.row.deepseek-flash"].tap()
-        expect(app.buttons["Off"], "the reasoning levels were not revealed")
-        app.buttons["Off"].tap()
+        // so this commits `Off`, and a taken switch closes the strip.
+        app.buttons["composer.model"].tap()
+        expect(app.buttons["model.strip.title"], "the thinking strip did not open")
+        app.buttons["effort.step.off"].tap()
         XCTAssertTrue(
-            waitForDisappearance(app.buttons["model.row.deepseek-flash"], timeout: Self.patience),
-            "the picker stayed open over a switch the host accepted",
+            waitForDisappearance(app.buttons["model.strip.title"], timeout: Self.patience),
+            "the strip stayed open over a switch the host accepted",
         )
 
-        // Reopened: this is what is in force, said by the screen. It is also the
+        // Reopened: this is what is in force, said by the drawer. It is also the
         // value the refusal below has to put back.
         app.buttons["composer.model"].tap()
+        expect(app.buttons["model.strip.title"], "the thinking strip did not open")
+        app.buttons["model.strip.title"].tap()
         XCTAssertTrue(
             app.staticTexts["model.current.deepseek-flash"].waitForExistence(timeout: Self.patience),
-            "the picker does not say which model is in force",
+            "the drawer does not say which model is in force",
         )
 
         // From here the host refuses the switch, and answers everything else.
         XCTAssertTrue(Self.failMockHost("session.model.set"), "the mock did not take the refusal knob")
 
-        // The refusal is driven through the reasoning-level control rather than
-        // by tapping the model's own row, and that is about the test rather than
-        // the app: a `List` row's button is not reliably hittable once the picker
-        // has been closed and reopened under XCUITest, while the segmented
-        // control is. What it exercises is the same `commit`, the same
-        // `setModel`, and the same failure.
-        // `Off`, not `High`: the second model already defaults to `High`, and a
-        // segmented control whose selection does not change does not call its
-        // binding -- so a tap on the level already in force commits nothing.
+        // The refusal is driven by tapping the model's own row: the drawer stays
+        // open over the failure, so its rows are still hittable. What it
+        // exercises is the same `setModel` and the same failure path the strip
+        // would take.
         app.buttons["model.row.deepseek-v4-pro"].tap()
-        expect(app.buttons["Off"], "the second model's levels were not revealed")
-        app.buttons["Off"].tap()
 
         XCTAssertTrue(
             labelled("model.error", in: app, contains: "failed on purpose")
                 .waitForExistence(timeout: Self.patience),
             "a refused model switch was not reported at all",
         )
-        // Back to the model that is actually in force. The picker did not close
+        // Back to the model that is actually in force. The drawer did not close
         // over the refusal, so the operator is looking at the answer.
         XCTAssertTrue(
             app.staticTexts["model.current.deepseek-flash"].waitForExistence(timeout: 5),
-            "the picker kept showing a model the host had refused, as though it were in force",
+            "the drawer kept showing a model the host had refused, as though it were in force",
         )
         XCTAssertFalse(
             app.staticTexts["model.current.deepseek-v4-pro"].exists,
-            "the refused model is still the one the picker says is in force",
+            "the refused model is still the one the drawer says is in force",
         )
     }
 
@@ -446,11 +435,15 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         let opener = app.buttons["composer.model"]
         expect(opener, "the second computer's conversation never opened")
         opener.tap()
+        expect(app.buttons["model.strip.title"], "the thinking strip did not open")
+        app.buttons["model.strip.title"].tap()
         XCTAssertTrue(
             app.buttons["model.row.kimi-k2"].waitForExistence(timeout: Self.patience),
             "the second computer's own catalogue is missing",
         )
-        app.navigationBars.buttons["Done"].tap()
+        if app.buttons["model.drawer.close"].waitForExistence(timeout: 5) {
+            app.buttons["model.drawer.close"].tap()
+        }
         expect(app.buttons["composer.model"], "the picker never closed")
 
         // Back to the list, and to the first computer.
@@ -474,6 +467,7 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         firstRow.tap()
         expect(app.buttons["composer.model"], "the first computer's conversation never opened")
         app.buttons["composer.model"].tap()
+        app.buttons["model.strip.title"].tap()
         XCTAssertTrue(
             app.buttons["model.row.deepseek-flash"].waitForExistence(timeout: Self.patience),
             "the first computer's catalogue is missing",

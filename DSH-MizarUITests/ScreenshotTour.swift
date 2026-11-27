@@ -162,7 +162,7 @@ final class ScreenshotTour: XCTestCase {
                 shoot("05-question\(suffix)")
             }
 
-            // The model picker, as a small window out of its chip.
+            // The thinking strip, grown out of the model chip.
             app.buttons["composer.model"].tap()
             shoot("06-model\(suffix)")
             dismissWindow(app)
@@ -424,7 +424,7 @@ final class ScreenshotTour: XCTestCase {
         app.buttons["composer.commands"].tap()
         shoot("w08-commands")
         dismissWindow(app)
-        app.buttons["session.permissions"].tap()
+        app.buttons["composer.permissions"].tap()
         if app.buttons["permission.row.danger-full-access"].waitForExistence(timeout: 5) {
             app.buttons["permission.row.danger-full-access"].tap()
         }
