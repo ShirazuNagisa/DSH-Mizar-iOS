@@ -457,6 +457,10 @@ final class AppFlowNavigationTests: AppFlowTestBase {
         // away once the switch has landed.
         closeHosts(app)
         expect(app.buttons["sessions.hosts"], "the first computer's session list never arrived")
+        // The machines sheet takes the sidebar with it: put it back in front
+        // before a workspace under it is expanded, or the row is tapped where it
+        // is parked off-screen.
+        openSidebar(app)
 
         // A conversation on the first computer, so its picker -- and therefore its
         // catalogue -- is reachable. Opening the picker is what asks for it.
