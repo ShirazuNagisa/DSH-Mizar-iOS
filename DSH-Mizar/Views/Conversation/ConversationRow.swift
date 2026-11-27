@@ -6,14 +6,12 @@
 //
 
 import SwiftUI
+import UIKit
 import MizarKit
 
 /// One item, drawn by kind.
 struct ConversationRow: View {
     let item: ConversationItem
-    /// Whether this is the last of the operator's messages before the agent
-    /// answers, which is the bubble that carries the tail.
-    let isLastPrompt: Bool
     /// Whether this row's answer should be typed onto the page.
     var typing: Bool = false
     /// Called when typing that answer starts.
@@ -21,10 +19,10 @@ struct ConversationRow: View {
 
     var body: some View {
         switch item {
-        case .message(_, .user, let text, _):
+        case .message(let id, .user, let text, _):
             UserBubble(
+                messageId: id,
                 text: text,
-                tail: isLastPrompt,
                 attachments: DeliveredAttachments.attachments(for: text),
             )
         case .message(_, .assistant, let text, _):
@@ -99,29 +97,48 @@ private struct ConversationNotice: View {
 /// rendering of it.
 private struct MessageText: View {
     let text: String
+    /// Whether the words may be selected with the system selection UI.
+    ///
+    /// A user bubble answers `false`: it opens the select-in-place editor from
+    /// its own menu instead, and two selection surfaces for one bubble is one
+    /// too many.
+    var selectable: Bool = true
 
     var body: some View {
         if MessageMarkdown.looksLikeMarkdown(text) {
             MarkdownMessage(text)
-        } else {
+        } else if selectable {
             Text(text)
                 .textSelection(.enabled)
+        } else {
+            Text(text)
         }
     }
 }
 
 /// The operator's words.
 private struct UserBubble: View {
+    @Environment(\.messageMenuPresenter) private var presenter
+    @Environment(\.messageMenuActiveId) private var activeId
+    @Environment(\.selectingMessageId) private var selectingId
+    @Environment(\.endMessageSelection) private var endSelection
+
+    /// Which message this bubble is, so the menu can name it back.
+    let messageId: String
     let text: String
-    /// Whether the corner nearest the answer tightens, the quiet tail that says
-    /// "this is the message that was answered".
-    let tail: Bool
     /// What this phone sent with the prompt, above the words.
     ///
     /// The computer's record carries the text alone, so an attachment that
     /// went with it would otherwise vanish the moment the screen reloaded --
     /// the operator sees the photo go up and then nothing.
     var attachments: [DeliveredAttachment] = []
+
+    /// Whether a finger is holding the bubble down.
+    @State private var pressing = false
+    /// How many holds have completed, which is what plays the haptic.
+    @State private var presses = 0
+    /// Where the bubble was laid out, read once when it is held.
+    @State private var frameBox = MessageFrameBox()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -151,24 +168,47 @@ private struct UserBubble: View {
     }
 
     private var bubble: some View {
+        bubbleBody
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SessionDetailView.space)) } action: { frameBox.frame = $0 }
+            .scaleEffect(pressing ? 0.97 : 1)
+            .animation(pressing ? .easeOut(duration: 0.08) : .mizarBouncy, value: pressing)
+            .opacity(activeId == messageId ? 0 : 1)
+            .onLongPressGesture(minimumDuration: 0.35, maximumDistance: 10) {
+                presses += 1
+                presenter.open(MessageMenuRequest(id: messageId, text: text, frame: frameBox.frame))
+            } onPressingChanged: { pressing = $0 }
+            .mizarFeedback(.impact(weight: .medium), trigger: presses)
+            .accessibilityAction(named: Text("Copy")) { UIPasteboard.general.string = text }
+            .accessibilityAction(named: Text("Select Text")) { presenter.select(messageId) }
+            // The row is full width and the bubble sits at its trailing edge,
+            // so what is lifted and measured is the bubble, not the row.
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// The bubble's look: the words, padded, on the accent colour.
+    private var bubbleBody: some View {
         HStack(spacing: 0) {
-            MessageText(text: text)
+            bubbleText
                 .foregroundStyle(Theme.onAccent)
                 .tint(Theme.onAccent)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
                 .background {
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: Theme.Radius.lg,
-                        bottomLeadingRadius: Theme.Radius.lg,
-                        bottomTrailingRadius: tail ? 6 : Theme.Radius.lg,
-                        topTrailingRadius: Theme.Radius.lg,
-                        style: .continuous,
-                    )
-                    .fill(Color.accentColor.gradient)
+                    RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                        .fill(Color.accentColor.gradient)
                 }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// The words: plain, or an editor that lets the whole message be selected
+    /// where it sits.
+    @ViewBuilder
+    private var bubbleText: some View {
+        if selectingId == messageId {
+            SelectableBubbleText(text: text, onEnd: endSelection)
+        } else {
+            MessageText(text: text, selectable: false)
+        }
     }
 }
 

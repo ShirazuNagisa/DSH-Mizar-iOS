@@ -75,14 +75,8 @@ struct SentBubbleBody: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: Theme.Radius.lg,
-                    bottomLeadingRadius: Theme.Radius.lg,
-                    bottomTrailingRadius: 6,
-                    topTrailingRadius: Theme.Radius.lg,
-                    style: .continuous,
-                )
-                .fill(Color.accentColor.gradient)
+                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                    .fill(Color.accentColor.gradient)
             }
     }
 }

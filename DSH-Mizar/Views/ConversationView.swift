@@ -226,7 +226,6 @@ struct ConversationView: View {
                 ForEach(ConversationNoticeFold.fold(items)) { item in
                     ConversationRow(
                         item: item,
-                        isLastPrompt: false,
                         typing: item.id == typingAnswerId,
                         onTypingStarted: { onAnswerTypingStarted(item.id) },
                     )

@@ -176,6 +176,10 @@ struct SessionDetailView: View {
     @State private var hintAppearedAt: Date?
     /// The 1.7-second receipt that follows an answered question.
     @State private var answerReceipt: ComposerReceipt?
+    /// The held message whose menu is open, if one is.
+    @State private var messageMenu: MessageMenuRequest?
+    /// The message being selected in place, if one is.
+    @State private var selectingMessageId: String?
     /// Whether the palette was opened from a lone `/`, which the pick replaces.
     @State private var paletteReplacesSlash = false
     /// How tall the floating composer is, measured rather than guessed, so the
@@ -430,6 +434,36 @@ struct SessionDetailView: View {
                             .accessibilityHidden(true)
                     }
                 }
+                // The held message's menu sits above everything: the dim has
+                // to cover the composer too, and the lifted bubble is the only
+                // thing the operator is looking at.
+                .overlay(alignment: .topLeading) {
+                    if let request = messageMenu {
+                        MessageMenuOverlay(
+                            request: request,
+                            onCopy: {
+                                messageMenu = nil
+                                showAnswerReceipt(String(localized: "Copied"))
+                            },
+                            onSelect: {
+                                messageMenu = nil
+                                selectingMessageId = request.id
+                            },
+                            onDismiss: { messageMenu = nil }
+                        )
+                    }
+                }
+                .environment(\.messageMenuPresenter, MessageMenuPresenter(
+                    open: { request in
+                        composerFocused = false
+                        selectingMessageId = nil
+                        messageMenu = request
+                    },
+                    select: { id in selectingMessageId = id },
+                ))
+                .environment(\.messageMenuActiveId, messageMenu?.id)
+                .environment(\.selectingMessageId, selectingMessageId)
+                .environment(\.endMessageSelection, { selectingMessageId = nil })
         }
         .coordinateSpace(.named(Self.space))
         .onAppear { onComposerBindingAvailable?($composerExpanded) }
@@ -574,6 +608,20 @@ struct SessionDetailView: View {
         }
         .onChange(of: draft) { _, _ in
             scheduleDraftSave()
+        }
+        // Selecting a bubble's words is a mode the operator leaves the moment
+        // the page moves, the field takes the keyboard, or the conversation
+        // changes: a selection belongs to the message it was made in.
+        .onChange(of: userScrolling) { _, scrolling in
+            guard scrolling else { return }
+            selectingMessageId = nil
+        }
+        .onChange(of: composerFocused) { _, focused in
+            guard focused else { return }
+            selectingMessageId = nil
+        }
+        .onChange(of: sessionId) { _, _ in
+            selectingMessageId = nil
         }
         .onChange(of: shownStats?.title) { _, title in
             turnIndex.publish(sessionId: sessionId, title: title, turns: shownTurns)

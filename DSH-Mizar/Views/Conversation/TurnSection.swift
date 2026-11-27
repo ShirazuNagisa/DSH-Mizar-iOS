@@ -142,7 +142,6 @@ struct TurnSection: View {
                     if showsProcess {
                         ConversationRow(
                             item: item,
-                            isLastPrompt: false,
                             typing: false,
                             onTypingStarted: { onAnswerTypingStarted(item.id) },
                         )
@@ -151,7 +150,6 @@ struct TurnSection: View {
                 } else {
                     ConversationRow(
                         item: item,
-                        isLastPrompt: item.id == turn.prompts.last?.id,
                         typing: item.id == typingAnswerId,
                         onTypingStarted: { onAnswerTypingStarted(item.id) },
                     )
