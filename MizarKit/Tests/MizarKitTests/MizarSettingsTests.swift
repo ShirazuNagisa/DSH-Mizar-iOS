@@ -137,6 +137,64 @@ struct NotificationPreferencesTests {
     }
 }
 
+@Suite("Muted kinds on the wire")
+struct NotificationMuteWireTests {
+    /// What one position of the switches turns into in `push.register`.
+    ///
+    /// Written as the *whole array* rather than as `contains`, because the
+    /// contract is an exact value: a field the host compares, caches and (in
+    /// the tests on its side) asserts.
+    private func wire(_ off: Set<NotificationKind>) -> [String] {
+        NotificationPreferences(off: off).mutedKinds
+    }
+
+    @Test("sends nothing for an empty set, so an untouched install costs no field")
+    func nothingOff() {
+        #expect(wire([]) == [])
+    }
+
+    @Test("carries approval under the name the host uses")
+    func approvalOnly() {
+        #expect(wire([.approval]) == ["approval"])
+    }
+
+    @Test("carries the two one-to-one kinds together, in order")
+    func approvalAndQuestion() {
+        // Alphabetical, so one setting has one array: the empty case, one kind,
+        // two kinds -- and never the order a `Set` happened to iterate in.
+        #expect(wire([.question, .approval]) == ["approval", "question"])
+    }
+
+    @Test("folds a turn that is off both ways into turn_end")
+    func bothTurnSwitchesOff() {
+        #expect(wire([.turnFinished, .turnInterrupted]) == ["turn_end"])
+        #expect(
+            wire([.approval, .question, .turnFinished, .turnInterrupted])
+                == ["approval", "question", "turn_end"],
+        )
+    }
+
+    @Test("does not send turn_end when only half of it is off")
+    func halfATurnIsNotMuted() {
+        // The host has one switch where this phone has two, and an intersection
+        // is the only safe reading: sending `turn_end` here would silence the
+        // endings the operator still has on. An extra push the app drops on
+        // arrival is strictly better than a missing one.
+        #expect(wire([.turnFinished]) == [])
+        #expect(wire([.turnInterrupted]) == [])
+        #expect(wire([.approval, .turnFinished]) == ["approval"])
+        #expect(wire([.approval, .turnInterrupted]) == ["approval"])
+    }
+
+    @Test("turns back into nothing when the switch is switched back on")
+    func reenabled() {
+        var preferences = NotificationPreferences(off: [.approval, .question])
+        preferences.set(true, for: .approval)
+        preferences.set(true, for: .question)
+        #expect(preferences.mutedKinds == [])
+    }
+}
+
 @Suite("Mizar settings")
 struct MizarSettingsTests {
     /// A store that keeps what it is given, for tests.

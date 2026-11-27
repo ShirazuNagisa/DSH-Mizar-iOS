@@ -1576,6 +1576,30 @@ final class AppModel {
         account.onPlanChange = { [weak self] in
             self?.accountPlanChanged()
         }
+        // The notification switches, carried to the host under the names it
+        // knows them by (see `NotificationPreferences.mutedKinds`). A push that
+        // arrives in the background is drawn by iOS without ever asking this
+        // app, so a switch that stays on the phone is a switch the host keeps
+        // ignoring -- and one that waits for the next reconnect looks broken
+        // for exactly as long as the socket happens to stay up.
+        //
+        // Deliberately the *same* `syncPushRegistration` a connection or a
+        // fresh token runs: there is one registration in this app, and a second
+        // entry point would be a second set of guards to keep in step with the
+        // first. A switch moved with no socket up is not lost either -- the
+        // payload reads the settings at the moment of sending, so the next
+        // registration, whenever it comes, carries this answer.
+        settings.onNotificationKindsChanged = { [weak self] in
+            // Called from inside the settings' own write, which is already on
+            // the main actor; the registration is async and belongs after that
+            // write settles, which is what the task is for. Weak on both: the
+            // settings object is the app-wide singleton and outlives this
+            // model, so the hook must not give it a reason to keep the model
+            // alive.
+            Task { [weak self] in
+                await self?.syncPushRegistration()
+            }
+        }
         // The server choice was loaded with the rest of the settings. Applied
         // here, before any screen can dial, so a self-hosted build never opens
         // a socket to an official relay first.
@@ -7536,6 +7560,25 @@ final class AppModel {
         // `liveActivityToken` its absence does not mean anything has ended.
         let liveActivityStartToken = LiveActivityStartTokenStore.stored()
         if let liveActivityStartToken { fields["liveActivityStartToken"] = .string(liveActivityStartToken) }
+        // The switches in the host's own names, so a type the operator turned
+        // off is never sent in the first place. This is the half of the bug this
+        // field fixes: while the app is on screen `willPresent` can drop a push
+        // the operator does not want, but a background push is drawn by iOS and
+        // never asks -- so the only place left to stop it is the host.
+        //
+        // Read at the moment of sending, like the tokens below: a registration
+        // that was already in flight when the switch moved must still carry the
+        // switch's newest answer, and this is the same value the next
+        // `push.register` would have read anyway.
+        //
+        // Absent rather than `[]` when nothing is off. The two mean the same
+        // thing, and leaving the key out is what an older host -- which has no
+        // such field -- already accepts, plus a smaller frame on the common
+        // path where the operator has changed nothing.
+        let mutedKinds = settings.values.notifications.mutedKinds
+        if !mutedKinds.isEmpty {
+            fields["mutedKinds"] = .array(mutedKinds.map { JSONValue.string($0) })
+        }
         let payload = JSONValue.object(fields)
         do {
             _ = try await loggedCall("push.register", payload: payload, on: connection, as: PushRegistrationResult.self)
@@ -7548,7 +7591,13 @@ final class AppModel {
                     + "; live activity token "
                     + (liveActivityToken.map { "held (\($0.count) characters)" } ?? "none")
                     + "; start token "
-                    + (liveActivityStartToken.map { "held (\($0.count) characters)" } ?? "none"),
+                    + (liveActivityStartToken.map { "held (\($0.count) characters)" } ?? "none")
+                    // What the host was told to drop, because the answer to
+                    // "the switch is off, why did it arrive" is often that the
+                    // registration was made before the switch moved and the
+                    // only way to see that from a log is to say what went out.
+                    + "; muted: "
+                    + (mutedKinds.isEmpty ? "none" : mutedKinds.joined(separator: ", ")),
             )
         } catch {
             // Nothing to show: a phone that cannot be notified is a worse app,

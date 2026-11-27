@@ -44,6 +44,28 @@ final class AppSettings {
 
     private let storage: any SettingsStorage
 
+    /// Called once after a notification switch has moved.
+    ///
+    /// The switches used to be a purely local decision, and locally is where
+    /// they are read when a push arrives while the app is on screen: the
+    /// delegate asks ``isEnabled(_:)`` and drops what the operator does not
+    /// want. A *background* push is different -- iOS draws the banner itself
+    /// and never asks this app -- so a switch that only lives here stops
+    /// nothing on the Lock Screen. The one other place that can stop it is the
+    /// host, and the host is reachable only through ``AppModel``.
+    ///
+    /// A closure rather than a direct call for the reason every other hook in
+    /// this app is one: this object is a value holder that `MizarKit` types and
+    /// the notification delegate also use, and it must not know that a
+    /// connection, a model, or a socket exists. Nil in a test, which is the
+    /// point -- a settings screen exercised without a model behaves exactly as
+    /// it did before this hook existed.
+    ///
+    /// Not observed by SwiftUI: nothing draws it, and reading it from a view
+    /// body would only make every settings write invalidate that view.
+    @ObservationIgnored
+    var onNotificationKindsChanged: (() -> Void)?
+
     /// - Parameter storage: where the values are kept. `UserDefaults` in the app;
     ///   a dictionary in a test.
     init(storage: any SettingsStorage = UserDefaultsSettingsStorage()) {
@@ -137,6 +159,14 @@ final class AppSettings {
         where old.notifications.isEnabled(kind) != values.notifications.isEnabled(kind) {
             let state = values.notifications.isEnabled(kind) ? "on" : "off"
             ActivityLog.shared.add(.settings, "notifications: \(kind.rawValue) \(state)")
+        }
+        // After the log lines, so a push whose arrival is being investigated
+        // finds the switch's move recorded before the registration it caused.
+        // Once for the tap, not once per kind: one switch and four switches are
+        // the same event as far as the host is concerned, and it is told the
+        // whole set either way.
+        if old.notifications != values.notifications {
+            onNotificationKindsChanged?()
         }
     }
 }

@@ -167,6 +167,48 @@ public struct NotificationPreferences: Equatable, Sendable {
 
     /// The kinds currently suppressed, for a log line or a diagnosis.
     public var suppressed: Set<NotificationKind> { off }
+
+    /// The kinds that are off, in the names the host's `push.register` uses.
+    ///
+    /// The switches were a local decision only, and that is enough for a push
+    /// that arrives while the app is on screen: `willPresent` asks this phone
+    /// and the app can drop it. It is *not* enough in the background, where iOS
+    /// draws the banner itself and never asks. The host is the only other place
+    /// that can decide, so the switch has to be carried to it -- that is what
+    /// this array is for.
+    ///
+    /// Two of the four switches share one name on the wire, and the asymmetry is
+    /// deliberate. A turn ends either way, so the host has a single
+    /// `turn_end`; this phone splits the ending into "finished" and
+    /// "interrupted" because the operator reads them as different news. When
+    /// both are off the two models agree exactly, and `turn_end` is sent.
+    /// When only one is off there is no wire name for "the endings that went
+    /// well" or "the ones that did not", and both available answers are wrong:
+    /// send `turn_end` and the host swallows the endings the operator still
+    /// asked for, or say nothing and let the host send both kinds, one of which
+    /// this phone will drop on arrival. The second is taken on purpose. An
+    /// extra push that the app then suppresses is a banner somebody might
+    /// notice on the Lock Screen for a moment; a push that never arrives is a
+    /// bug report nobody can explain from the far side, because the host will
+    /// truthfully say it did what it was told -- and the operator would have
+    /// lost the notification they explicitly asked to keep.
+    ///
+    /// Sorted, so that one position of the switches produces one array. The
+    /// value is compared in tests and may be cached by the host, and a `Set`'s
+    /// order would make two equal settings look like two different
+    /// registrations.
+    public var mutedKinds: [String] {
+        var names: Set<String> = []
+        // One-to-one for these two: the wire name is the raw value, and both
+        // sides mean the same thing by it.
+        if !isEnabled(.approval) { names.insert("approval") }
+        if !isEnabled(.question) { names.insert("question") }
+        // One-to-two, and only when both halves agree. See above.
+        if !isEnabled(.turnFinished), !isEnabled(.turnInterrupted) {
+            names.insert("turn_end")
+        }
+        return names.sorted()
+    }
 }
 
 extension NotificationPreferences: Codable {
