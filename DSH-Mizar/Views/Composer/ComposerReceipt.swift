@@ -65,7 +65,6 @@ struct ReceiptCapsule: View {
             Text(receipt.text)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
-                .truncationMode(.tail)
         }
         .composerStatusCapsule()
         .mizarFeedback(receipt.allowed ? .success : .warning, trigger: receipt.id)

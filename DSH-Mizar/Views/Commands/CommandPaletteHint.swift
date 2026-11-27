@@ -30,7 +30,6 @@ struct CommandPaletteHint: View {
                 Text("Open commands and skills")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                    .truncationMode(.tail)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.secondary)
