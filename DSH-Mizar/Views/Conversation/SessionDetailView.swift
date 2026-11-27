@@ -347,17 +347,6 @@ struct SessionDetailView: View {
     /// The very end of the page, below the room left for the composer.
     static let endAnchor = "session.end"
 
-    /// How far from the newest message the placement accepts as "at the
-    /// bottom", in points. A hair rather than zero: the composer's reserved
-    /// room and rounding at non-integral display scales leave a fraction of a
-    /// point between the anchor and the end of the content.
-    static let placementTolerance: CGFloat = 4
-    /// How many re-aims the placement may spend before offering a retry.
-    /// This bounds active correction, not acceptance: a later geometry update
-    /// can still reveal the conversation after these attempts are exhausted.
-    static let placementAttempts = 32
-    /// The spacing between those re-aims, in milliseconds.
-    static let placementAttemptSpacing = 32
     /// How often the working tree is re-read while the page is up.
     ///
     /// Slow on purpose: this is a line of figures above the field, not a
@@ -1809,7 +1798,9 @@ struct SessionDetailView: View {
     /// placement instead of settling.
     private func settleUnplacedWithoutContent() {
         guard placement == .waitingForContent else { return }
-        placement = model.conversationError == nil ? .empty : .failed
+        placement = SessionPlacementPolicy.terminalStateWithoutContent(
+            hasConversationError: model.conversationError != nil,
+        )
     }
 
     /// Put the conversation at its newest message before it is shown, and
@@ -2170,7 +2161,7 @@ struct SessionDetailView: View {
         // end the stack has built nothing for. Then the newest turn is staged
         // first, as it is there.
         await stageNewest(proxy: proxy) { placement == .placing(generation: generation) }
-        if await seekBottom(proxy: proxy, attempts: Self.placementAttempts, while: {
+        if await seekBottom(proxy: proxy, attempts: SessionPlacementPolicy.placementAttempts, while: {
             placement == .placing(generation: generation)
         }) {
             finishInitialPlacement()
@@ -2189,7 +2180,7 @@ struct SessionDetailView: View {
         // there. Schedule the reveal; the final aim runs after the rows have
         // had a chance to realize, while the cover is still opaque.
         guard !Task.isCancelled, !shownItems.isEmpty,
-              placementGeometry.value?.isAtBottom(tolerance: Self.placementTolerance) == true
+              placementGeometry.value?.isAtBottom(tolerance: SessionPlacementPolicy.tolerance) == true
         else { return }
         scheduleInitialReveal()
     }
@@ -2277,7 +2268,10 @@ struct SessionDetailView: View {
     /// newest", and the page must end up on it. It still stands down if a
     /// newer correction supersedes it, a jump starts, or the operator grabs
     /// the page.
-    private func settleAtBottom(proxy: ScrollViewProxy, attempts: Int = 16) {
+    private func settleAtBottom(
+        proxy: ScrollViewProxy,
+        attempts: Int = SessionPlacementPolicy.explicitNavigationAttempts,
+    ) {
         bottomSeek &+= 1
         let seek = bottomSeek
         Task { @MainActor in
@@ -2348,17 +2342,23 @@ struct SessionDetailView: View {
                 proxy.scrollTo(Self.endAnchor, anchor: .bottom)
             }
             // A sleep that came back nil is a cancellation.
-            guard (try? await Task.sleep(for: .milliseconds(Self.placementAttemptSpacing))) != nil,
+            guard (try? await Task.sleep(
+                for: .milliseconds(SessionPlacementPolicy.placementAttemptSpacingMilliseconds),
+            )) != nil,
                   !Task.isCancelled, wanted() else { return false }
             let current = placementGeometry.value
-            if current?.isAtBottom(tolerance: Self.placementTolerance) == true {
+            if current?.isAtBottom(tolerance: SessionPlacementPolicy.tolerance) == true {
                 return true
             }
             // An explicit arrival can be parked at the bottom already (or the
             // newest row is not realized yet) while the at-bottom test stays
             // false. Aiming again changes nothing and costs a layout; stop once
             // the geometry has stopped answering.
-            if stopsWhenStill, let last, let current, last == current {
+            if SessionPlacementPolicy.shouldStopWhenStill(
+                previous: last,
+                current: current,
+                stopsWhenStill: stopsWhenStill,
+            ) {
                 return false
             }
             last = current
@@ -2421,7 +2421,10 @@ struct SessionDetailView: View {
         let seek = bottomSeek
         Task { @MainActor in
             await settleLayout()
-            await seekBottom(proxy: proxy, attempts: 8) {
+            await seekBottom(
+                proxy: proxy,
+                attempts: SessionPlacementPolicy.bottomCorrectionAttempts,
+            ) {
                 bottomSeek == seek && placement == .ready && !jumping && !composerAnimating && !userScrolling
             }
         }
@@ -2661,7 +2664,7 @@ struct SessionDetailView: View {
         proxy: ScrollViewProxy,
         generation: Int,
     ) async {
-        for _ in 0..<6 {
+        for _ in 0..<SessionPlacementPolicy.jumpCorrectionAttempts {
             guard isCurrentJump(generation), !userScrolling else { return }
             if turnIndex.visible.contains(target) { return }
             var transaction = Transaction()
@@ -2690,13 +2693,13 @@ struct SessionDetailView: View {
     /// The viewport is blank only when it does not intersect the content
     /// rectangle at all.
     private func recoverIfPastContent(proxy: ScrollViewProxy) async {
-        for _ in 0..<3 {
+        for _ in 0..<SessionPlacementPolicy.pastContentRecoveryAttempts {
             await settleLayout()
-            try? await Task.sleep(for: .milliseconds(120))
+            try? await Task.sleep(
+                for: .milliseconds(SessionPlacementPolicy.pastContentRecoverySpacingMilliseconds),
+            )
             guard let geometry = placementGeometry.value else { return }
-            let top = geometry.visibleMinY + geometry.topInset
-            let bottom = geometry.visibleMaxY - geometry.bottomInset
-            if bottom > 0, top < geometry.contentHeight - 2 { return }
+            guard SessionPlacementPolicy.needsPastContentRecovery(geometry) else { return }
             guard let target = lastReadableTurnId else { return }
             var transaction = Transaction()
             transaction.animation = nil
@@ -2736,7 +2739,7 @@ struct SessionDetailView: View {
         let rows = shownTurns.isEmpty
             ? shownItems.count
             : shownTurns.reduce(0) { $0 + $1.items.count }
-        guard rows <= 80 else { return }
+        guard SessionPlacementPolicy.shouldForceEager(rowCount: rows) else { return }
         forceEager = true
         await settleLayout()
         try? await Task.sleep(for: .milliseconds(120))
@@ -3240,7 +3243,12 @@ struct SessionDetailView: View {
             // first-frame placement again. Re-arming on every successful
             // incremental refresh made a cached long session run its whole
             // aim/fade sequence twice on open.
-            if !userHasScrolled, placement == .ready, oldNewest != fresh.last?.id {
+            if SessionPlacementPolicy.shouldRearmAfterRefresh(
+                placement: placement,
+                userHasScrolled: userHasScrolled,
+                oldNewest: oldNewest,
+                newNewest: fresh.last?.id,
+            ) {
                 placementRound += 1
                 placement = .placing(generation: placementRound)
             }
@@ -3278,70 +3286,6 @@ struct SessionDetailView: View {
         // answer, but an empty page on a screen showing another session's rows
         // means the read did not arrive.
         return statsLanded && conversationSessionId == sessionId
-    }
-}
-
-/// Where a page's conversation is on its way to its first position.
-///
-/// The screen used to reveal the conversation at whatever offset a new
-/// `ScrollView` starts at -- the top -- and move it to the newest message once
-/// the load had finished, so a session with a cached history opened showing
-/// its oldest turns and jumped a moment later, the wait growing with the
-/// network. The placement is now a precondition of display: the message area
-/// stays gated until the geometry says the newest turn is in view, which makes
-/// the first frame an operator can read the one that is already at the bottom.
-enum InitialPlacement: Equatable {
-    /// The page is up and nothing has been committed to it yet.
-    case waitingForContent
-    /// A conversation has been committed and the placement is running. The
-    /// generation is the round, so a correction belonging to an earlier
-    /// commit cannot settle a later one.
-    case placing(generation: Int)
-    /// The newest turn is in view; the message area is live.
-    case ready
-    /// Explicit turn navigation has taken ownership from initial placement.
-    case navigating
-    /// The session has no messages: there is no bottom to place against and
-    /// nothing to gate.
-    case empty
-    /// The first read failed with nothing cached: the failure card is the
-    /// content, and holding it back would be a spinner for ever.
-    case failed
-    /// Loaded content whose local placement did not converge. Offer retry.
-    case positioningFailed
-
-    /// A content commit (including refresh) may retry an unplaced page, but
-    /// never takes position back from a reader or explicit turn navigation.
-    @discardableResult
-    mutating func beginIfNeeded(generation: Int) -> Bool {
-        switch self {
-        case .waitingForContent, .empty, .failed, .positioningFailed:
-            self = .placing(generation: generation)
-            return true
-        case .placing, .ready, .navigating:
-            return false
-        }
-    }
-
-    /// Acceptance outlives the active scroll budget; it never issues a scroll.
-    @discardableResult
-    mutating func finishIfPositioned(_ geometry: ConversationPlacementGeometry?, tolerance: CGFloat) -> Bool {
-        switch self {
-        case .placing, .positioningFailed:
-            guard geometry?.isAtBottom(tolerance: tolerance) == true else { return false }
-            self = .ready
-            return true
-        default:
-            return false
-        }
-    }
-
-    /// Whether the message area may be shown and touched.
-    var isRevealed: Bool {
-        switch self {
-        case .ready, .navigating, .empty, .failed, .positioningFailed: return true
-        case .waitingForContent, .placing: return false
-        }
     }
 }
 
@@ -3402,42 +3346,5 @@ private struct JumpToLatestChrome: View {
                 .transition(.pop)
                 .animation(.mizarSmooth, value: chrome.farFromBottom)
         }
-    }
-}
-
-struct ConversationPlacementGeometry: Equatable {
-    var contentHeight: CGFloat
-    var viewportHeight: CGFloat
-    var visibleMinY: CGFloat
-    var visibleMaxY: CGFloat
-    var topInset: CGFloat = 0
-    var bottomInset: CGFloat = 0
-
-    func isAtBottom(tolerance: CGFloat) -> Bool {
-        guard contentHeight.isFinite, viewportHeight.isFinite,
-              visibleMinY.isFinite, visibleMaxY.isFinite,
-              topInset.isFinite, bottomInset.isFinite,
-              contentHeight > 0, viewportHeight > 0, visibleMaxY > visibleMinY else { return false }
-        // ScrollGeometry's raw visible rect includes content/safe-area insets.
-        // Use the usable interval consistently, including for short pages;
-        // containerSize and the raw visible rect are not interchangeable.
-        let usableMinY = visibleMinY + topInset
-        let usableMaxY = visibleMaxY - bottomInset
-        let usableHeight = usableMaxY - usableMinY
-        guard usableHeight.isFinite, usableHeight > 0 else { return false }
-        if abs(contentHeight - usableMaxY) <= tolerance { return true }
-        // A conversation shorter than the viewport has no scrollable bottom;
-        // where it sits is the bottom. Accept it unless the viewport is wholly
-        // past the content -- the shape that showed the blank page. The old
-        // check also demanded the page be at the very top, which a short page
-        // pushed down a few points by the composer reserve failed, so a
-        // readable three-turn session sat behind the failure card.
-        if contentHeight <= viewportHeight + tolerance {
-            return visibleMinY < contentHeight - tolerance
-        }
-        // A short, top-aligned conversation is already entirely visible.
-        // A viewport wholly below the content must not pass this branch.
-        return contentHeight <= usableHeight + tolerance
-            && usableMinY <= tolerance && usableMaxY >= contentHeight - tolerance
     }
 }

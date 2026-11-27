@@ -623,12 +623,13 @@ public actor MizarConnection {
             var next = 0
             var inFlight = 0
             while next < requests.count || inFlight > 0 {
-                while inFlight < limit, next < requests.count {
+                while !Task.isCancelled, inFlight < limit, next < requests.count {
                     let request = requests[next]
                     next += 1
                     inFlight += 1
                     group.addTask {
                         do {
+                            try Task.checkCancellation()
                             return (request.id, .value(try await self.request(request.method, payload: request.payload)))
                         } catch let error as MizarError {
                             return (request.id, .failure(error))
@@ -660,7 +661,8 @@ public actor MizarConnection {
     // MARK: - Internals
 
     private func sendAndAwait(id: String, text: String) async throws -> JSONValue? {
-        try await withCheckedThrowingContinuation { continuation in
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             Task { [weak self] in
                 guard let self else { return }

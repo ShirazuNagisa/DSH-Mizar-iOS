@@ -169,18 +169,22 @@ struct ComposerLanguageSnapshotTests {
         let restarted = state.beginIfNeeded(generation: 9)
         #expect(restarted)
         #expect(state == .placing(generation: 9))
+        #expect(!state.isRevealed)
         let acceptedTop = state.finishIfPositioned(top, tolerance: 4)
         #expect(!acceptedTop)
-        // A failed placement no longer gates the page: the conversation is
-        // revealed at the best position and corrected underneath.
-        #expect(state.isRevealed)
+        #expect(state == .placing(generation: 9))
+        #expect(!state.isRevealed)
         let acceptedBottom = state.finishIfPositioned(bottom, tolerance: 4)
         #expect(acceptedBottom)
         #expect(state == .ready)
+        #expect(state.isRevealed)
         let restartedReady = state.beginIfNeeded(generation: 10)
         #expect(!restartedReady)
 
         state = .positioningFailed
+        // A failed placement no longer gates the page: the conversation is
+        // revealed at the best position and corrected underneath.
+        #expect(state.isRevealed)
         let acceptedMissing = state.finishIfPositioned(nil, tolerance: 4)
         #expect(!acceptedMissing)
         let acceptedLate = state.finishIfPositioned(bottom, tolerance: 4)
@@ -492,7 +496,7 @@ struct ComposerLanguageSnapshotTests {
     func failureCardFollowsTheLanguageButNotTheContent(_ language: Language) throws {
         try AppSourceContract.expectFragments(
             [#"Label("The turn ended without a response", systemImage: "exclamationmark.triangle.fill")"#],
-            in: "DSH-Mizar/Views/ConversationView.swift",
+            in: "DSH-Mizar/Views/Conversation/FailureCard.swift",
             describing: "the failure card's copy key",
         )
 

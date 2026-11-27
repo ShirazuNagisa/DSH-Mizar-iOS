@@ -178,6 +178,25 @@ struct ConnectionTests {
         #expect(outcomes["r99"] == nil)
     }
 
+    @Test("a cancelled fan-out does not schedule new requests")
+    func cancelledRequestAllDoesNotStart() async throws {
+        let transport = StubTransport(responder: responderAnswering { type in
+            type == "session.messages" ? okFrame(id: "$ID", result: .null) : nil
+        })
+        let connection = makeConnection(transport: transport)
+        _ = try await connection.connect()
+
+        let outcomes = await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await connection.requestAll(
+                [(id: "one", method: "session.messages", payload: nil)],
+                concurrency: 1,
+            )
+        }.value
+
+        #expect(outcomes.isEmpty)
+    }
+
     @Test("decodes a typed result")
     func typedCall() async throws {
         let transport = StubTransport(responder: responderAnswering { type in

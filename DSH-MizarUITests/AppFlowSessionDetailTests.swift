@@ -222,7 +222,7 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
     /// card with no way in. Switch between the fixture's two short sessions and
     /// require readable content and a still frame each time.
     func testSwitchingShortSessionsAlwaysLandsOnTheNewestTurn() {
-        let app = launch(session: "first", running: false)
+        let app = launch(session: "first", pending: false, running: false)
 
         let demo = app.buttons["workspace./Users/you/projects/demo"]
         let mock = sessionRow(in: app, titled: "Mock session", in: "demo")
@@ -424,7 +424,7 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
         let usage = app.staticTexts["turn.1.usage"]
         for _ in 0..<5 where !usage.isHittable { app.swipeDown() }
         expect(usage, "completed response has no usage footer")
-        XCTAssertTrue(usage.label.contains("12345"), "whole-turn exact token count is missing")
+        XCTAssertEqual(usage.label, "12.3K tokens", "whole-turn compact token count is missing")
         XCTAssertFalse(app.buttons["turn.4.copy"].exists, "running response must not expose a completed footer")
         let branchGeometry = app.buttons["turn.1.branch"]
         let copyGeometry = app.buttons["turn.1.copy"]
@@ -611,16 +611,38 @@ final class AppFlowSessionDetailTests: AppFlowTestBase {
     /// forever as somewhere to start new work.
     func testTheNewSessionPickerDoesNotOfferADeletedWorkspace() {
         let app = launch(session: nil)
+        openSidebar(app)
         expect(app.buttons["sessions.new"], "the new-session button is missing")
         app.buttons["sessions.new"].tap()
 
         expect(
-            app.staticTexts["/Users/you/projects/demo"],
+            app.buttons["workspace.choice./Users/you/projects/demo"],
             "the host's own workspace is not offered",
         )
         XCTAssertFalse(
             offersDirectory(app, "/Users/you/projects/deleted-workspace"),
             "a deleted workspace was offered as somewhere to start a session",
+        )
+
+        // The mock resets created sessions for each test, so this choice must
+        // create session-mock-created-1. Creating closes the sheet and selects
+        // the new conversation. SessionDetailView intentionally hides the
+        // title's child text from accessibility, so verify the titled row in
+        // the sidebar after confirming the conversation and reopening it.
+        app.buttons["workspace.choice./Users/you/projects/demo"].tap()
+        expect(app.textViews["composer.field"], "choosing the host workspace did not open a conversation")
+
+        // The sheet has closed; the created-session-only stats title proves its
+        // row was adopted. The new-session flow selects that row before closing
+        // the sheet, and the composer above confirms the conversation is open.
+        openSidebar(app)
+        expect(
+            app.staticTexts["Started from the phone"],
+            "the created session's titled row was not adopted into the sidebar",
+        )
+        expect(
+            app.buttons["workspace./Users/you/projects/fresh"],
+            "the other host workspace disappeared after creating a session",
         )
     }
 

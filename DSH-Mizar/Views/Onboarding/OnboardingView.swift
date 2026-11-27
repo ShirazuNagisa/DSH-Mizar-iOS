@@ -55,7 +55,7 @@ struct OnboardingView: View {
     /// Whether the download link is on the clipboard, for the page to say so.
     @State private var releaseLinkCopied = false
 
-    @State private var step: Step = Self.debugInitialStep
+    @State private var step: OnboardingStep = Self.debugInitialStep
     @State private var direction = 1
     @State private var accountSheet: AccountSheet?
     @State private var showingModels = false
@@ -67,7 +67,7 @@ struct OnboardingView: View {
     @State private var serverChoice: ServerMode = .official
     @State private var serverDomain = ""
     @State private var serverPin = ""
-    @State private var serverCheck: ServerCheck = .idle
+    @State private var serverCheck: OnboardingServerCheck = .idle
     @State private var verifiedOrigin: String?
     @State private var checkTask: Task<Void, Never>?
 
@@ -79,29 +79,11 @@ struct OnboardingView: View {
     @State private var pairedName: String?
     @State private var pairFailure: String?
 
-    /// Everything the server page's verification can be doing.
-    private enum ServerCheck: Equatable {
-        case idle
-        case checking
-        case success
-        case failure(String)
-    }
-
     /// Everything the connect page's directory read can be doing.
     private enum DirectoryState: Equatable {
         case loading
         case loaded([SelfHostedDesktop])
         case failed(String)
-    }
-
-    private enum Step: Int, CaseIterable, Identifiable {
-        // One list for both guides; `visibleSteps` decides which are walked.
-        // The order is the walk's order, with the pages only one server uses
-        // sitting where they would appear: `.connect` after the desktop app,
-        // `.account` before the network, and `.plan` after the alerts.
-        case welcome, server, desktop, connect, account, network, agent, alerts, plan, refresh, summary
-
-        var id: Int { rawValue }
     }
 
     /// The pages this phone walks, in order.
@@ -110,16 +92,13 @@ struct OnboardingView: View {
     /// its traffic -- and shows the plan. The self-hosted guide has no account
     /// and no plan to show, and gains the one page that server needs: pairing
     /// a computer found in its own directory.
-    private var visibleSteps: [Step] {
-        if model.isSelfHosted {
-            return [.welcome, .server, .desktop, .connect, .network, .agent, .alerts, .refresh, .summary]
-        }
-        return [.welcome, .server, .desktop, .account, .network, .agent, .alerts, .plan, .refresh, .summary]
+    private var visibleSteps: [OnboardingStep] {
+        OnboardingNavigation.visibleSteps(mode: model.serverSelection.mode)
     }
 
     /// Where the current page is in the walk above.
     private var stepIndex: Int {
-        visibleSteps.firstIndex(of: step) ?? 0
+        OnboardingNavigation.progressIndex(for: step, in: visibleSteps)
     }
 
     private struct AccountSheet: Identifiable {
@@ -130,18 +109,18 @@ struct OnboardingView: View {
     /// A preview hook: `-mizarOnboardingStep <0...10>` opens the guide on one
     /// page so each page can be looked at without tapping through. Debug only.
     ///
-    /// The argument indexes `Step.allCases`, not `visibleSteps`: the server
+    /// The argument indexes `OnboardingStep.allCases`, not `visibleSteps`: the server
     /// mode is not known until the model has been built, so a fixed number has
     /// to mean one page everywhere. On a self-hosted phone an index for a page
     /// that walk hides (`.connect` / `.account` / `.plan`) still opens it; use
     /// the official walk's pages 0...9 to inspect the shared ones.
-    private static var debugInitialStep: Step {
+    private static var debugInitialStep: OnboardingStep {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "-mizarOnboardingStep"),
            arguments.indices.contains(index + 1),
            let raw = Int(arguments[index + 1]),
-           let step = Step(rawValue: raw) {
+           let step = OnboardingStep(rawValue: raw) {
             return step
         }
         #endif
@@ -1522,18 +1501,17 @@ struct OnboardingView: View {
     private var canAdvance: Bool {
         switch step {
         case .account:
-            if model.account.isLoggedIn { return true }
-            // A phone that has been here before does not have to sign up to
-            // walk the guide again: the account is optional, and the one it
-            // has -- or the lack of one -- is what it keeps.
-            return isUpdate
+            return OnboardingNavigation.accountContinue(
+                isSignedIn: model.account.isLoggedIn,
+                isUpdate: isUpdate,
+            )
         case .server:
-            // The official server is one tap and no question. A self-hosted
-            // one has to answer on its own address before the walk may hand
-            // the phone to it; otherwise the next pages talk to nothing.
-            guard serverChoice == .selfHosted else { return true }
-            guard case .success = serverCheck else { return false }
-            return verifiedOrigin == serverSelectionDraft.normalizedOrigin
+            return OnboardingNavigation.serverContinue(
+                choice: serverChoice,
+                check: serverCheck,
+                verifiedOrigin: verifiedOrigin,
+                draft: serverSelectionDraft,
+            )
         default:
             return true
         }
@@ -1574,24 +1552,22 @@ struct OnboardingView: View {
             }
             return
         }
-        // Forward means the next visible page, not the next enum case: the
-        // pages a server does not use are skipped in both directions.
         let steps = visibleSteps
-        guard let index = steps.firstIndex(of: step), index + 1 < steps.count else { return }
-        go(to: steps[index + 1], direction: 1)
+        guard let next = OnboardingNavigation.nextStep(after: step, in: steps) else { return }
+        go(to: next, direction: 1)
     }
 
     private func goBack() {
         let steps = visibleSteps
-        guard let index = steps.firstIndex(of: step), index > 0 else { return }
-        go(to: steps[index - 1], direction: -1)
+        guard let previous = OnboardingNavigation.previousStep(before: step, in: steps) else { return }
+        go(to: previous, direction: -1)
     }
 
     /// Move to one page.
     /// - Parameters:
     ///   - next: the page.
     ///   - direction: `1` forward, `-1` back, which picks the slide.
-    private func go(to next: Step, direction: Int) {
+    private func go(to next: OnboardingStep, direction: Int) {
         self.direction = direction
         withMizarAnimation(pageAnimation) { step = next }
     }
