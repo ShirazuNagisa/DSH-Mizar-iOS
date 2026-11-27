@@ -26,6 +26,17 @@ struct AboutSettingsView: View {
     @AppStorage(OnboardingKeys.started) private var onboardingStarted = false
     /// The pairing sheet, kept here as a developer tool while accounts replace it.
     @State private var showingPairing = false
+    /// Taps on the version row, for the hidden developer-mode gesture.
+    @State private var versionTapTimes: [Date] = []
+
+    /// The hidden gesture: seven taps on the version row within three seconds.
+    ///
+    /// Deliberately invisible -- no new row, no copy, no state shown. The window
+    /// is measured from the first tap of the run, and a successful run clears
+    /// itself so the next seven taps are a fresh gesture rather than an
+    /// immediate second toggle.
+    private static let developerTapWindow: TimeInterval = 3
+    private static let developerTapCount = 7
 
     var body: some View {
         SettingsPage(title: "About & More", onDone: onDone) {
@@ -76,10 +87,27 @@ struct AboutSettingsView: View {
             } label: {
                 SettingsRowLabel("Version", systemImage: "number")
             }
+            .contentShape(Rectangle())
+            .onTapGesture { versionTapped() }
             .accessibilityIdentifier("settings.about.version")
         } header: {
             SettingsSectionHeader("About")
         }
+    }
+
+    /// Count one tap on the version row, and toggle developer mode on the
+    /// seventh inside the window.
+    ///
+    /// One light impact is the entire feedback: the mode is a testing tool and
+    /// showing a confirmation would be the one thing that makes it visible.
+    private func versionTapped() {
+        let now = Date()
+        versionTapTimes = versionTapTimes.filter { now.timeIntervalSince($0) < Self.developerTapWindow }
+        versionTapTimes.append(now)
+        guard versionTapTimes.count >= Self.developerTapCount else { return }
+        versionTapTimes.removeAll()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        DeveloperRelay.toggle()
     }
 
     // MARK: - 问卷

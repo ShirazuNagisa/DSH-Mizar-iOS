@@ -122,9 +122,10 @@ public struct RelayIdentity: Sendable, Equatable {
     /// Separate from ``headers`` on purpose. A hash is enough to bucket traffic,
     /// but it cannot prove anything: only the token itself can be resolved
     /// against the account store, and the paid relay refuses to carry a session
-    /// without it. Because it *is* a credential, it is attached only to a relay
-    /// that owns the account store — see `AccountClient.isAccountHost`. Sending
-    /// it to a free relay would hand a token to a host with nothing to verify it.
+    /// without it. Because it *is* a credential, it is attached only to the
+    /// official account origin, or to the configured developer relay when that
+    /// hidden mode is on — see `AccountClient.isAccountHost`. Sending it to a
+    /// free relay would hand a token to a host with nothing to verify it.
     ///
     /// Empty when signed out, which the paid relay reads as "no account" and
     /// refuses (or allows, if it was configured to allow unaccounted phones).

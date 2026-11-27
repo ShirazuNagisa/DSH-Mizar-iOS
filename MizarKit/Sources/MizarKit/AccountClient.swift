@@ -41,13 +41,30 @@ public struct AccountClient: Sendable {
     /// anything against, so handing it the token would be handing out a
     /// credential for no benefit.
     ///
-    /// - Parameter baseURL: a relay origin, as the pairing or settings hold it.
-    /// - Returns: whether that origin is the account host.
-    public static func isAccountHost(_ baseURL: String) -> Bool {
+    /// The configured developer relay is the second exception, and only when it
+    /// has been switched on: the lab relay runs the account process too and
+    /// needs the session header to admit the account. It is compared by origin
+    /// against the value ``DeveloperRelay`` reads, never by widening the
+    /// official host check -- a build with developer mode off behaves exactly
+    /// as before.
+    ///
+    /// - Parameters:
+    ///   - baseURL: a relay origin, as the pairing or settings hold it.
+    ///   - developerRelay: the enabled developer relay, when there is one.
+    /// - Returns: whether that origin may be offered the session token.
+    public static func isAccountHost(
+        _ baseURL: String,
+        developerRelay: URL? = DeveloperRelay.current(),
+    ) -> Bool {
         guard let host = URL(string: baseURL)?.host?.lowercased(),
               let accountHost = productionBaseURL.host?.lowercased()
         else { return false }
-        return host == accountHost
+        if host == accountHost { return true }
+        guard let developerRelay,
+              let developerOrigin = RelayTier.canonicalOrigin(developerRelay.absoluteString),
+              let origin = RelayTier.canonicalOrigin(baseURL)
+        else { return false }
+        return origin == developerOrigin
     }
 
     /// A network failure.

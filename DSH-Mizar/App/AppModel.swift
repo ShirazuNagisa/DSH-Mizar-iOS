@@ -4364,7 +4364,15 @@ final class AppModel {
     }
 
     /// Persist the relay base URL the host reported or promised.
+    ///
+    /// Developer mode is a dial-time detour, not the pairing's home: writing the
+    /// lab URL here would leave the phone on it after the hidden switch is off,
+    /// which is the one thing this mode promises not to do.
     private func rememberRelayBaseURL(_ baseURL: String) async {
+        guard DeveloperRelay.current() == nil else {
+            log.add(.connection, "relay: developer mode on; keeping the stored pairing on the online relay")
+            return
+        }
         guard let host, host.baseURL != baseURL else { return }
         let moved = host.moved(toRelay: baseURL)
         self.host = moved
@@ -7580,7 +7588,12 @@ final class AppModel {
         // then does nothing when tapped. Clearing the request dismisses it; the
         // new machine asks for its own name after it has connected.
         pendingNameHostId = nil
-        log.add(.connection, "pairing with \(target.authority ?? target.baseURL ?? "unknown address") as \(deviceName)")
+        // The handshake may go through the developer relay, but the record that
+        // gets stored keeps the address the code carried. Developer mode is a
+        // detour, and a pairing made while it is on must still find the online
+        // relay when it is switched off.
+        let dialTarget = DeveloperRelay.rewriting(target)
+        log.add(.connection, "pairing with \(dialTarget.authority ?? dialTarget.baseURL ?? "unknown address") as \(deviceName)")
         do {
             // The identity headers, so a pair through a relay is attributed to
             // this install rather than to an anonymous hash of the room. Signed
@@ -7598,11 +7611,16 @@ final class AppModel {
                 headers: pairingHeaders,
             )
             let outcome = try await client.pair(
-                target: target,
+                target: dialTarget,
                 deviceName: deviceName,
                 deviceModel: Self.deviceModel,
             )
-            let paired = outcome.host
+            // The route above recorded the developer relay; put the code's own
+            // relay back before it reaches the Keychain.
+            let paired = outcome.host.recordingRoutes(
+                authority: target.authority,
+                baseURL: target.baseURL,
+            )
             guard pairingStillAuthorized(
                 hostId: paired.hostId,
                 authorizationAtStart: authorizationAtStart,
@@ -8079,6 +8097,14 @@ final class AppModel {
         host: PairedHost,
         endpoint: PairedHost.Endpoint,
     ) -> MizarConnection {
+        // Developer mode is applied here and nowhere else in the dial path:
+        // every foreground socket -- a launch, a reconnect, a pairing's first
+        // connect -- is built by this function, after the pairing was read from
+        // the credential store and before the transport exists. The stored
+        // record is untouched, so turning the hidden switch off restores the
+        // online relay on the next dial. See ``DeveloperRelay``.
+        let host = DeveloperRelay.rewriting(host)
+        let endpoint = DeveloperRelay.rewriting(endpoint)
         // Only the direct attempt gets a short leash. A relay that is reachable
         // but slow should be waited for rather than abandoned for a route that
         // has already been ruled out.
