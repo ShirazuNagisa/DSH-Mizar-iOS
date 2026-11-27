@@ -120,23 +120,25 @@ struct JumpToLatest: View {
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .topTrailing) {
-                GlassCircleLabel(size: 42) {
+                GlassCircleLabel(size: 28) {
                     Image(systemName: "arrow.down")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .symbolEffect(.bounce.down, value: unseen)
                 }
                 if unseen > 0 {
                     Text("\(unseen)")
-                        .font(.caption2.monospacedDigit().weight(.bold))
+                        .font(.system(size: 9, weight: .bold).monospacedDigit())
                         .foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 5)
-                        .frame(minWidth: 18, minHeight: 18)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 14, minHeight: 14)
                         .background(Color.accentColor, in: Capsule())
-                        .offset(x: 4, y: -4)
+                        .offset(x: 3, y: -3)
                         .contentTransition(.numericText())
                         .transition(.pop)
                 }
             }
+            .frame(width: 44, height: 44)
+            .contentShape(.rect)
             .animation(.mizarBouncy, value: unseen)
         }
         .buttonStyle(.plain)

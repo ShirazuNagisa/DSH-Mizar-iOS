@@ -1242,23 +1242,6 @@ struct SessionDetailView: View {
                             onQuestionAnswered: { text in showAnswerReceipt(text) },
                         )
                     }
-                    // The message waiting for the running turn, directly above
-                    // the field and a little narrower than it. It leaves with
-                    // the expanded composer for the same reason the dock does,
-                    // and it comes and goes through the field's top edge --
-                    // see ``FromBelowTransition``.
-                    if !composerExpanded, let held = model.pendingPrompt(for: sessionId) {
-                        PendingPromptBar(
-                            prompt: held,
-                            onSend: { await sendHeldPrompt() },
-                            onReturn: { returnHeldPrompt() },
-                            onDelete: { deleteHeldPrompt() },
-                        )
-                        // Slightly narrower than the composer's own slab, which
-                        // insets itself by ten points on each side.
-                        .padding(.horizontal, 18)
-                        .transition(.fromBelow)
-                    }
                     // The small facts that belong to this session, on one line
                     // directly above the field: the working tree's figures, the
                     // palette's door while a lone `/` is typed, and the receipt
@@ -1275,6 +1258,23 @@ struct SessionDetailView: View {
                             paletteReplacesSlash = true
                             showingSkillPalette = true
                         }
+                        .padding(.horizontal, 18)
+                        .transition(.fromBelow)
+                    }
+                    // The message waiting for the running turn, directly above
+                    // the field and a little narrower than it. It leaves with
+                    // the expanded composer for the same reason the dock does,
+                    // and it comes and goes through the field's top edge --
+                    // see ``FromBelowTransition``.
+                    if !composerExpanded, let held = model.pendingPrompt(for: sessionId) {
+                        PendingPromptBar(
+                            prompt: held,
+                            onSend: { await sendHeldPrompt() },
+                            onReturn: { returnHeldPrompt() },
+                            onDelete: { deleteHeldPrompt() },
+                        )
+                        // Slightly narrower than the composer's own slab, which
+                        // insets itself by ten points on each side.
                         .padding(.horizontal, 18)
                         .transition(.fromBelow)
                     }
@@ -3353,8 +3353,7 @@ private struct JumpToLatestChrome: View {
     var body: some View {
         if isAvailable, chrome.farFromBottom {
             JumpToLatest(unseen: chrome.unseen, action: action)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 16)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .transition(.pop)
                 .animation(.mizarSmooth, value: chrome.farFromBottom)
         }

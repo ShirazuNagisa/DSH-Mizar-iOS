@@ -128,6 +128,13 @@ struct ComposerView: View {
     @State private var fieldHeight: CGFloat = UIFont.preferredFont(forTextStyle: .body).lineHeight
     @State private var restingInsets: CGFloat?
 
+    /// The resting field never draws shorter than this, so the composer at
+    /// rest is 98 points tall: 13 above, this, 6 below, 42 of controls.
+    @ScaledMetric(relativeTo: .body) private var restingFieldFloor: CGFloat = 37
+
+    /// The height the resting field is laid out at.
+    private var restingFieldHeight: CGFloat { max(fieldHeight, restingFieldFloor) }
+
     // MARK: Attachments
 
     /// What is attached to the next send.
@@ -198,7 +205,7 @@ struct ComposerView: View {
             // inside itself past eight. Expanded, it fills the room the screen
             // gives it and the text scrolls inside it. Neither height is
             // estimated from a character count.
-            .frame(height: expanded ? nil : fieldHeight, alignment: .topLeading)
+            .frame(height: expanded ? nil : restingFieldHeight, alignment: .topLeading)
             .anchorPreference(key: ComposerRestingBoundsKey.self, value: .bounds) {
                 ComposerRestingBounds(editor: $0)
             }
@@ -303,7 +310,7 @@ struct ComposerView: View {
         .padding(.bottom, 6)
         .transformAnchorPreference(key: ComposerShellBoundsKey.self, value: .bounds) { measurement, shell in
             measurement.shell = shell
-            measurement.fieldHeight = fieldHeight
+            measurement.fieldHeight = restingFieldHeight
             measurement.insets = restingInsets
         }
         .overlayPreferenceValue(ComposerRestingBoundsKey.self) { bounds in
@@ -318,12 +325,12 @@ struct ComposerView: View {
                         // Never subtract an animated expanded editor to infer a target.
                         // Refresh padding only when the actual editor is resting.
                         var insets = restingInsets
-                        if !expanded, abs(editorHeight - fieldHeight) <= 0.5 {
+                        if !expanded, abs(editorHeight - restingFieldHeight) <= 0.5 {
                             let measured = shell.size.height - editorHeight - chromeHeight
                             if measured.isFinite, measured >= 0 { insets = measured }
                         }
                         guard let insets else { return nil }
-                        let target = fieldHeight + chromeHeight + insets
+                        let target = restingFieldHeight + chromeHeight + insets
                         guard target.isFinite, target > 0 else { return nil }
                         return ComposerRestingMeasurement(insets: insets, height: target)
                     } action: { measurement in
