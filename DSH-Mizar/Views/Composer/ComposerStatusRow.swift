@@ -26,12 +26,15 @@ enum ComposerStatusItem: Identifiable, Equatable {
     case git(WorkspaceGitStatus)
     /// The receipt that follows an answered question.
     case receipt(ComposerReceipt)
+    /// The field is holding a goal's objective, and there is a way out.
+    case goalEditing
 
     var id: String {
         switch self {
         case .paletteHint: "palette"
         case .git: "git"
         case .receipt(let receipt): "receipt-" + receipt.id.uuidString
+        case .goalEditing: "goalEditing"
         }
     }
 }
@@ -40,6 +43,7 @@ enum ComposerStatusItem: Identifiable, Equatable {
 struct ComposerStatusRow: View {
     let items: [ComposerStatusItem]
     var onOpenPalette: () -> Void
+    var onCancelGoalEdit: () -> Void = {}
     /// Whether the row scrolls. Production does; a snapshot passes `false`
     /// because `ImageRenderer` cannot draw a `ScrollView`.
     var scrolls = true
@@ -62,7 +66,32 @@ struct ComposerStatusRow: View {
             WorkspaceGitCapsule(status: status)
         case .receipt(let receipt):
             ReceiptCapsule(receipt: receipt)
+        case .goalEditing:
+            GoalEditingCapsule(onCancel: onCancelGoalEdit)
         }
+    }
+}
+
+// MARK: - Editing a goal
+
+/// "Editing goal", with the way back out of it.
+struct GoalEditingCapsule: View {
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pencil").foregroundStyle(.secondary)
+            Text("Editing goal").font(.subheadline.weight(.semibold)).lineLimit(1)
+            Button(action: onCancel) {
+                Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28).contentShape(.rect)
+            }
+            .buttonStyle(.pressable(scale: 0.88))
+            .accessibilityLabel(Text("Cancel editing"))
+            .accessibilityIdentifier("composer.goalEditing.cancel")
+        }
+        .composerStatusCapsule()
+        .accessibilityIdentifier("composer.goalEditing")
     }
 }
 

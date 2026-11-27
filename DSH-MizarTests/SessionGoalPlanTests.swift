@@ -58,4 +58,71 @@ struct SessionGoalPlanTests {
         // upstream, not something that gets clamped.
         #expect(ModelDrawerChoice.effort(for: option, keeping: "high") == nil)
     }
+
+    // MARK: - The top row's availability
+
+    @Test func theTopRowNeedsARemoteDSHHost() {
+        func available(
+            sessionId: String = "dsh:session-1",
+            isLocalAgent: Bool = false,
+            hasDesktop: Bool = true,
+            engineScope: AgentEngine? = .dsh,
+        ) -> Bool {
+            SessionGoalPlanAvailability.isDesktopDSH(
+                sessionId: sessionId,
+                isLocalAgent: isLocalAgent,
+                hasDesktop: hasDesktop,
+                engineScope: engineScope,
+            )
+        }
+
+        // The on-device agent has no desktop behind it.
+        #expect(available(isLocalAgent: true) == false)
+        // A paired computer that does not report a desktop product.
+        #expect(available(hasDesktop: false) == false)
+        // A DSH-prefixed session from a desktop host.
+        #expect(available(sessionId: "dsh:session-1", engineScope: nil) == true)
+        // Another engine's prefixed session is not DSH, whatever the scope says.
+        #expect(available(sessionId: "codex:session-1", engineScope: .dsh) == false)
+        // No prefix: the scope decides, and no scope means DSH.
+        #expect(available(sessionId: "session-1", engineScope: nil) == true)
+        #expect(available(sessionId: "session-1", engineScope: .claude) == false)
+    }
+
+    // MARK: - Plan counts
+
+    @Test func aPlanCountsItsCompletedStepsAndFindsARunningOne() {
+        let plan = SessionPlan(steps: [
+            SessionPlanStep(id: 0, content: "A", status: .completed),
+            SessionPlanStep(id: 1, content: "B", status: .completed),
+            SessionPlanStep(id: 2, content: "C", status: .inProgress),
+            SessionPlanStep(id: 3, content: "D", status: .pending),
+        ])
+
+        #expect(plan.completedCount == 2)
+        #expect(plan.hasStepInProgress == true)
+
+        let finished = SessionPlan(steps: [
+            SessionPlanStep(id: 0, content: "A", status: .completed),
+            SessionPlanStep(id: 1, content: "B", status: .pending),
+        ])
+        #expect(finished.completedCount == 1)
+        #expect(finished.hasStepInProgress == false)
+    }
+
+    // MARK: - Duration formatting
+
+    @Test func theDurationSpellsMinutesAndSecondsAndDropsTheSecondsOnAWholeHour() {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let end = start.addingTimeInterval(2200)
+
+        // Pinned to English: the format follows the machine's locale, and an
+        // assertion that names words is only true in the locale it names.
+        let english = Locale(identifier: "en_US")
+        #expect(SessionGoalDuration.text(from: start, to: end, locale: english) == "36 min, 40 sec")
+        #expect(
+            SessionGoalDuration.text(from: start, to: start.addingTimeInterval(7200), locale: english)
+                == "2 hr",
+        )
+    }
 }

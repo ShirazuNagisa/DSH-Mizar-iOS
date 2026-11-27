@@ -30,6 +30,15 @@ private final class ScrollChrome {
     var distance: CGFloat = 0
 }
 
+/// The field's state while it holds a goal's objective: which goal, what was
+/// typed before the edit started, and when it started, so the status row can
+/// put its cancelling capsule where the moment belongs.
+struct GoalEditSession: Equatable {
+    let goalId: String
+    let backup: String
+    let startedAt: Date
+}
+
 struct SessionDetailView: View {
     let sessionId: String
     /// Internal hosted-test observation seam, nil in production. Delivers the
@@ -278,6 +287,16 @@ struct SessionDetailView: View {
     /// Owned here because the overlay's layout -- the dock, the jump button,
     /// the room the conversation reserves -- all answer to it.
     @State private var composerExpanded = false
+    /// The session's goal and plan. The backend arrives in a later batch; the
+    /// cards are built against this store now.
+    @State private var goalPlan = SessionGoalPlanStore()
+    /// Which top card is open, if any. One at a time, like the composer's
+    /// surfaces.
+    @State private var openTopCard: SessionTopCard?
+    /// What the goal's last action had to say, while the card is open.
+    @State private var goalNotice: String?
+    /// The field's state while it holds a goal's objective.
+    @State private var goalEdit: GoalEditSession?
     /// How far the newest message is below what is on screen, and how tall the
     /// viewport is. Tracked continuously so the way-back button can tell a
     /// nudge from a journey -- a long way back takes the same travelling
@@ -380,6 +399,20 @@ struct SessionDetailView: View {
         placement.isRevealed
     }
 
+    /// The goal and plan on screen, if the store has any for this session.
+    private var topGoal: SessionGoal? { goalPlan.goal(for: sessionId) }
+    private var topPlan: SessionPlan? { goalPlan.plan(for: sessionId) }
+
+    /// Whether the goal and plan row belongs on this page at all.
+    private var topRowVisible: Bool {
+        SessionGoalPlanAvailability.isDesktopDSH(
+            sessionId: sessionId,
+            isLocalAgent: model.isLocalAgentMode,
+            hasDesktop: model.host?.desktop != nil,
+            engineScope: model.engineScope,
+        ) && !composerExpanded && (topGoal != nil || topPlan != nil)
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             // The gated scroll view and the furniture are two views on
@@ -436,6 +469,28 @@ struct SessionDetailView: View {
                         FlightGhost(flight: flight)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
+                    }
+                }
+                // The session's goal and plan, and the card one of them opens.
+                // It is the page's own chrome rather than a modal: it rides
+                // under the model drawer and the message menu like the rest.
+                .overlay(alignment: .top) {
+                    if topRowVisible {
+                        VStack(spacing: 8) {
+                            SessionTopStatusRow(
+                                goal: topGoal,
+                                plan: topPlan,
+                                openCard: openTopCard,
+                                onToggle: { toggleTopCard($0) },
+                            )
+                            if let openTopCard {
+                                topCard(openTopCard)
+                                    .padding(.horizontal, 16)
+                                    .transition(.rise(distance: -8, blur: 6))
+                            }
+                        }
+                        .padding(.top, 6)
+                        .animation(Motion.pick(.mizarSmooth), value: openTopCard)
                     }
                 }
                 // The model drawer sits above the conversation and the composer
@@ -613,6 +668,9 @@ struct SessionDetailView: View {
             // newest message again; a pull-to-refresh should not.
             didReachBottom = false
             await reload()
+            #if DEBUG
+            goalPlan.installFixtureIfRequested(sessionId: sessionId)
+            #endif
         }
         .onDisappear {
             // A rewrite or a recording does not outlive the screen that asked
@@ -638,6 +696,10 @@ struct SessionDetailView: View {
         .onChange(of: userScrolling) { _, scrolling in
             guard scrolling else { return }
             selectingMessageId = nil
+            // A card is about the conversation above it; a page being moved is
+            // no longer that conversation at rest. The notice goes with it.
+            goalNotice = nil
+            openTopCard = nil
         }
         .onChange(of: composerFocused) { _, focused in
             guard focused else { return }
@@ -651,6 +713,8 @@ struct SessionDetailView: View {
             showingModelPicker = false
             showingModelDrawer = false
             messageMenu = nil
+            openTopCard = nil
+            goalEdit = nil
         }
         .onChange(of: shownStats?.title) { _, title in
             turnIndex.publish(sessionId: sessionId, title: title, turns: shownTurns)
@@ -822,7 +886,7 @@ struct SessionDetailView: View {
                 endSpacer
             }
             .padding(.horizontal, 18)
-            .padding(.top, 8)
+            .padding(.top, topRowVisible ? 58 : 8)
         }
         // A conversation is read from the bottom, and it stays pinned there
         // as the composer and the dock change height.
@@ -984,6 +1048,12 @@ struct SessionDetailView: View {
             }
         }
         .onChange(of: composerExpanded) { _, expanded in
+            // The expanded field is the whole page; the top row and its card
+            // leave with the rest of the chrome.
+            if expanded {
+                goalNotice = nil
+                openTopCard = nil
+            }
             // While the composer trades places with its expanded self the
             // bottom corrections stand down (see `defaultScrollAnchor`);
             // when the move has played out, a reader who was at the bottom
@@ -1180,6 +1250,9 @@ struct SessionDetailView: View {
         if let receipt = answerReceipt {
             items.append((receipt.appearedAt, 2, .receipt(receipt)))
         }
+        if let goalEdit {
+            items.append((goalEdit.startedAt, 3, .goalEditing))
+        }
         return items
             .sorted {
                 $0.appearedAt == $1.appearedAt
@@ -1204,6 +1277,81 @@ struct SessionDetailView: View {
             guard answerReceipt?.id == receipt.id else { return }
             withMizarAnimation(.mizarSmooth) { answerReceipt = nil }
         }
+    }
+
+    // MARK: - Goal and plan cards
+
+    /// One capsule opens its card; tapping the open capsule puts it away.
+    ///
+    /// The chip's own `mizarSnappy` answers the tap; the card's rise is the
+    /// overlay's `mizarSmooth`, so each animates at the speed it is named for.
+    private func toggleTopCard(_ card: SessionTopCard) {
+        goalNotice = nil
+        openTopCard = openTopCard == card ? nil : card
+    }
+
+    /// The card behind the open capsule, drawn from the store's current value.
+    @ViewBuilder
+    private func topCard(_ card: SessionTopCard) -> some View {
+        switch card {
+        case .goal:
+            if let goal = topGoal {
+                SessionGoalCard(
+                    goal: goal,
+                    now: .now,
+                    notice: goalNotice,
+                    onEdit: { beginGoalEdit(goal) },
+                    onPause: {
+                        runGoalAction {
+                            try await goalPlan.actions.pause(sessionId: sessionId, goalId: goal.id)
+                        }
+                    },
+                    onResume: {
+                        runGoalAction {
+                            try await goalPlan.actions.resume(sessionId: sessionId, goalId: goal.id)
+                        }
+                    },
+                    onDelete: {
+                        runGoalAction {
+                            try await goalPlan.actions.delete(sessionId: sessionId, goalId: goal.id)
+                        }
+                    },
+                )
+            }
+        case .plan:
+            if let plan = topPlan {
+                SessionPlanCard(plan: plan)
+            }
+        }
+    }
+
+    /// Run one of the goal's verbs. Nothing is wired yet, so a refusal is the
+    /// honest answer; the card says so until it is reopened.
+    private func runGoalAction(_ operation: @escaping @MainActor () async throws -> Void) {
+        Task {
+            do {
+                try await operation()
+                goalNotice = nil
+            } catch {
+                goalNotice = String(localized: "The computer does not support this yet.")
+            }
+        }
+    }
+
+    /// Put the goal's objective in the field, keeping what was typed before.
+    private func beginGoalEdit(_ goal: SessionGoal) {
+        openTopCard = nil
+        goalNotice = nil
+        goalEdit = GoalEditSession(goalId: goal.id, backup: draft, startedAt: .now)
+        draft = "/goal " + goal.objective
+        composerFocused = true
+    }
+
+    /// Put the draft back the way the operator left it.
+    private func cancelGoalEdit() {
+        guard let goalEdit else { return }
+        draft = goalEdit.backup
+        self.goalEdit = nil
     }
 
     /// Read the working-tree figures, then keep them warm while the page is up.
@@ -1325,10 +1473,14 @@ struct SessionDetailView: View {
                         // field is the whole height of the screen, and these are
                         // facts about what was typed, not what is being typed.
                         if !composerExpanded, !composerStatusItems.isEmpty {
-                            ComposerStatusRow(items: composerStatusItems) {
-                                paletteReplacesSlash = true
-                                showingSkillPalette = true
-                            }
+                            ComposerStatusRow(
+                                items: composerStatusItems,
+                                onOpenPalette: {
+                                    paletteReplacesSlash = true
+                                    showingSkillPalette = true
+                                },
+                                onCancelGoalEdit: { cancelGoalEdit() },
+                            )
                             .transition(.fromBelow)
                         }
                         // The message waiting for the running turn, directly above
@@ -1393,7 +1545,12 @@ struct SessionDetailView: View {
                             onPermissionApplied: { await refreshStatsFromCache() },
                             onDevice: composerOnDevice,
                             onWillSend: { text in launch(text) },
-                            onSent: { sent in await refreshAfterSend(sent) },
+                            onSent: { sent in
+                                // The edit is over the moment its text leaves;
+                                // the cancel capsule must not outlive the send.
+                                goalEdit = nil
+                                await refreshAfterSend(sent)
+                            },
                             onSendFailed: { text in withdraw(text) },
                             onCollapsedHeightChanged: { height in
                                 collapsedComposerHeight = height
