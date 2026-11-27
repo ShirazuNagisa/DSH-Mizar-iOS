@@ -29,6 +29,8 @@ enum Theme {
         static let xl: CGFloat = 26
         /// A sheet-sized card.
         static let card: CGFloat = 22
+        /// The model drawer's panel.
+        static let drawer: CGFloat = 32
     }
 
     /// The radius of a surface nested inside another, so their curves stay
@@ -127,4 +129,11 @@ enum Theme {
 
     /// The conversation's ground.
     static let paneBackground = Color(UIColor.systemBackground)
+
+    /// The dim laid over the screen under a menu or a drawer.
+    static let scrim = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0, alpha: 0.45)
+            : UIColor(white: 0, alpha: 0.20)
+    })
 }

@@ -28,6 +28,13 @@ extension Animation {
     static let mizarSmooth = Animation.spring(duration: 0.5, bounce: 0)
     static let mizarBouncy = Animation.spring(duration: 0.45, bounce: 0.18)
     static let mizarGentle = Animation.spring(duration: 0.8, bounce: 0.05)
+    /// A surface growing out of the control that opened it: the message menu,
+    /// the thinking strip. A touch quicker than `mizarSmooth`, with a little
+    /// overshoot so the arrival is felt.
+    static let mizarMorphIn = Animation.spring(duration: 0.32, bounce: 0.14)
+    /// The same surface going back into its control. No bounce: a dismissal
+    /// that wobbles reads as reluctant.
+    static let mizarMorphOut = Animation.spring(duration: 0.22, bounce: 0)
     /// What every one of them becomes under Reduce Motion.
     static let mizarFade = Animation.easeInOut(duration: 0.22)
 }
