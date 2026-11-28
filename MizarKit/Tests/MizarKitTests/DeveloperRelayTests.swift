@@ -77,6 +77,37 @@ struct DeveloperRelayTests {
         #expect(!DeveloperRelay.isEnabled(defaults: defaults, environment: [:]))
     }
 
+    // MARK: - isDeveloperRelay
+
+    @Test("a pairing recorded through the developer relay belongs to it")
+    func pairingOnDeveloperRelay() {
+        let defaults = makeDefaults()
+        defaults.set("http://127.0.0.1:8791", forKey: defaultsKey)
+        // Compared by origin: the room and any prefix are path.
+        #expect(
+            DeveloperRelay.isDeveloperRelay(
+                "http://127.0.0.1:8791/r/ROOM",
+                defaults: defaults,
+                environment: [:],
+            )
+        )
+        #expect(
+            !DeveloperRelay.isDeveloperRelay(
+                "https://dshmizar-1.shirazu-nagisa.com/r/ROOM",
+                defaults: defaults,
+                environment: [:],
+            )
+        )
+        // With developer mode off, nothing belongs to a developer relay.
+        #expect(
+            !DeveloperRelay.isDeveloperRelay(
+                "http://127.0.0.1:8791/r/ROOM",
+                defaults: makeDefaults(),
+                environment: [:],
+            )
+        )
+    }
+
     // MARK: - Rewriting
 
     @Test("a pairing moves to the lab relay and keeps its room")

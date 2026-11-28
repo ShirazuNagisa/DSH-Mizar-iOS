@@ -381,10 +381,18 @@ final class AppModel {
     /// records the relay it was made through, so a stored pairing from the
     /// other server stays on disk (a switch back must find it) without being
     /// dialled behind the operator's back.
+    ///
+    /// The developer relay counts as "the configured server" while it is on.
+    /// A pairing made against it records the experimental origin, and the move
+    /// onto the online relay (`rememberRelayBaseURL`) deliberately refuses to
+    /// run in developer mode -- so without this exception the phone would
+    /// decline to open, on its next launch, the pairing it had just made.
     var hostsOnCurrentServer: [PairedHost] {
         hosts.filter { host in
             guard let baseURL = host.baseURL else { return true }
-            return isSelfHosted ? RelayTier.isSelfHosted(baseURL) : RelayTier.isPublicRelay(baseURL)
+            if isSelfHosted { return RelayTier.isSelfHosted(baseURL) }
+            return RelayTier.isPublicRelay(baseURL)
+                || DeveloperRelay.isDeveloperRelay(baseURL)
         }
     }
 
@@ -4244,6 +4252,16 @@ final class AppModel {
             guard relayTierIsCurrent(tag, validity: validity) else { return }
         }
         guard let relay = info.relay else { return }
+        // Developer mode is a dial-time detour, and the host this phone reached
+        // through it is on an experimental relay on purpose. Asking that host
+        // for the public origin the tier names would carry it -- and the
+        // experiment with it -- onto production, and `rememberRelayBaseURL`
+        // below would refuse to record where it went. Not asking is the same
+        // rule, applied a step earlier.
+        guard DeveloperRelay.current() == nil else {
+            log.add(.connection, "relay: developer mode on; not asking the host to move")
+            return
+        }
         let desired = RelayTier.baseURL(paid: account.isPaid)
         if RelayTier.canonicalOrigin(relay.url) == desired {
             // The host is already on the right relay. The phone's stored base
