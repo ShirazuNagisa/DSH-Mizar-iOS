@@ -1146,14 +1146,19 @@ final class AppModel {
     /// Overlay rows for the open host, kept in memory with the store on disk.
     private var stashOverlayEntries: [StashSessionOverlayEntry] = []
 
-    /// When the last cold-launch stash pull started, for the throttle.
+    /// When each computer's last stash pull started, for the throttle.
     ///
     /// A launch that lands on the relay asks once; a reconnect, or a second
     /// `start()` after a scene became active again, does not ask again within
     /// the minute. The letters are deleted on ACK, so a second pull inside the
     /// window would only be a 404 anyway -- but it would still be a request,
     /// and this is a feature that must cost nothing when it has nothing to do.
-    private var lastStashPullAt: Date?
+    ///
+    /// Keyed by computer, because one mailbox is not another: switching to a
+    /// second computer four seconds after the launch pulled the first one used
+    /// to be throttled by a request it never made, and the operator saw an
+    /// empty mailbox on a machine that had letters waiting.
+    private var lastStashPullAt: [String: Date] = [:]
 
     /// What the operator has switched on, and where it is written.
     ///
@@ -2435,6 +2440,11 @@ final class AppModel {
             // cache, and a bundle folded in after the launch had already put a
             // conversation on screen would change it under the operator.
             await stashPull.value
+            // A run that asked for another computer by name goes there now, on
+            // the same path the host list takes -- a switch with no tap.
+            if let requested = Self.launchSelectedHost, requested != host?.hostId {
+                await open(hostId: requested)
+            }
         } catch {
             failConnection(error, authority: host?.authority)
         }
@@ -2456,18 +2466,29 @@ final class AppModel {
     /// - Parameter host: the computer the launch is opening.
     private func pullStash(for host: PairedHost) async {
         let startedAt = Date()
+        let sinceLastPull = StashPullPolicy.secondsSinceLastPull(
+            lastPull: lastStashPullAt[host.hostId],
+            now: startedAt,
+        )
         guard StashPullPolicy.shouldPull(
             localAgentMode: isLocalAgentMode,
             connected: isConnected,
             readyPhase: phase == .ready,
             relayBaseURL: host.baseURL,
-            secondsSinceLastPull: StashPullPolicy.secondsSinceLastPull(
-                lastPull: lastStashPullAt,
-                now: startedAt,
-            ),
-        ) else { return }
+            secondsSinceLastPull: sinceLastPull,
+        ) else {
+            // "No letter arrived" and "the letter was never asked for" look the
+            // same on screen, and the difference is three booleans.
+            log.add(
+                .sync,
+                "stash: skipped the pull (local=\(isLocalAgentMode) "
+                    + "connected=\(isConnected) ready=\(phase == .ready) "
+                    + "since=\(sinceLastPull.map { Int($0) } ?? -1))"
+            )
+            return
+        }
         guard let baseURL = host.baseURL, !baseURL.isEmpty else { return }
-        lastStashPullAt = startedAt
+        lastStashPullAt[host.hostId] = startedAt
         // A closed relay answers a pull only for the account it carries, and the
         // session header is the only thing that proves which one this is. Sent on
         // exactly the hosts that are owed it -- never to an arbitrary relay.
@@ -3028,6 +3049,15 @@ final class AppModel {
     /// is built and a UI that has been seen working.
     private static var launchSelectedSession: String? {
         launchArgument("-mizarSelectSession")
+    }
+
+    /// A computer to open on launch, from the launch arguments.
+    ///
+    /// `-mizarSelectSession` makes a screen reachable from `simctl launch`; this
+    /// makes a *computer* reachable, which is the one entrance a staged run of
+    /// the offline mailbox otherwise needs a tap on the host list for.
+    private static var launchSelectedHost: String? {
+        launchArgument("-mizarSelectHost")
     }
 
     /// Whether to throw the stored conversations away before anything loads.

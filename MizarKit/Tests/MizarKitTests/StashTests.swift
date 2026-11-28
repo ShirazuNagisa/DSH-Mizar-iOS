@@ -263,6 +263,23 @@ struct StashBundleTests {
         #expect(turn.bodyText == "改好了。")
     }
 
+    @Test("an epoch above the signed range still decodes")
+    func fullWidthEpoch() throws {
+        // The host sealed a random 64-bit value here, and the phone decodes it
+        // into a signed integer: half of those bundles threw out of range, were
+        // acknowledged, and never reached the screen.
+        let json = Data(
+            """
+            {"v":1,"bundleId":"b1","room":"R","hostId":"h","deviceId":"d",
+             "epoch":18446744073709551615,"createdAt":1,"turns":[]}
+            """.utf8,
+        )
+        let bundle = try JSONDecoder().decode(StashBundle.self, from: json)
+        #expect(bundle.bundleId == "b1")
+        #expect(bundle.epoch != 0)
+        #expect(bundle.turns.isEmpty)
+    }
+
     @Test("the turn is a StreamReplay the rest of the app can read")
     func bundleReplay() throws {
         let bundle = try oneTurnBundle()

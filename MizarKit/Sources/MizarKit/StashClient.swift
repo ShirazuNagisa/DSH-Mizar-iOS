@@ -246,7 +246,17 @@ public struct StashBundle: Codable, Sendable, Equatable {
         room = try container.decodeIfPresent(String.self, forKey: .room) ?? ""
         hostId = try container.decodeIfPresent(String.self, forKey: .hostId) ?? ""
         deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId) ?? ""
-        epoch = try container.decodeIfPresent(Int.self, forKey: .epoch) ?? 0
+        // A host used to seal a random 64-bit value here, and this is decoded
+        // into a signed integer: half of those bundles threw out of range and
+        // were acknowledged without ever being shown. The number only has to
+        // tell one process from the next, so its bit pattern is kept either way.
+        if let signed = try? container.decodeIfPresent(Int64.self, forKey: .epoch) {
+            epoch = Int(truncatingIfNeeded: signed)
+        } else if let unsigned = try? container.decodeIfPresent(UInt64.self, forKey: .epoch) {
+            epoch = Int(truncatingIfNeeded: unsigned)
+        } else {
+            epoch = 0
+        }
         createdAt = try container.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0
         turns = try container.decodeIfPresent([Turn].self, forKey: .turns) ?? []
     }
