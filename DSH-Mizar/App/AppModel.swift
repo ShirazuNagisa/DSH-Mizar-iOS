@@ -1138,6 +1138,13 @@ final class AppModel {
     /// durable -- otherwise it would live only in whichever object happened to
     /// be alive when the pull landed.
     let stashReplays: StashReplayStore
+    /// Session list rows inferred from stash, not written into ``SessionIndex``.
+    let stashOverlay: StashSessionOverlayStore
+
+    /// The host's own session list, before stash overlay rows are merged in.
+    private var hostSessions: [SessionRow] = []
+    /// Overlay rows for the open host, kept in memory with the store on disk.
+    private var stashOverlayEntries: [StashSessionOverlayEntry] = []
 
     /// When the last cold-launch stash pull started, for the throttle.
     ///
@@ -1518,6 +1525,7 @@ final class AppModel {
         conversations: any ConversationCache = FileConversationCache(),
         index: any SessionIndexStore = FileSessionIndexStore(),
         stashReplays: StashReplayStore = StashReplayStore(),
+        stashOverlay: StashSessionOverlayStore = StashSessionOverlayStore(),
         settings: AppSettings = .shared,
         log: ActivityLog = .shared,
         accountStore: any AccountStoring = KeychainAccountStore(),
@@ -1528,6 +1536,7 @@ final class AppModel {
         self.conversations = conversations
         self.indexStore = index
         self.stashReplays = stashReplays
+        self.stashOverlay = stashOverlay
         self.settings = settings
         self.log = log
         let account = AccountController(store: accountStore, client: accountClient)
@@ -2098,7 +2107,9 @@ final class AppModel {
         // report that started this was a phone showing them -- a list that is
         // right while connected and wrong on the next launch is not right.
         let storedSessions = Self.scoped(stored.sessions, to: engineScope)
-        if !storedSessions.isEmpty { sessions = storedSessions }
+        if !storedSessions.isEmpty { hostSessions = storedSessions }
+        stashOverlayEntries = await stashOverlay.load(hostId: hostId)
+        publishMergedSessions()
         if !stored.titles.isEmpty { titles.merge(stored.titles) { _, stored in stored } }
         // Not merged: a workspace is not something to accumulate. This is the
         // host's last answer, whole, and unioning a second answer into it is how
@@ -2117,16 +2128,21 @@ final class AppModel {
     /// mixture of that and something this app inferred.
     private func persistIndex() async {
         guard let hostId = host?.hostId else { return }
+        // Overlay titles are inferred from a letter. They stay on screen, and
+        // they stay out of the index: the next launch must not treat them as
+        // something the host said.
+        let overlayIds = Set(stashOverlayEntries.map(\.sessionId))
+        let hostTitles = titles.filter { !overlayIds.contains($0.key) }
         log.add(
             .cache,
-            "index: wrote \(sessions.count) sessions, \(titles.count) titles"
+            "index: wrote \(hostSessions.count) sessions, \(hostTitles.count) titles"
                 + (workspaces.map { ", \($0.count) workspaces" } ?? ", no workspace list"),
         )
         await indexStore.save(
             SessionIndex(
                 hostId: hostId,
-                sessions: sessions,
-                titles: titles,
+                sessions: hostSessions,
+                titles: hostTitles,
                 workspaces: workspaces,
             ),
         )
@@ -2426,11 +2442,11 @@ final class AppModel {
 
     /// Ask the relay for the letters written while this phone was away.
     ///
-    /// Cheap by construction. The relay deletes a room's letters the moment the
-    /// computer's tunnel is seen alive again, so on a launch where the computer
-    /// is up this is one GET that returns 404 -- and the socket is already
-    /// dialling while it happens. Only cold launch asks: a reconnect means the
-    /// computer answered, which means there is nothing in the mailbox.
+    /// The mailbox stays after the computer's tunnel comes back. It is removed
+    /// when this phone acknowledges, or when the relay expires, quotas, or
+    /// sweeps it. Cold launch asks beside the first dial. A return to the
+    /// foreground and a switch to another computer ask only after that dial
+    /// has failed, which leaves `phase` as `.failed` rather than `.ready`.
     ///
     /// Failures are silent. An old relay, a self-hosted one without the
     /// feature, a room with no letters and a refused credential all mean the
@@ -2439,12 +2455,18 @@ final class AppModel {
     ///
     /// - Parameter host: the computer the launch is opening.
     private func pullStash(for host: PairedHost) async {
-        // A stash lives behind a relay room. A pairing with only a LAN address
-        // has no mailbox, and the on-device agent has no host at all.
-        guard !isLocalAgentMode, !isConnected, phase != .ready else { return }
-        guard let baseURL = host.baseURL, !baseURL.isEmpty else { return }
         let startedAt = Date()
-        if let last = lastStashPullAt, startedAt.timeIntervalSince(last) < 60 { return }
+        guard StashPullPolicy.shouldPull(
+            localAgentMode: isLocalAgentMode,
+            connected: isConnected,
+            readyPhase: phase == .ready,
+            relayBaseURL: host.baseURL,
+            secondsSinceLastPull: StashPullPolicy.secondsSinceLastPull(
+                lastPull: lastStashPullAt,
+                now: startedAt,
+            ),
+        ) else { return }
+        guard let baseURL = host.baseURL, !baseURL.isEmpty else { return }
         lastStashPullAt = startedAt
         // A closed relay answers a pull only for the account it carries, and the
         // session header is the only thing that proves which one this is. Sent on
@@ -2469,7 +2491,18 @@ final class AppModel {
             case .bundles(let pulled):
                 var opened: [StashBundle] = []
                 for envelope in pulled {
-                    if let bundle = client.open(envelope) { opened.append(bundle) }
+                    if let bundle = client.open(envelope) {
+                        opened.append(bundle)
+                    } else {
+                        // The identities the AAD was built from, not the letter:
+                        // an unopenable bundle is either a different seal or a
+                        // pairing this phone moved on from, and the two are told
+                        // apart by exactly this line.
+                        log.add(
+                            .sync,
+                            "stash: could not open \(envelope.bundleId) (\(client.aad(for: envelope)))"
+                        )
+                    }
                 }
                 let applied = await ingestStash(opened, for: host)
                 log.add(
@@ -2499,6 +2532,8 @@ final class AppModel {
     /// - Returns: how many turns were synthesized into history.
     private func ingestStash(_ bundles: [StashBundle], for host: PairedHost) async -> Int {
         var applied = 0
+        var overlayCandidates: [StashSessionOverlayEntry] = []
+        let hostSessionIds = Set(hostSessions.map(\.sessionId))
         for bundle in bundles {
             let result = await StashIngest.apply(
                 bundle: bundle,
@@ -2513,8 +2548,53 @@ final class AppModel {
                     "stash: session \(session) gained \(result.synthesized.count) replayed turns",
                 )
             }
+            overlayCandidates.append(
+                contentsOf: StashSessionOverlay.entries(
+                    from: bundle,
+                    excludingHostSessionIds: hostSessionIds,
+                ),
+            )
+        }
+        if !overlayCandidates.isEmpty, host.hostId == self.host?.hostId {
+            stashOverlayEntries = await stashOverlay.upsert(
+                hostId: host.hostId,
+                newEntries: overlayCandidates,
+            )
+            publishMergedSessions()
         }
         return applied
+    }
+
+    /// Read overlay rows for the open host and fold them into the list.
+    private func reloadStashOverlay(for hostId: String) async {
+        guard host?.hostId == hostId else { return }
+        let known = Set(hostSessions.map(\.sessionId))
+        stashOverlayEntries = await stashOverlay.prune(hostId: hostId, knownSessionIds: known)
+        publishMergedSessions()
+    }
+
+    /// Replace the host's session list and redraw, without touching the overlay store.
+    private func replaceHostSessions(_ rows: [SessionRow]) {
+        hostSessions = rows
+        publishMergedSessions()
+    }
+
+    /// The list on screen: scoped host rows plus overlay rows the host has not named.
+    private func publishMergedSessions() {
+        var visibleHost = Self.scoped(hostSessions, to: engineScope)
+        visibleHost = Self.surfaced(visibleHost, to: surfaceScope)
+        let hostIds = Set(visibleHost.map(\.sessionId))
+        let overlayRows = stashOverlayEntries
+            .filter { !hostIds.contains($0.sessionId) }
+            .map { StashSessionOverlay.sessionRow(for: $0) }
+        let merged = StashSessionOverlay.mergedList(host: visibleHost, overlay: overlayRows)
+        guard merged != sessions else { return }
+        sessions = merged
+        for row in overlayRows where titles[row.sessionId] == nil {
+            if let title = row.title, !title.isEmpty {
+                titles[row.sessionId] = title
+            }
+        }
     }
 
     /// The replayed process text for one session, by turn number.
@@ -2558,6 +2638,7 @@ final class AppModel {
         // machine, where it is still this session's last instruction.
         if leaving { modelChoice = [:] }
         host = next
+        stashOverlayEntries = await stashOverlay.load(hostId: next.hostId)
         // The next launch opens this one. Remembered here, when the operator
         // chose it, rather than when a connection happens to succeed: where they
         // chose to be is the question the next launch asks.
@@ -2566,6 +2647,10 @@ final class AppModel {
             try await connect(using: next)
         } catch {
             failConnection(error, authority: next.authority ?? next.baseURL)
+        }
+        if connection == nil {
+            await pullStash(for: next)
+            await reloadStashOverlay(for: next.hostId)
         }
     }
 
@@ -2679,6 +2764,7 @@ final class AppModel {
         // Letters pulled for this machine describe turns of a pairing that no
         // longer exists; the next host to reuse the id must not inherit them.
         await stashReplays.remove(hostId: hostId)
+        await stashOverlay.remove(hostId: hostId)
         guard host?.hostId == hostId else { return }
         disconnectCurrent()
         if let next = hosts.last {
@@ -2872,7 +2958,9 @@ final class AppModel {
         // The cross belonged to the link that was just closed. A redial, or a
         // different computer, is a new picture.
         linkFailure = nil
+        hostSessions = []
         sessions = []
+        stashOverlayEntries = []
         sessionsAreKnown = false
         if !preserveSelection {
             selectedSessionId = nil
@@ -3100,9 +3188,9 @@ final class AppModel {
     ///
     /// - Parameter sessionId: the session the prompt was accepted for.
     private func notePromptAccepted(for sessionId: String) {
-        let marked = RunningPoll.markingSessionRunning(in: sessions, sessionId: sessionId)
-        guard marked != sessions else { return }
-        sessions = marked
+        let marked = RunningPoll.markingSessionRunning(in: hostSessions, sessionId: sessionId)
+        guard marked != hostSessions else { return }
+        replaceHostSessions(marked)
     }
 
     /// Start or stop the running poll from what the last list and page said.
@@ -3192,7 +3280,13 @@ final class AppModel {
                 log.add(.cache, "running poll: list for \(tag.hostId) dropped, the machine changed under it")
                 return .ignored
             }
-            sessions = Self.scoped(result.items, to: engineScope)
+            let listed = Self.scoped(result.items, to: engineScope)
+            replaceHostSessions(listed)
+            stashOverlayEntries = await stashOverlay.prune(
+                hostId: tag.hostId,
+                knownSessionIds: Set(listed.map(\.sessionId)),
+            )
+            publishMergedSessions()
             sessionsAreKnown = true
             lastError = nil
             // Read after the list, with the clock at the same instant: which
@@ -4347,8 +4441,7 @@ final class AppModel {
         // The lists on screen were filtered by the old answer. Re-filter rather
         // than wait for the next refresh: one of them may be wrong now, and the
         // other is already in memory.
-        sessions = Self.scoped(sessions, to: engine)
-        sessions = Self.surfaced(sessions, to: surfaceScope)
+        publishMergedSessions()
         if let workspaces { self.workspaces = Self.scoped(workspaces, to: engine) }
         guard var current = host else { return }
         let wire = engine.rawValue
@@ -4620,7 +4713,7 @@ final class AppModel {
         // is allowed to be newer, but it must not erase the list the operator
         // was just reading: keep the pre-create rows and workspaces as a floor,
         // then add the new session locally if the host has not listed it yet.
-        let beforeSessions = sessions
+        let beforeSessions = hostSessions
         let beforeWorkspaces = workspaces
         do {
             let result = try await loggedCall("session.create", payload: payload, on: connection, as: CreateSessionResult.self)
@@ -4663,11 +4756,12 @@ final class AppModel {
             agentAvailable: true,
             cwd: cwd,
         )
-        sessions = CreatedSessionAdoption.sessionsAfterCreate(
-            current: sessions,
+        hostSessions = CreatedSessionAdoption.sessionsAfterCreate(
+            current: hostSessions,
             previous: oldSessions,
             new: row,
         )
+        publishMergedSessions()
         guard let next = CreatedSessionAdoption.workspacesAfterCreate(
             current: workspaces,
             previous: oldWorkspaces,
@@ -5165,7 +5259,8 @@ final class AppModel {
         // Removing first is what lets the row leave while that read is in flight.
         if selectedSessionId == sessionId { selectedSessionId = nil }
         titles.removeValue(forKey: sessionId)
-        sessions.removeAll { $0.sessionId == sessionId }
+        hostSessions.removeAll { $0.sessionId == sessionId }
+        publishMergedSessions()
         await persistIndex()
         await refreshSessions()
         return true
@@ -5226,7 +5321,9 @@ final class AppModel {
         await connection?.disconnect()
         clearConnection()
         welcome = nil
+        hostSessions = []
         sessions = []
+        stashOverlayEntries = []
         selectedSessionId = nil
         // Captured first. Iterating `hosts` after `hosts = []` walked an empty
         // array, so "start over" left every stored session list on disk.
@@ -5239,6 +5336,7 @@ final class AppModel {
             agentSkillStore.delete(hostId: forgotten)
             // The same for what the offline stash left behind.
             await stashReplays.remove(hostId: forgotten)
+            await stashOverlay.remove(hostId: forgotten)
         }
         titles = [:]
         workspaces = nil
@@ -5437,7 +5535,16 @@ final class AppModel {
             // The rows built from the index are stale the moment it is gone:
             // leaving them up until the read lands would draw a list that this
             // phone has already deleted.
+            let overlayIds = Set(stashOverlayEntries.map(\.sessionId))
+            for id in overlayIds {
+                titles.removeValue(forKey: id)
+            }
+            if let hostId = host?.hostId {
+                await stashOverlay.remove(hostId: hostId)
+            }
+            hostSessions = []
             sessions = []
+            stashOverlayEntries = []
             workspaces = []
             sessionsAreKnown = false
         }
@@ -5646,6 +5753,10 @@ final class AppModel {
         // Throttled and silent; a return that failed to get a socket keeps the
         // cache instead.
         Task { await syncAgentSkills(force: false) }
+        if connection == nil, let host {
+            await pullStash(for: host)
+            await reloadStashOverlay(for: host.hostId)
+        }
     }
 
     /// Mark an automatic pass as running, for the refresh button to draw.
@@ -5953,12 +6064,18 @@ final class AppModel {
                 log.add(.cache, "session list for \(tag.hostId) dropped, the machine changed under it")
                 return
             }
-            sessions = Self.scoped(result.items, to: engineScope)
+            let listed = Self.scoped(result.items, to: engineScope)
+            replaceHostSessions(listed)
+            stashOverlayEntries = await stashOverlay.prune(
+                hostId: tag.hostId,
+                knownSessionIds: Set(listed.map(\.sessionId)),
+            )
+            publishMergedSessions()
             sessionsAreKnown = true
             // The rows carry their own titles now. Taking them here is what
             // keeps the sidebar from asking `session.stats` once per row just to
             // learn a name the host sent in the list it already read.
-            adoptTitles(from: sessions)
+            adoptTitles(from: listed)
             await refreshWorkspaces(historyValidity: historyValidity)
             guard historyValidity?() ?? true else { return }
             lastError = nil

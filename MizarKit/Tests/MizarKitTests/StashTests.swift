@@ -559,3 +559,132 @@ struct StashCapabilityTests {
         #expect(members["capabilities"] == nil)
     }
 }
+
+// MARK: - When to pull
+
+@Suite("Offline stash pull policy")
+struct StashPullPolicyTests {
+    @Test("reconnect failure allows a pull; a live socket does not")
+    func reconnectVersusConnected() {
+        let relay = "https://relay.example.com/r/room"
+        #expect(
+            StashPullPolicy.shouldPull(
+                localAgentMode: false,
+                connected: false,
+                readyPhase: false,
+                relayBaseURL: relay,
+                secondsSinceLastPull: nil,
+            ),
+        )
+        #expect(
+            !StashPullPolicy.shouldPull(
+                localAgentMode: false,
+                connected: true,
+                readyPhase: false,
+                relayBaseURL: relay,
+                secondsSinceLastPull: nil,
+            ),
+        )
+        #expect(
+            !StashPullPolicy.shouldPull(
+                localAgentMode: false,
+                connected: false,
+                readyPhase: true,
+                relayBaseURL: relay,
+                secondsSinceLastPull: nil,
+            ),
+        )
+    }
+
+    @Test("the 60 second throttle still holds")
+    func throttle() {
+        let relay = "https://relay.example.com/r/room"
+        #expect(
+            !StashPullPolicy.shouldPull(
+                localAgentMode: false,
+                connected: false,
+                readyPhase: false,
+                relayBaseURL: relay,
+                secondsSinceLastPull: 30,
+            ),
+        )
+        #expect(
+            StashPullPolicy.shouldPull(
+                localAgentMode: false,
+                connected: false,
+                readyPhase: false,
+                relayBaseURL: relay,
+                secondsSinceLastPull: 61,
+            ),
+        )
+    }
+}
+
+// MARK: - Session list overlay
+
+@Suite("Offline stash session overlay")
+struct StashSessionOverlayTests {
+    private func overlayStore() -> StashSessionOverlayStore {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stash-overlay-\(UUID().uuidString)", isDirectory: true)
+        return StashSessionOverlayStore(directory: directory)
+    }
+
+    @Test("a session missing from the host list appears in the overlay store")
+    func missingSessionGetsOverlay() async throws {
+        let bundle = try oneTurnBundle()
+        let turn = try #require(bundle.turns.first)
+        let entries = StashSessionOverlay.entries(from: bundle, excludingHostSessionIds: [])
+        #expect(entries.map(\.sessionId) == [turn.sessionId])
+        #expect(entries.first?.title == "改好了。")
+
+        let store = overlayStore()
+        let kept = await store.upsert(hostId: "host-fixture-0001", newEntries: entries)
+        #expect(kept.map(\.sessionId) == [turn.sessionId])
+    }
+
+    @Test("a session already on the host list is not overlayed")
+    func hostListSuppressesOverlay() async throws {
+        let bundle = try oneTurnBundle()
+        let turn = try #require(bundle.turns.first)
+        #expect(
+            StashSessionOverlay.entries(
+                from: bundle,
+                excludingHostSessionIds: [turn.sessionId],
+            ).isEmpty,
+        )
+    }
+
+    @Test("when the host list later names the id, the overlay entry goes away")
+    func pruneWhenHostLists() async throws {
+        let bundle = try oneTurnBundle()
+        let turn = try #require(bundle.turns.first)
+        let store = overlayStore()
+        let entries = StashSessionOverlay.entries(from: bundle, excludingHostSessionIds: [])
+        _ = await store.upsert(hostId: "host-fixture-0001", newEntries: entries)
+        let pruned = await store.prune(
+            hostId: "host-fixture-0001",
+            knownSessionIds: [turn.sessionId],
+        )
+        #expect(pruned.isEmpty)
+        let reloaded = await store.load(hostId: "host-fixture-0001")
+        #expect(reloaded.isEmpty)
+    }
+
+    @Test("merged list draws overlay rows the host does not show")
+    func mergedList() {
+        let host = SessionRow(
+            sessionId: "host-only",
+            updatedAt: 1000,
+            running: false,
+            blank: false,
+            agentAvailable: true,
+            cwd: nil,
+        )
+        let overlay = StashSessionOverlay.sessionRow(
+            for: StashSessionOverlayEntry(sessionId: "stash-only", updatedAt: 2000, title: "Replayed work"),
+        )
+        let merged = StashSessionOverlay.mergedList(host: [host], overlay: [overlay])
+        #expect(merged.map(\.sessionId) == ["stash-only", "host-only"])
+    }
+}
